@@ -275,7 +275,7 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
             token_budget: 6000,
         },
         ws.clone(),
-        db.clone(),
+        db,
         active_runs,
         summary_tx,
         reqwest::Client::new(),

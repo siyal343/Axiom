@@ -316,7 +316,7 @@ pub async fn execute_lens_run(
         Ok(())
     };
 
-    let mut handle_events = |events: Vec<ParsedEvent>,
+    let handle_events = |events: Vec<ParsedEvent>,
                              batch_idx: &mut usize,
                              active_node_id: &mut Option<String>,
                              active_title: &mut String,
