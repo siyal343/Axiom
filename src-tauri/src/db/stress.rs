@@ -28,6 +28,34 @@ fn stress_edge_id(idx: usize) -> String {
     format!("stress_edge_{idx:03}")
 }
 
+fn push_stress_edge(
+    edges: &mut Vec<EdgeDto>,
+    seen_triples: &mut HashSet<(usize, usize, EdgeType)>,
+    src: usize,
+    dst: usize,
+    edge_type: EdgeType,
+    weight: EdgeWeight,
+) {
+    if src == dst || src >= STRESS_NODE_COUNT || dst >= STRESS_NODE_COUNT {
+        return;
+    }
+    if edges.len() >= STRESS_EDGE_COUNT {
+        return;
+    }
+    if !seen_triples.insert((src, dst, edge_type)) {
+        return;
+    }
+    let edge_idx = edges.len();
+    edges.push(EdgeDto {
+        id: stress_edge_id(edge_idx),
+        source_id: stress_node_id(src),
+        target_id: stress_node_id(dst),
+        edge_type,
+        weight,
+        created_at: STRESS_BASE_TS_MS + (edge_idx as i64) * 1000,
+    });
+}
+
 fn stress_node_type(idx: usize) -> NodeType {
     if idx == 0 || idx % 25 == 0 {
         NodeType::Core
@@ -221,35 +249,14 @@ pub fn generate_stress_graph_500() -> (Vec<NodeDto>, Vec<EdgeDto>) {
     let mut seen_triples: HashSet<(usize, usize, EdgeType)> =
         HashSet::with_capacity(STRESS_EDGE_COUNT);
 
-    let mut push_edge = |src: usize, dst: usize, edge_type: EdgeType, weight: EdgeWeight| {
-        if src == dst || src >= STRESS_NODE_COUNT || dst >= STRESS_NODE_COUNT {
-            return;
-        }
-        if edges.len() >= STRESS_EDGE_COUNT {
-            return;
-        }
-        if !seen_triples.insert((src, dst, edge_type)) {
-            return;
-        }
-        let edge_idx = edges.len();
-        edges.push(EdgeDto {
-            id: stress_edge_id(edge_idx),
-            source_id: stress_node_id(src),
-            target_id: stress_node_id(dst),
-            edge_type,
-            weight,
-            created_at: STRESS_BASE_TS_MS + (edge_idx as i64) * 1000,
-        });
-    };
-
     // 1. Primary 499-edge DAG backbone covering nodes 1..499.
-    for idx in 1..STRESS_NODE_COUNT {
+    for (idx, node) in nodes.iter().enumerate().skip(1) {
         let parent = if idx < STRESS_ROWS_PER_COL {
             0
         } else {
             idx - STRESS_ROWS_PER_COL
         };
-        let edge_type = match nodes[idx].node_type {
+        let edge_type = match node.node_type {
             NodeType::Loophole => EdgeType::Challenges,
             NodeType::Synthesis => EdgeType::Synthesizes,
             _ if idx % 3 == 0 => EdgeType::Branches,
@@ -260,30 +267,44 @@ pub fn generate_stress_graph_500() -> (Vec<NodeDto>, Vec<EdgeDto>) {
         } else {
             EdgeWeight::Full
         };
-        push_edge(parent, idx, edge_type, weight);
+        push_stress_edge(&mut edges, &mut seen_triples, parent, idx, edge_type, weight);
     }
 
     // 2. Diamond multi-parent merges into Synthesis nodes.
-    for idx in STRESS_ROWS_PER_COL..STRESS_NODE_COUNT {
+    for (idx, node) in nodes.iter().enumerate().skip(STRESS_ROWS_PER_COL) {
         if edges.len() >= STRESS_EDGE_COUNT {
             break;
         }
-        if nodes[idx].node_type == NodeType::Synthesis {
+        if node.node_type == NodeType::Synthesis {
             let col = idx / STRESS_ROWS_PER_COL;
             let row = idx % STRESS_ROWS_PER_COL;
             let alt_parent = (col - 1) * STRESS_ROWS_PER_COL + ((row + 1) % STRESS_ROWS_PER_COL);
-            push_edge(alt_parent, idx, EdgeType::Synthesizes, EdgeWeight::Summary);
+            push_stress_edge(
+                &mut edges,
+                &mut seen_triples,
+                alt_parent,
+                idx,
+                EdgeType::Synthesizes,
+                EdgeWeight::Summary,
+            );
         }
     }
 
     // 3. Resolution edges targeting Loopholes.
-    for idx in 5..STRESS_NODE_COUNT {
+    for (idx, node) in nodes.iter().enumerate().skip(5) {
         if edges.len() >= STRESS_EDGE_COUNT {
             break;
         }
-        if nodes[idx].node_type == NodeType::Loophole {
+        if node.node_type == NodeType::Loophole {
             let resolver = (idx + 1) % STRESS_NODE_COUNT;
-            push_edge(resolver, idx, EdgeType::Resolves, EdgeWeight::Summary);
+            push_stress_edge(
+                &mut edges,
+                &mut seen_triples,
+                resolver,
+                idx,
+                EdgeType::Resolves,
+                EdgeWeight::Summary,
+            );
         }
     }
 
@@ -293,7 +314,14 @@ pub fn generate_stress_graph_500() -> (Vec<NodeDto>, Vec<EdgeDto>) {
         let src = cursor % STRESS_NODE_COUNT;
         let stride = 23 + (cursor / STRESS_NODE_COUNT) * 7;
         let dst = (src + stride) % STRESS_NODE_COUNT;
-        push_edge(src, dst, EdgeType::References, EdgeWeight::Summary);
+        push_stress_edge(
+            &mut edges,
+            &mut seen_triples,
+            src,
+            dst,
+            EdgeType::References,
+            EdgeWeight::Summary,
+        );
         cursor += 1;
     }
 
