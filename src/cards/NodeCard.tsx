@@ -3,11 +3,18 @@ import type { NodeDto } from "../ipc/types";
 import {
   cardDomRefs,
   dragOffsets,
-  mutateGraph,
+  edgesMap,
+  mutateGraphUndoable,
+  nodesMap,
   queueNodeResize,
   spawnChild,
   unresolvedLoopholes,
 } from "../store/graphStore";
+import {
+  buildDeleteWithInverse,
+  buildUpdateMetaWithInverse,
+  type NodeMetaPatch,
+} from "../store/history";
 import {
   enterEditMode,
   focusId,
@@ -118,6 +125,11 @@ export function NodeCard({ node }: NodeCardProps) {
     ? ""
     : getRenderedMarkdown(node.content_hash, node.content);
 
+  const applyMetaPatch = (label: string, patch: NodeMetaPatch): void => {
+    const { forward, inverse } = buildUpdateMetaWithInverse(node, patch);
+    void mutateGraphUndoable(label, forward, inverse);
+  };
+
   const handleSpawnChild = (e: MouseEvent): void => {
     e.stopPropagation();
     const edgeType = node.type === "loophole" ? "resolves" : "derives";
@@ -134,24 +146,12 @@ export function NodeCard({ node }: NodeCardProps) {
 
   const handleTogglePin = (e: MouseEvent): void => {
     e.stopPropagation();
-    void mutateGraph([
-      {
-        op: "update_node_meta",
-        id: node.id,
-        pin_global: !node.context_controls.pin_global,
-      },
-    ]);
+    applyMetaPatch("Toggle pin", { pin_global: !node.context_controls.pin_global });
   };
 
   const handleToggleCollapse = (e: MouseEvent): void => {
     e.stopPropagation();
-    void mutateGraph([
-      {
-        op: "update_node_meta",
-        id: node.id,
-        collapsed: !node.layout.collapsed,
-      },
-    ]);
+    applyMetaPatch("Collapse node", { collapsed: !node.layout.collapsed });
   };
 
   return (
@@ -207,13 +207,9 @@ export function NodeCard({ node }: NodeCardProps) {
                 onClick={(e) => {
                   e.stopPropagation();
                   setMoreOpen(false);
-                  void mutateGraph([
-                    {
-                      op: "update_node_meta",
-                      id: node.id,
-                      exclude_from_ai: !node.context_controls.exclude_from_ai,
-                    },
-                  ]);
+                  applyMetaPatch("Toggle AI exclusion", {
+                    exclude_from_ai: !node.context_controls.exclude_from_ai,
+                  });
                 }}
               >
                 {node.context_controls.exclude_from_ai ? "Include in AI" : "Exclude from AI"}
@@ -224,13 +220,9 @@ export function NodeCard({ node }: NodeCardProps) {
                 onClick={(e) => {
                   e.stopPropagation();
                   setMoreOpen(false);
-                  void mutateGraph([
-                    {
-                      op: "update_node_meta",
-                      id: node.id,
-                      status: node.status === "locked" ? "active" : "locked",
-                    },
-                  ]);
+                  applyMetaPatch("Toggle lock", {
+                    status: node.status === "locked" ? "active" : "locked",
+                  });
                 }}
               >
                 {node.status === "locked" ? "Unlock" : "Lock"}
@@ -242,13 +234,9 @@ export function NodeCard({ node }: NodeCardProps) {
                   onClick={(e) => {
                     e.stopPropagation();
                     setMoreOpen(false);
-                    void mutateGraph([
-                      {
-                        op: "update_node_meta",
-                        id: node.id,
-                        status: node.status === "resolved" ? "active" : "resolved",
-                      },
-                    ]);
+                    applyMetaPatch("Toggle loophole resolved", {
+                      status: node.status === "resolved" ? "active" : "resolved",
+                    });
                   }}
                 >
                   {node.status === "resolved" ? "Reopen Loophole" : "Mark Resolved"}
@@ -260,7 +248,14 @@ export function NodeCard({ node }: NodeCardProps) {
                 onClick={(e) => {
                   e.stopPropagation();
                   setMoreOpen(false);
-                  void mutateGraph([{ op: "delete_nodes", ids: [node.id] }]);
+                  const { forward, inverse } = buildDeleteWithInverse(
+                    [node.id],
+                    nodesMap,
+                    edgesMap,
+                  );
+                  if (forward.length > 0) {
+                    void mutateGraphUndoable("Delete node", forward, inverse);
+                  }
                 }}
               >
                 Delete

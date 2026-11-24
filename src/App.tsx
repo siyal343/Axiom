@@ -5,21 +5,25 @@ import { renderCanvas2d } from "./canvas/renderer2d";
 import { getEffectiveNodeHeight } from "./canvas/spatialIndex";
 import { CardLayer } from "./cards/CardLayer";
 import { LiveEditorOverlay } from "./cards/LiveEditorOverlay";
+import { attachKeymap } from "./input/keymap";
 import { isTauriRuntime, openWorkspace, saveCamera } from "./ipc/client";
-import type { EdgeDto, EdgeType } from "./ipc/types";
+import type { EdgeDto, EdgeType, GraphOp } from "./ipc/types";
+import { CommandPalette } from "./overlays/CommandPalette";
+import { notifyIpcError, ToastStack } from "./overlays/ToastStack";
+import { XrayHud } from "./overlays/XrayHud";
 import {
   cameraControllerRef,
   dragOffsets,
+  edgesMap,
   graphVersion,
   isBirdsEye,
   loadSnapshot,
-  mutateGraph,
+  mutateGraphUndoable,
   nodesMap,
   theme,
   unresolvedLoopholes,
   viewportSpatialIndex,
   visibleNodeIds,
-  edgesMap,
 } from "./store/graphStore";
 import {
   edgePopover,
@@ -36,7 +40,6 @@ export function App() {
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Subscribe to signals needed for Layer 3 floating pills and data attributes
   const version = graphVersion.value;
   const currentSelected = selectedIds.value;
   const activePopover = edgePopover.value;
@@ -113,6 +116,7 @@ export function App() {
     }
 
     const detachPointer = attachCanvasPointer(shell, controller, overlay);
+    const detachKeymap = attachKeymap();
 
     let active = true;
     if (isTauriRuntime()) {
@@ -135,6 +139,7 @@ export function App() {
 
     return () => {
       active = false;
+      detachKeymap();
       detachPointer();
       resizeObs?.disconnect();
       controller.dispose();
@@ -144,7 +149,6 @@ export function App() {
     };
   }, []);
 
-  // Re-paint canvas when reactive selection/xray/graph signals change
   useEffect(() => {
     cameraControllerRef.current?.markDirty();
   }, [version, currentSelected, focusId.value, xrayState.value]);
@@ -166,7 +170,6 @@ export function App() {
       minX = Math.min(minX, node.layout.x);
       minY = Math.min(minY, node.layout.y);
       maxX = Math.max(maxX, node.layout.x + node.layout.width);
-      // Include effective height read for consistency if needed later
       void getEffectiveNodeHeight(node);
     }
     if (Number.isFinite(minX)) {
@@ -191,9 +194,18 @@ export function App() {
       weight: "summary",
       created_at: Date.now(),
     };
+    const inverse: GraphOp[] = [{ op: "delete_edge", id: edge.id }];
+    if (edgeType === "resolves") {
+      const target = nodesMap.get(activePopover.targetId);
+      if (target && target.type === "loophole" && target.status !== "resolved") {
+        inverse.push({ op: "update_node_meta", id: target.id, status: target.status });
+      }
+    }
     edgePopover.value = null;
     modalState.value = "navigate";
-    void mutateGraph([{ op: "create_edge", edge }]);
+    void mutateGraphUndoable("Create edge", [{ op: "create_edge", edge }], inverse).catch(
+      notifyIpcError,
+    );
   };
 
   return (
@@ -256,6 +268,22 @@ export function App() {
           </button>
         </div>
       )}
+
+      {currentModal === "chord_a" && (
+        <div class="chord-hint-pill" role="status">
+          R Red-Team · E Edge Cases · D Diverge 3x · F Feynman · S Synthesize · Space Prompt
+        </div>
+      )}
+
+      {currentModal === "connect_edge" && activePopover === null && (
+        <div class="chord-hint-pill" role="status">
+          Connect mode: navigate with H/J/K/L and press Enter on target · Esc cancel
+        </div>
+      )}
+
+      <XrayHud />
+      <CommandPalette />
+      <ToastStack />
     </main>
   );
 }

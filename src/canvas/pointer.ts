@@ -3,10 +3,11 @@ import type { NodePositionUpdate } from "../ipc/types";
 import {
   cardDomRefs,
   dragOffsets,
-  mutateGraph,
+  mutateGraphUndoable,
   nodesMap,
   viewportSpatialIndex,
 } from "../store/graphStore";
+import { buildMoveNodesWithInverse } from "../store/history";
 import {
   clearSelection,
   edgePopover,
@@ -330,18 +331,23 @@ export function attachCanvasPointer(
 
     if (active.kind === "node_drag") {
       if (active.moved) {
-        const moves: NodePositionUpdate[] = [];
+        const prevMoves: NodePositionUpdate[] = [];
+        const nextMoves: NodePositionUpdate[] = [];
         for (const id of active.dragIds) {
           const node = nodesMap.get(id);
           const offset = dragOffsets.get(id);
           if (node && offset) {
-            const nx = node.layout.x + offset.x;
-            const ny = node.layout.y + offset.y;
-            moves.push({ id, x: nx, y: ny });
+            prevMoves.push({ id, x: node.layout.x, y: node.layout.y });
+            nextMoves.push({
+              id,
+              x: node.layout.x + offset.x,
+              y: node.layout.y + offset.y,
+            });
           }
         }
-        if (moves.length > 0) {
-          void mutateGraph([{ op: "move_nodes", moves }]).finally(() => {
+        if (nextMoves.length > 0) {
+          const { forward, inverse } = buildMoveNodesWithInverse(prevMoves, nextMoves);
+          void mutateGraphUndoable("Move node(s)", forward, inverse).finally(() => {
             for (const id of active.dragIds) {
               dragOffsets.delete(id);
             }
@@ -420,22 +426,6 @@ export function attachCanvasPointer(
         spaceHeld = true;
         updateCursor();
       }
-      return;
-    }
-    if (e.key === "Enter" && modalState.value === "navigate" && !isInteractiveTarget(e.target)) {
-      const id = focusId.value;
-      if (id) {
-        const node = nodesMap.get(id);
-        if (node) {
-          e.preventDefault();
-          enterEditMode(node);
-        }
-      }
-      return;
-    }
-    if (e.key === "Escape" && modalState.value === "connect_edge") {
-      edgePopover.value = null;
-      modalState.value = "navigate";
     }
   };
 

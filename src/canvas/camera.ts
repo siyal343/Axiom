@@ -145,6 +145,10 @@ export class CanvasCameraController implements CameraControllerHandle {
     return { ...this.cam };
   }
 
+  getViewportSize(): { width: number; height: number } {
+    return { width: this.width, height: this.height };
+  }
+
   setCamera(cam: CameraState): void {
     this.cancelAnimation();
     this.cam = {

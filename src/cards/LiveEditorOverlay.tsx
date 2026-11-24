@@ -4,7 +4,8 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { worldToScreen } from "../canvas/camera";
-import { cameraControllerRef, mutateGraph, nodesMap } from "../store/graphStore";
+import { cameraControllerRef, mutateGraphUndoable, nodesMap } from "../store/graphStore";
+import { buildUpdateTextWithInverse } from "../store/history";
 import { exitEditMode, focusId, modalState } from "../store/selection";
 import { getRenderedMarkdown } from "./markdownCache";
 
@@ -86,15 +87,9 @@ function LiveEditorInstance({
       const current = nodesMap.get(nodeId);
       if (current) {
         getRenderedMarkdown(current.content_hash, nextContent);
+        const { forward, inverse } = buildUpdateTextWithInverse(current, nextTitle, nextContent);
+        void mutateGraphUndoable("Edit node text", forward, inverse);
       }
-      void mutateGraph([
-        {
-          op: "update_node_text",
-          id: nodeId,
-          title: nextTitle,
-          content: nextContent,
-        },
-      ]);
     }
 
     exitEditMode();

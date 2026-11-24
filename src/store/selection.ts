@@ -18,6 +18,22 @@ export const xrayState = signal<CompiledXray | null>(null);
 export const lockedShakeId = signal<string | null>(null);
 export const edgePopover = signal<EdgePopoverState | null>(null);
 export const isInteracting = signal<boolean>(false);
+export const commandPaletteOpen = signal<boolean>(false);
+export const connectSourceId = signal<string | null>(null);
+
+export function openCommandPalette(): void {
+  edgePopover.value = null;
+  hoveredId.value = null;
+  commandPaletteOpen.value = true;
+  modalState.value = "command";
+}
+
+export function closeCommandPalette(): void {
+  commandPaletteOpen.value = false;
+  if (modalState.value === "command") {
+    modalState.value = "navigate";
+  }
+}
 
 let shakeTimer: ReturnType<typeof setTimeout> | null = null;
 

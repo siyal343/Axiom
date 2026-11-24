@@ -1,4 +1,5 @@
 import { signal } from "@preact/signals";
+import type { CameraTransform } from "../canvas/camera";
 import { ViewportSpatialIndex } from "../canvas/spatialIndex";
 import { applyOps, isTauriRuntime, spawnConnectedNode } from "../ipc/client";
 import type {
@@ -8,11 +9,17 @@ import type {
   EdgeType,
   GraphOp,
   NodeDto,
+  NodePositionUpdate,
   NodeSizeUpdate,
   NodeType,
   Severity,
   WorkspaceSnapshot,
 } from "../ipc/types";
+import {
+  buildCreateNodeWithInverse,
+  graphHistory,
+  syncHistorySignals,
+} from "./history";
 import { focusId, selectSingle } from "./selection";
 
 export interface LoopholeSummary {
@@ -26,6 +33,8 @@ export interface CameraControllerHandle {
   refreshCull: () => void;
   setCamera: (cam: CameraState) => void;
   getCamera: () => CameraState;
+  getViewportSize: () => { width: number; height: number };
+  animateTo: (targetCam: CameraTransform, durationMs?: number) => void;
 }
 
 // Non-reactive stores kept OUTSIDE signals so rAF rendering & drags never trigger Preact re-renders.
@@ -314,6 +323,8 @@ export function loadSnapshot(snapshot: WorkspaceSnapshot): void {
   viewportSpatialIndex.bulkLoad(snapshot.nodes);
   workspacePath.value = snapshot.path;
   tokenBudget.value = snapshot.token_budget;
+  graphHistory.clear();
+  syncHistorySignals();
   recomputeUnresolvedLoopholes();
 
   const initialFocus =
@@ -352,21 +363,81 @@ export async function mutateGraph(ops: GraphOp[]): Promise<ApplyResult> {
   return result;
 }
 
+export async function mutateGraphUndoable(
+  label: string,
+  forward: GraphOp[],
+  inverse: GraphOp[],
+): Promise<ApplyResult> {
+  const result = await mutateGraph(forward);
+  if (forward.length > 0) {
+    graphHistory.push({ label, forward, inverse });
+    syncHistorySignals();
+  }
+  return result;
+}
+
+export async function performUndo(): Promise<ApplyResult | null> {
+  const entry = graphHistory.undo();
+  if (!entry) {
+    return null;
+  }
+  syncHistorySignals();
+  try {
+    return await mutateGraph(entry.inverse);
+  } catch (err) {
+    graphHistory.push(entry);
+    syncHistorySignals();
+    throw err;
+  }
+}
+
+export async function performRedo(): Promise<ApplyResult | null> {
+  const entry = graphHistory.redo();
+  if (!entry) {
+    return null;
+  }
+  syncHistorySignals();
+  return mutateGraph(entry.forward);
+}
+
+export function applyTidyPositions(updates: NodePositionUpdate[]): void {
+  if (updates.length === 0) {
+    return;
+  }
+  for (const u of updates) {
+    const existing = nodesMap.get(u.id);
+    if (existing) {
+      const moved: NodeDto = {
+        ...existing,
+        layout: { ...existing.layout, x: u.x, y: u.y },
+      };
+      nodesMap.set(moved.id, moved);
+      viewportSpatialIndex.upsert(moved);
+    }
+  }
+  graphVersion.value += 1;
+  cameraControllerRef.current?.refreshCull();
+  cameraControllerRef.current?.markDirty();
+}
+
 export async function spawnChild(
   parentId: string,
   edgeType: EdgeType,
   nodeType: NodeType,
   title?: string,
+  recordHistory = true,
 ): Promise<{ node: NodeDto; edge: EdgeDto }> {
+  const parentBefore = nodesMap.get(parentId);
+  const prevParentStatus = parentBefore?.status;
+
   let spawned: { node: NodeDto; edge: EdgeDto };
   if (isTauriRuntime()) {
     spawned = await spawnConnectedNode(parentId, edgeType, nodeType, title);
   } else {
-    const parent = nodesMap.get(parentId);
     const now = Date.now();
     const id = `node_local_${now}_${Math.random().toString(36).slice(2, 7)}`;
-    const px = (parent?.layout.x ?? 0) + (parent?.layout.width ?? 320) + 100;
-    const py = parent?.layout.y ?? 0;
+    const px = (parentBefore?.layout.x ?? 0) + (parentBefore?.layout.width ?? 320) + 100;
+    const py = parentBefore?.layout.y ?? 0;
     const nodeTitle = title && title.trim().length > 0 ? title : "New Node";
     const node: NodeDto = {
       id,
@@ -404,6 +475,45 @@ export async function spawnChild(
   nodesMap.set(spawned.node.id, spawned.node);
   edgesMap.set(spawned.edge.id, spawned.edge);
   viewportSpatialIndex.upsert(spawned.node);
+
+  const flippedLoophole =
+    edgeType === "resolves" &&
+    parentBefore !== undefined &&
+    parentBefore.type === "loophole" &&
+    prevParentStatus !== undefined &&
+    prevParentStatus !== "resolved";
+
+  if (flippedLoophole && parentBefore) {
+    const resolvedParent: NodeDto = {
+      ...parentBefore,
+      status: "resolved",
+      updated_at: Date.now(),
+    };
+    nodesMap.set(parentId, resolvedParent);
+  }
+
+  if (recordHistory) {
+    const entry = buildCreateNodeWithInverse(spawned.node, [spawned.edge]);
+    if (flippedLoophole && prevParentStatus !== undefined) {
+      entry.forward.push({
+        op: "update_node_meta",
+        id: parentId,
+        status: "resolved",
+      });
+      entry.inverse.push({
+        op: "update_node_meta",
+        id: parentId,
+        status: prevParentStatus,
+      });
+    }
+    graphHistory.push({
+      label: `Spawn ${nodeType}`,
+      forward: entry.forward,
+      inverse: entry.inverse,
+    });
+    syncHistorySignals();
+  }
+
   recomputeUnresolvedLoopholes();
   graphVersion.value += 1;
   cameraControllerRef.current?.refreshCull();
