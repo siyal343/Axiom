@@ -97,7 +97,7 @@ Run front-end commands from the repository root and Rust commands against `src-t
 The GitHub Actions workflow in `.github/workflows/ci.yml` runs on `windows-latest` for every `push`, `pull_request`, and manual `workflow_dispatch` trigger, canceling superseded runs on the same ref:
 
 1. **`windows-check-and-test`:** Installs Node.js 22 and npm packages, runs `npm run build` and `npm test -- --passWithNoTests`, configures stable Rust with `clippy`, restores `src-tauri` Cargo caches, and runs `cargo check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test -- --nocapture`.
-2. **`windows-tauri-build`:** Runs after `windows-check-and-test` passes, builds the release installer with `npx tauri build`, prints the `axiom-canvas.exe` binary size, and uploads bundle files from `src-tauri/target/release/bundle/**` as the `axiom-bundle-windows-latest` workflow artifact.
+2. **`windows-tauri-build`:** Runs after `windows-check-and-test` passes, builds the release installer with `npx tauri build`, prints the `axiom-canvas.exe` binary size, and uploads both `src-tauri/target/release/bundle/**` as the `axiom-bundle-windows-latest` artifact and `src-tauri/target/release/axiom-canvas.exe` as the `axiom-portable-windows-latest` artifact.
 
 ## Feature guides
 
