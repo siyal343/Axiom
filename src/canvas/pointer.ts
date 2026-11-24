@@ -340,11 +340,19 @@ export function attachCanvasPointer(
             moves.push({ id, x: nx, y: ny });
           }
         }
-        dragOffsets.clear();
-        isInteracting.value = false;
         if (moves.length > 0) {
-          void mutateGraph([{ op: "move_nodes", moves }]);
+          void mutateGraph([{ op: "move_nodes", moves }]).finally(() => {
+            for (const id of active.dragIds) {
+              dragOffsets.delete(id);
+            }
+            isInteracting.value = false;
+            camera.markDirty();
+          });
         } else {
+          for (const id of active.dragIds) {
+            dragOffsets.delete(id);
+          }
+          isInteracting.value = false;
           camera.markDirty();
         }
       }

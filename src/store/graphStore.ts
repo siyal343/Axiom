@@ -21,6 +21,7 @@ export interface LoopholeSummary {
 }
 
 export interface CameraControllerHandle {
+  setCardLayerEl: (el: HTMLElement | null) => void;
   markDirty: () => void;
   refreshCull: () => void;
   setCamera: (cam: CameraState) => void;
@@ -156,6 +157,7 @@ function applyOpsLocally(ops: GraphOp[]): ApplyResult {
       }
       case "move_nodes": {
         for (const m of op.moves) {
+          dragOffsets.delete(m.id);
           const existing = nodesMap.get(m.id);
           if (existing) {
             const moved: NodeDto = {
@@ -239,6 +241,7 @@ function syncStoreAfterIpc(ops: GraphOp[], result: ApplyResult): void {
     switch (op.op) {
       case "move_nodes":
         for (const m of op.moves) {
+          dragOffsets.delete(m.id);
           const existing = nodesMap.get(m.id);
           if (existing) {
             const moved: NodeDto = {
