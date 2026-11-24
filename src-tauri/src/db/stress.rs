@@ -57,7 +57,7 @@ fn push_stress_edge(
 }
 
 fn stress_node_type(idx: usize) -> NodeType {
-    if idx == 0 || idx % 25 == 0 {
+    if idx.is_multiple_of(25) {
         NodeType::Core
     } else {
         match idx % 5 {
@@ -66,7 +66,7 @@ fn stress_node_type(idx: usize) -> NodeType {
             3 => NodeType::Probe,
             4 => NodeType::Synthesis,
             _ => {
-                if idx % 2 == 0 {
+                if idx.is_multiple_of(2) {
                     NodeType::Branch
                 } else {
                     NodeType::Probe
@@ -85,18 +85,18 @@ fn stress_node_status(idx: usize, node_type: NodeType) -> NodeStatus {
             _ => NodeStatus::Active,
         },
         NodeType::Core => {
-            if idx > 0 && idx % 50 == 0 {
+            if idx > 0 && idx.is_multiple_of(50) {
                 NodeStatus::Locked
             } else {
                 NodeStatus::Active
             }
         }
         _ => {
-            if idx % 17 == 0 {
+            if idx.is_multiple_of(17) {
                 NodeStatus::Locked
-            } else if idx % 13 == 0 {
+            } else if idx.is_multiple_of(13) {
                 NodeStatus::Draft
-            } else if idx % 15 == 0 {
+            } else if idx.is_multiple_of(15) {
                 NodeStatus::Resolved
             } else {
                 NodeStatus::Active
@@ -121,14 +121,14 @@ fn stress_lens_origin(idx: usize, node_type: NodeType) -> NodeLensOrigin {
     match node_type {
         NodeType::Core => NodeLensOrigin::Manual,
         NodeType::Branch => {
-            if idx % 2 == 0 {
+            if idx.is_multiple_of(2) {
                 NodeLensOrigin::Diverge
             } else {
                 NodeLensOrigin::Manual
             }
         }
         NodeType::Loophole => {
-            if idx % 2 == 0 {
+            if idx.is_multiple_of(2) {
                 NodeLensOrigin::RedTeam
             } else {
                 NodeLensOrigin::EdgeCase
@@ -175,7 +175,7 @@ pub fn generate_stress_graph_500() -> (Vec<NodeDto>, Vec<EdgeDto>) {
         let status = stress_node_status(idx, node_type);
         let severity = stress_severity(idx, node_type);
         let lens = stress_lens_origin(idx, node_type);
-        let created_by = if idx % 3 == 0 {
+        let created_by = if idx.is_multiple_of(3) {
             CreatedBy::User
         } else {
             CreatedBy::Ai
@@ -185,10 +185,10 @@ pub fn generate_stress_graph_500() -> (Vec<NodeDto>, Vec<EdgeDto>) {
         let row = idx % STRESS_ROWS_PER_COL;
         let x = (col as f64) * STRESS_COL_STEP;
         let y = (row as f64) * STRESS_ROW_STEP;
-        let collapsed = idx > 0 && idx % 11 == 0;
+        let collapsed = idx > 0 && idx.is_multiple_of(11);
 
         let pin_global = idx == 0 || idx == 25 || idx == 50;
-        let exclude_from_ai = idx > 0 && idx % 19 == 0;
+        let exclude_from_ai = idx > 0 && idx.is_multiple_of(19);
 
         let topic = stress_topic(idx);
         let title = if idx == 0 {
@@ -251,18 +251,14 @@ pub fn generate_stress_graph_500() -> (Vec<NodeDto>, Vec<EdgeDto>) {
 
     // 1. Primary 499-edge DAG backbone covering nodes 1..499.
     for (idx, node) in nodes.iter().enumerate().skip(1) {
-        let parent = if idx < STRESS_ROWS_PER_COL {
-            0
-        } else {
-            idx - STRESS_ROWS_PER_COL
-        };
+        let parent = idx.saturating_sub(STRESS_ROWS_PER_COL);
         let edge_type = match node.node_type {
             NodeType::Loophole => EdgeType::Challenges,
             NodeType::Synthesis => EdgeType::Synthesizes,
-            _ if idx % 3 == 0 => EdgeType::Branches,
+            _ if idx.is_multiple_of(3) => EdgeType::Branches,
             _ => EdgeType::Derives,
         };
-        let weight = if idx % 4 == 0 {
+        let weight = if idx.is_multiple_of(4) {
             EdgeWeight::Summary
         } else {
             EdgeWeight::Full
