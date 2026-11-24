@@ -1,0 +1,100 @@
+:root,
+[data-theme="dark"] {
+  /* Surfaces */
+  --bg-canvas: #0e1013;
+  --bg-dot: #232730;
+  --bg-card: #15181e;
+  --bg-card-elevated: #1b1f27;
+  --bg-pill: rgba(24, 28, 36, 0.88);
+  --bg-code: #101318;
+
+  /* Borders & Hairlines */
+  --border-subtle: #262b36;
+  --border-strong: #3a4252;
+  --edge-default: #3f4756;
+  --edge-branch: #5b7fa6;
+  --edge-challenge: #d97706;
+  --edge-resolve: #2f855a;
+  --edge-reference: #4b5563;
+
+  /* Typography */
+  --text-primary: #e6eaf0;
+  --text-secondary: #98a2b3;
+  --text-muted: #667085;
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, monospace;
+
+  /* Semantic Node Accents (left 3px bar or header tint only) */
+  --accent-core: #cbd5e1;
+  --accent-branch: #60a5fa;
+  --accent-probe: #38bdf8;
+  --accent-synthesis: #34d399;
+  --accent-loophole-low: #eab308;
+  --accent-loophole-med: #f59e0b;
+  --accent-loophole-high: #ef4444;
+  --accent-loophole-crit: #dc2626;
+
+  /* Interactive & Focus States */
+  --ring-focus: #e2e8f0;
+  --ring-edit: #60a5fa;
+  --ring-multi: #94a3b8;
+
+  /* Context X-Ray (Hold V) Glow Palette */
+  --xray-pin: #c084fc;        /* Purple: Global Constraint */
+  --xray-focus: #22d3ee;      /* Cyan: Focus Node(s) */
+  --xray-full: #4ade80;       /* Green: Full Content Ancestor */
+  --xray-summary: #60a5fa;    /* Blue: Compressed Summary Ancestor */
+  --xray-loophole: #f59e0b;   /* Amber: Active Unresolved Loophole */
+  --xray-reference: #94a3b8;  /* Slate: One-Hop Reference */
+
+  /* Radii & Shadows */
+  --radius-card: 8px;
+  --radius-pill: 999px;
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-edit: 0 8px 28px rgba(0, 0, 0, 0.55), 0 0 0 1.5px var(--ring-edit);
+}
+
+[data-theme="light"] {
+  --bg-canvas: #f6f7f9;
+  --bg-dot: #d5dae2;
+  --bg-card: #ffffff;
+  --bg-card-elevated: #ffffff;
+  --bg-pill: rgba(255, 255, 255, 0.92);
+  --bg-code: #f1f3f6;
+  --border-subtle: #dde2ea;
+  --border-strong: #b8c2d1;
+  --edge-default: #98a2b3;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #6b7280;
+  --ring-focus: #111827;
+  --shadow-card: 0 2px 6px rgba(15, 23, 42, 0.08);
+  --shadow-edit: 0 8px 24px rgba(15, 23, 42, 0.14), 0 0 0 1.5px var(--ring-edit);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+}
+
+.axiom-canvas-shell {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg-canvas);
+  overflow: hidden;
+}

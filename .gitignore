@@ -1,0 +1,19 @@
+# Dependencies & build outputs
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Local SQLite workspace files
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# OS metadata
+.DS_Store
+Thumbs.db
