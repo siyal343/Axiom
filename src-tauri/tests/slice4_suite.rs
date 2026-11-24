@@ -44,14 +44,13 @@ enum MockResponseAction {
     },
 }
 
-fn spawn_mock_server<F>(
-    handler: F,
-) -> (
-    String,
-    Arc<Mutex<Vec<CapturedRequest>>>,
-    Arc<AtomicUsize>,
-    thread::JoinHandle<()>,
-)
+struct MockServer {
+    base_url: String,
+    captured: Arc<Mutex<Vec<CapturedRequest>>>,
+    hit_count: Arc<AtomicUsize>,
+}
+
+fn spawn_mock_server<F>(handler: F) -> MockServer
 where
     F: Fn(&CapturedRequest) -> MockResponseAction + Send + Sync + 'static,
 {
@@ -64,7 +63,7 @@ where
     let hits_ref = hit_count.clone();
     let handler = Arc::new(handler);
 
-    let handle = thread::spawn(move || {
+    thread::spawn(move || {
         for stream_res in listener.incoming() {
             let Ok(mut stream) = stream_res else {
                 break;
@@ -154,7 +153,11 @@ where
         }
     });
 
-    (base_url, captured, hit_count, handle)
+    MockServer {
+        base_url,
+        captured,
+        hit_count,
+    }
 }
 
 fn make_focus_node(id: &str, title: &str, content: &str, x: f64, y: f64) -> NodeDto {
@@ -190,13 +193,13 @@ fn make_focus_node(id: &str, title: &str, content: &str, x: f64, y: f64) -> Node
     }
 }
 
-fn setup_workspace(
-    nodes: Vec<NodeDto>,
-) -> (
-    tempfile::NamedTempFile,
-    Arc<RwLock<Option<ActiveWorkspace>>>,
-    Arc<Mutex<Option<rusqlite::Connection>>>,
-) {
+struct WorkspaceFixture {
+    _tmp: tempfile::NamedTempFile,
+    ws: Arc<RwLock<Option<ActiveWorkspace>>>,
+    db: Arc<Mutex<Option<rusqlite::Connection>>>,
+}
+
+fn setup_workspace(nodes: Vec<NodeDto>) -> WorkspaceFixture {
     let tmp = tempfile::NamedTempFile::new().expect("temp sqlite");
     let mut conn = open_connection(tmp.path()).expect("open sqlite");
     let mut engine = GraphEngine::default();
@@ -212,7 +215,7 @@ fn setup_workspace(
         token_budget: 6000,
     })));
     let db = Arc::new(Mutex::new(Some(conn)));
-    (tmp, ws, db)
+    WorkspaceFixture { _tmp: tmp, ws, db }
 }
 
 fn rects_overlap(a: &NodeDto, b: &NodeDto) -> bool {
@@ -242,7 +245,7 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
     }
     sse_body.push_str("data: [DONE]\n\n");
 
-    let (base_url, captured, _hits, _srv) = spawn_mock_server(move |_req| {
+    let srv = spawn_mock_server(move |_req| {
         MockResponseAction::Immediate {
             status_line: "200 OK",
             content_type: "text/event-stream",
@@ -251,7 +254,7 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
     });
 
     let focus = make_focus_node("node_root", "Gateway", "Core design", 0.0, 0.0);
-    let (_tmp, ws, db) = setup_workspace(vec![focus]);
+    let fx = setup_workspace(vec![focus]);
     let active_runs = Arc::new(Mutex::new(HashMap::new()));
     let (summary_tx, _summary_rx) = mpsc::unbounded_channel();
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -265,7 +268,7 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
             custom_prompt: None,
             config: ModelTierConfig {
                 provider: ProviderKind::OpenaiCompat,
-                base_url,
+                base_url: srv.base_url,
                 model: "gpt-4o".to_owned(),
                 has_api_key: true,
                 temperature: 0.4,
@@ -274,8 +277,8 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
             api_key: Some("sk-test-key".to_owned()),
             token_budget: 6000,
         },
-        ws.clone(),
-        db,
+        fx.ws.clone(),
+        fx.db,
         active_runs,
         summary_tx,
         reqwest::Client::new(),
@@ -291,7 +294,7 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
 
     assert_eq!(spawned.len(), 3);
 
-    let reqs = captured.lock().expect("captured");
+    let reqs = srv.captured.lock().expect("captured");
     assert_eq!(reqs.len(), 1);
     assert_eq!(reqs[0].path, "/chat/completions");
     assert_eq!(
@@ -299,7 +302,7 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
         Some("Bearer sk-test-key")
     );
 
-    let ws_guard = ws.read().expect("ws read");
+    let ws_guard = fx.ws.read().expect("ws read");
     let engine = &ws_guard.as_ref().expect("active").engine;
     assert_eq!(engine.nodes.len(), 4);
 
@@ -340,7 +343,7 @@ async fn anthropic_sse_red_team_checks_headers_and_challenges_direction() {
     let ev2 = serde_json::json!({ "type": "message_stop" });
     let sse_body = format!("event: content_block_delta\ndata: {ev1}\n\nevent: message_stop\ndata: {ev2}\n\n");
 
-    let (base_url, captured, _hits, _srv) = spawn_mock_server(move |_req| {
+    let srv = spawn_mock_server(move |_req| {
         MockResponseAction::Immediate {
             status_line: "200 OK",
             content_type: "text/event-stream",
@@ -349,7 +352,7 @@ async fn anthropic_sse_red_team_checks_headers_and_challenges_direction() {
     });
 
     let focus = make_focus_node("node_root", "Storage", "WAL engine", 0.0, 0.0);
-    let (_tmp, ws, db) = setup_workspace(vec![focus]);
+    let fx = setup_workspace(vec![focus]);
     let active_runs = Arc::new(Mutex::new(HashMap::new()));
     let (summary_tx, _rx) = mpsc::unbounded_channel();
 
@@ -361,7 +364,7 @@ async fn anthropic_sse_red_team_checks_headers_and_challenges_direction() {
             custom_prompt: None,
             config: ModelTierConfig {
                 provider: ProviderKind::Anthropic,
-                base_url,
+                base_url: srv.base_url,
                 model: "claude-sonnet-4-20250514".to_owned(),
                 has_api_key: true,
                 temperature: 0.4,
@@ -370,8 +373,8 @@ async fn anthropic_sse_red_team_checks_headers_and_challenges_direction() {
             api_key: Some("ant-key-999".to_owned()),
             token_budget: 6000,
         },
-        ws.clone(),
-        db,
+        fx.ws.clone(),
+        fx.db,
         active_runs,
         summary_tx,
         reqwest::Client::new(),
@@ -382,7 +385,7 @@ async fn anthropic_sse_red_team_checks_headers_and_challenges_direction() {
     .expect("anthropic run succeeds");
 
     assert_eq!(spawned.len(), 1);
-    let reqs = captured.lock().expect("captured");
+    let reqs = srv.captured.lock().expect("captured");
     assert_eq!(reqs[0].path, "/messages");
     assert_eq!(
         reqs[0].headers.get("x-api-key").map(String::as_str),
@@ -393,7 +396,7 @@ async fn anthropic_sse_red_team_checks_headers_and_challenges_direction() {
         Some("2023-06-01")
     );
 
-    let ws_guard = ws.read().expect("ws read");
+    let ws_guard = fx.ws.read().expect("ws read");
     let engine = &ws_guard.as_ref().expect("active").engine;
     let lh = engine.nodes.get(&spawned[0]).expect("loophole");
     assert_eq!(lh.node_type, NodeType::Loophole);
@@ -418,7 +421,7 @@ async fn ollama_ndjson_feynman_places_probe_above_and_derives_from_focus() {
     });
     let ndjson = format!("{l1}\n{l2}\n{l3}\n");
 
-    let (base_url, captured, _hits, _srv) = spawn_mock_server(move |_req| {
+    let srv = spawn_mock_server(move |_req| {
         MockResponseAction::Immediate {
             status_line: "200 OK",
             content_type: "application/x-ndjson",
@@ -427,7 +430,7 @@ async fn ollama_ndjson_feynman_places_probe_above_and_derives_from_focus() {
     });
 
     let focus = make_focus_node("node_root", "WAL", "Append log", 100.0, 300.0);
-    let (_tmp, ws, db) = setup_workspace(vec![focus]);
+    let fx = setup_workspace(vec![focus]);
     let active_runs = Arc::new(Mutex::new(HashMap::new()));
     let (summary_tx, _rx) = mpsc::unbounded_channel();
 
@@ -439,7 +442,7 @@ async fn ollama_ndjson_feynman_places_probe_above_and_derives_from_focus() {
             custom_prompt: None,
             config: ModelTierConfig {
                 provider: ProviderKind::Ollama,
-                base_url,
+                base_url: srv.base_url,
                 model: "qwen2.5:14b".to_owned(),
                 has_api_key: false,
                 temperature: 0.4,
@@ -448,8 +451,8 @@ async fn ollama_ndjson_feynman_places_probe_above_and_derives_from_focus() {
             api_key: None,
             token_budget: 6000,
         },
-        ws.clone(),
-        db,
+        fx.ws.clone(),
+        fx.db,
         active_runs,
         summary_tx,
         reqwest::Client::new(),
@@ -460,10 +463,10 @@ async fn ollama_ndjson_feynman_places_probe_above_and_derives_from_focus() {
     .expect("ollama run succeeds");
 
     assert_eq!(spawned.len(), 1);
-    let reqs = captured.lock().expect("captured");
+    let reqs = srv.captured.lock().expect("captured");
     assert_eq!(reqs[0].path, "/api/chat");
 
-    let ws_guard = ws.read().expect("ws read");
+    let ws_guard = fx.ws.read().expect("ws read");
     let engine = &ws_guard.as_ref().expect("active").engine;
     let probe = engine.nodes.get(&spawned[0]).expect("probe");
     let anchor = engine.nodes.get("node_root").expect("root");
@@ -493,7 +496,7 @@ async fn mid_stream_cancellation_persists_partial_text_and_emits_cancelled() {
         })
     );
 
-    let (base_url, _captured, _hits, _srv) = spawn_mock_server(move |_req| {
+    let srv = spawn_mock_server(move |_req| {
         MockResponseAction::ChunkedPause {
             first_chunk: c1.clone(),
             pause: Duration::from_secs(3),
@@ -502,7 +505,7 @@ async fn mid_stream_cancellation_persists_partial_text_and_emits_cancelled() {
     });
 
     let focus = make_focus_node("node_root", "Root", "Design", 0.0, 0.0);
-    let (_tmp, ws, db) = setup_workspace(vec![focus]);
+    let fx = setup_workspace(vec![focus]);
     let active_runs = Arc::new(Mutex::new(HashMap::new()));
     let (summary_tx, _rx) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
@@ -518,7 +521,7 @@ async fn mid_stream_cancellation_persists_partial_text_and_emits_cancelled() {
             custom_prompt: None,
             config: ModelTierConfig {
                 provider: ProviderKind::OpenaiCompat,
-                base_url,
+                base_url: srv.base_url,
                 model: "gpt-4o".to_owned(),
                 has_api_key: false,
                 temperature: 0.4,
@@ -527,8 +530,8 @@ async fn mid_stream_cancellation_persists_partial_text_and_emits_cancelled() {
             api_key: None,
             token_budget: 6000,
         },
-        ws.clone(),
-        db,
+        fx.ws.clone(),
+        fx.db,
         active_runs,
         summary_tx,
         reqwest::Client::new(),
@@ -546,7 +549,7 @@ async fn mid_stream_cancellation_persists_partial_text_and_emits_cancelled() {
     .expect("cancelled run returns Ok");
 
     assert_eq!(spawned.len(), 1);
-    let ws_guard = ws.read().expect("ws read");
+    let ws_guard = fx.ws.read().expect("ws read");
     let node = ws_guard
         .as_ref()
         .expect("active")
@@ -573,7 +576,7 @@ async fn mid_stream_cancellation_persists_partial_text_and_emits_cancelled() {
 
 #[tokio::test]
 async fn http_error_status_maps_to_structured_ipc_errors() {
-    let (base_url, _captured, _hits, _srv) = spawn_mock_server(|req| {
+    let srv = spawn_mock_server(|req| {
         if req.body.contains("case_401") {
             MockResponseAction::Immediate {
                 status_line: "401 Unauthorized",
@@ -598,7 +601,7 @@ async fn http_error_status_maps_to_structured_ipc_errors() {
     let client = reqwest::Client::new();
     let cfg = ModelTierConfig {
         provider: ProviderKind::OpenaiCompat,
-        base_url,
+        base_url: srv.base_url,
         model: "gpt-4o".to_owned(),
         has_api_key: false,
         temperature: 0.4,
@@ -635,7 +638,7 @@ async fn summarizer_fast_path_llm_path_and_stale_hash_abort() {
         false,
     ));
 
-    let (base_url, _captured, hits, _srv) = spawn_mock_server(|_req| {
+    let srv = spawn_mock_server(|_req| {
         let line = serde_json::json!({
             "choices": [{ "delta": { "content": "Compressed 2-sentence summary." } }]
         });
@@ -650,7 +653,7 @@ async fn summarizer_fast_path_llm_path_and_stale_hash_abort() {
         .save(SaveSettingsInput {
             reasoning: ModelTierConfig {
                 provider: ProviderKind::OpenaiCompat,
-                base_url: base_url.clone(),
+                base_url: srv.base_url.clone(),
                 model: "gpt-4o".to_owned(),
                 has_api_key: false,
                 temperature: 0.4,
@@ -659,7 +662,7 @@ async fn summarizer_fast_path_llm_path_and_stale_hash_abort() {
             reasoning_api_key: None,
             utility: ModelTierConfig {
                 provider: ProviderKind::OpenaiCompat,
-                base_url,
+                base_url: srv.base_url,
                 model: "gpt-4o-mini".to_owned(),
                 has_api_key: false,
                 temperature: 0.2,
@@ -675,14 +678,14 @@ async fn summarizer_fast_path_llm_path_and_stale_hash_abort() {
     let short_node = make_focus_node("n_short", "Short", "Concise invariant under 160 chars.", 0.0, 0.0);
     let long_body = "Detailed distributed consensus specification. ".repeat(8);
     let long_node = make_focus_node("n_long", "Long", &long_body, 400.0, 0.0);
-    let (_tmp, ws, db) = setup_workspace(vec![short_node, long_node]);
+    let fx = setup_workspace(vec![short_node, long_node]);
 
     let (summary_tx, summary_rx) = mpsc::unbounded_channel();
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel::<SummaryUpdatedEvent>();
     let worker = spawn_summarizer_worker(
         summary_rx,
-        ws.clone(),
-        db.clone(),
+        fx.ws.clone(),
+        fx.db.clone(),
         reqwest::Client::new(),
         settings,
         Duration::from_millis(60),
@@ -699,7 +702,7 @@ async fn summarizer_fast_path_llm_path_and_stale_hash_abort() {
         .expect("short evt");
     assert_eq!(evt_short.node_id, "n_short");
     assert_eq!(evt_short.summary, "Concise invariant under 160 chars.");
-    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    assert_eq!(srv.hit_count.load(Ordering::SeqCst), 0);
 
     // 2. LLM path > 160 chars -> 1 HTTP hit
     summary_tx.send("n_long".to_owned()).expect("send long");
@@ -709,12 +712,12 @@ async fn summarizer_fast_path_llm_path_and_stale_hash_abort() {
         .expect("long evt");
     assert_eq!(evt_long.node_id, "n_long");
     assert_eq!(evt_long.summary, "Compressed 2-sentence summary.");
-    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    assert_eq!(srv.hit_count.load(Ordering::SeqCst), 1);
 
     // 3. Stale content_hash abort check
     {
-        let mut ws_guard = ws.write().expect("ws write");
-        let mut db_guard = db.lock().expect("db lock");
+        let mut ws_guard = fx.ws.write().expect("ws write");
+        let mut db_guard = fx.db.lock().expect("db lock");
         let active = ws_guard.as_mut().expect("active");
         let conn = db_guard.as_mut().expect("conn");
         let updated = update_node_summary(
