@@ -965,9 +965,9 @@ fn bench_500_node_compile_and_search() {
     }
 
     // Build 499 spine edges + 201 cross/challenge/reference edges = 700 edges total
-    for i in 1..500usize {
+    for (i, node) in nodes.iter().enumerate().skip(1) {
         let parent = (i - 1) / 2;
-        let edge_type = match nodes[i].node_type {
+        let edge_type = match node.node_type {
             NodeType::Loophole => EdgeType::Challenges,
             NodeType::Synthesis => EdgeType::Synthesizes,
             NodeType::Branch if i % 2 == 0 => EdgeType::Branches,
