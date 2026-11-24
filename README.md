@@ -109,3 +109,4 @@ Read the following guides for implementation details on each subsystem:
 - [Keyboard navigation and overlays](docs/features/keyboard-navigation-and-overlays.md): Modal keyboard router, topological navigation, `Hold V` X-Ray HUD, 100-entry undo/redo history, Command Palette, and toast stack.
 - [AI streaming and settings](docs/features/ai-streaming-and-settings.md): OS keychain credentials, multi-tier settings, multi-provider streaming adapters, AI lens execution, and debounced background summarization.
 - [Portability and stress testing](docs/features/portability-and-stress-testing.md): Pre-import JSON validation, native file dialogs, Command Palette `>` actions, dev-only 500-node stress generator, and `PerfHud` telemetry.
+- [Verification and RTM sign-off](docs/VV-SIGNOFF.md): Windows CI baseline, performance and footprint summary, architectural invariants audit, test coverage, and full Requirements Traceability Matrix.
