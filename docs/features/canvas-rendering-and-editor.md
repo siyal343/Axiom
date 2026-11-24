@@ -49,7 +49,7 @@ Mutable graph collections (`nodesMap`, `edgesMap`, `cardDomRefs`, and `dragOffse
 
 ## Static Markdown, math, and sanitization cache
 
-In Navigate Mode, `NodeCard` renders static HTML through `getRenderedMarkdown(node.content_hash, node.content)` in `src/cards/markdownCache.ts`:
+In Navigate Mode, `NodeCard` renders static HTML through `src/cards/markdownCache.ts`. When `node.status` equals `"draft"`, `NodeCard` bypasses the 600-entry `content_hash` LRU cache and calls `renderMarkdownToSanitizedHtml(node.content)` directly so progressive streaming deltas never pollute the cache with partial hashes while still passing through DOMPurify. For all non-draft nodes, `NodeCard` calls `getRenderedMarkdown(node.content_hash, node.content)`:
 
 1. **Math preprocessing:** `preprocessMathOutsideCode` scans the Markdown string while skipping fenced code blocks (```` ``` ```` or `~~~`), inline code spans, and escaped `\$` sequences. It renders display math (`$$...$$`) and inline math (`$...$`) with KaTeX (`throwOnError: false`) into temporary placeholders.
 2. **Markdown and syntax highlighting:** `markdown-it` (`html: true`, `linkify: true`, `breaks: true`) renders the text and highlights fenced code blocks using a lightweight `highlight.js/lib/core` bundle registered with 14 languages (`typescript`, `javascript`, `rust`, `python`, `sql`, `bash`, `json`, `css`, `xml`/`html`, `c`, `cpp`, `go`, `yaml`, `markdown`).
@@ -65,4 +65,4 @@ Axiom enforces the invariant that zero CodeMirror instances exist in the DOM out
 - In Navigate Mode (`modalState === "navigate"`), `LiveEditorOverlay` returns `null`, leaving `0` `.cm-editor` elements in the DOM.
 - When you trigger `enterEditMode(node)` on a `locked` node, `src/store/selection.ts` aborts editing and triggers a `240` ms `lockedShakeId` animation.
 - On an unlocked node, `enterEditMode` sets `modalState` to `"edit"` and `LiveEditorOverlay` mounts one `LiveEditorInstance` clamped inside the viewport bounds with a title `<input>` and a CodeMirror 6 `EditorView` (`@codemirror/lang-markdown`, `@codemirror/commands` default and history keymaps, line wrapping, and monochrome theme).
-- Pressing `Escape` or `Ctrl/Cmd+Enter` inside Edit Mode pre-warms `getRenderedMarkdown` if the text changed, dispatches `update_node_text` through `mutateGraphUndoable`, calls `exitEditMode()`, and destroys the `EditorView` (`view.destroy()`), returning the `.cm-editor` count to zero.
+- Pressing `Escape` inside Edit Mode saves changed text through `mutateGraphUndoable` (pre-warming `getRenderedMarkdown`), calls `exitEditMode()`, and destroys the `EditorView` (`view.destroy()`), returning the `.cm-editor` count to zero. Pressing `Ctrl/Cmd+Enter` commits edits the same way and transitions directly into `chord_a` mode on the saved node (`commitAndExit(true)`).

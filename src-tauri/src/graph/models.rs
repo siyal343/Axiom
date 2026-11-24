@@ -80,7 +80,6 @@ pub enum Severity {
 }
 
 impl Severity {
-    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Low => "low",
@@ -142,7 +141,6 @@ impl NodeLensOrigin {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub enum LensKind {
     RedTeam,
     EdgeCase,
@@ -188,7 +186,6 @@ pub enum EdgeType {
 }
 
 impl EdgeType {
-    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Derives => "derives",
@@ -221,7 +218,6 @@ pub enum EdgeWeight {
 }
 
 impl EdgeWeight {
-    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Full => "full",
@@ -240,7 +236,6 @@ impl EdgeWeight {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub enum InclusionMode {
     Pin,
     Focus,
@@ -321,7 +316,6 @@ pub struct WorkspaceSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct NodePositionUpdate {
     pub id: String,
     pub x: f64,
@@ -329,7 +323,6 @@ pub struct NodePositionUpdate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct NodeSizeUpdate {
     pub id: String,
     pub width: f64,
@@ -338,7 +331,6 @@ pub struct NodeSizeUpdate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
-#[allow(dead_code)]
 pub enum GraphOp {
     CreateNode {
         node: NodeDto,
@@ -379,7 +371,6 @@ pub enum GraphOp {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct ApplyResult {
     pub updated_nodes: Vec<NodeDto>,
     pub deleted_node_ids: Vec<String>,
@@ -393,7 +384,6 @@ pub struct SpawnConnectedResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct CompiledXray {
     pub total_tokens: u32,
     pub budget_tokens: u32,
@@ -402,7 +392,6 @@ pub struct CompiledXray {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct SearchHit {
     pub id: String,
     pub title: String,
@@ -417,7 +406,6 @@ pub struct SearchHit {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-#[allow(dead_code)]
 pub enum LensStreamEvent {
     SkeletonSpawned {
         node: NodeDto,
@@ -444,7 +432,6 @@ pub enum LensStreamEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub enum ProviderKind {
     OpenaiCompat,
     Anthropic,
@@ -452,7 +439,6 @@ pub enum ProviderKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct ModelTierConfig {
     pub provider: ProviderKind,
     pub base_url: String,
@@ -463,7 +449,6 @@ pub struct ModelTierConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct AppSettingsDto {
     pub reasoning: ModelTierConfig,
     pub utility: ModelTierConfig,
@@ -473,7 +458,6 @@ pub struct AppSettingsDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct SaveSettingsInput {
     pub reasoning: ModelTierConfig,
     pub reasoning_api_key: Option<String>,
@@ -482,6 +466,20 @@ pub struct SaveSettingsInput {
     pub default_token_budget: u32,
     pub auto_summarize: bool,
     pub theme: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SummaryUpdatedEvent {
+    pub node_id: String,
+    pub summary: String,
+    pub summary_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestConnectionResult {
+    pub ok: bool,
+    pub latency_ms: u64,
+    pub message: String,
 }
 
 pub fn estimate_tokens(text: &str) -> u32 {

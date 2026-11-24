@@ -179,6 +179,12 @@ export interface SummaryUpdatedEvent {
   summary_hash: string;
 }
 
+export interface TestConnectionResult {
+  ok: boolean;
+  latency_ms: number;
+  message: string;
+}
+
 export interface IpcError {
   code:
     | "WORKSPACE_NOT_OPEN"

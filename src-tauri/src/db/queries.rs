@@ -769,3 +769,40 @@ pub fn save_camera(conn: &mut Connection, camera: &CameraState) -> Result<(), Ip
     tx.commit()?;
     Ok(())
 }
+
+pub fn update_node_summary(
+    conn: &mut Connection,
+    engine: &mut GraphEngine,
+    node_id: &str,
+    expected_content_hash: &str,
+    summary: &str,
+    summary_hash: &str,
+) -> Result<bool, IpcError> {
+    let Some(existing) = engine.nodes.get(node_id) else {
+        return Ok(false);
+    };
+    if existing.content_hash != expected_content_hash {
+        return Ok(false);
+    }
+
+    let now = now_epoch_ms();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let affected = tx.execute(
+        "UPDATE nodes SET summary = ?1, summary_hash = ?2, updated_at = ?3
+         WHERE id = ?4 AND content_hash = ?5",
+        params![summary, summary_hash, now, node_id, expected_content_hash],
+    )?;
+    if affected == 0 {
+        tx.rollback()?;
+        return Ok(false);
+    }
+    tx.commit()?;
+
+    if let Some(node) = engine.nodes.get_mut(node_id) {
+        node.summary = summary.to_owned();
+        node.summary_hash = summary_hash.to_owned();
+        node.updated_at = now;
+    }
+
+    Ok(true)
+}

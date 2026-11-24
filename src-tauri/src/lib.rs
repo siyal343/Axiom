@@ -3,20 +3,37 @@ pub mod db;
 pub mod error;
 pub mod graph;
 pub mod ipc;
+pub mod settings;
+
+use std::time::Duration;
+
+use tauri::Emitter;
 
 use ipc::AppState;
 
 pub fn run() {
-    let (app_state, mut summary_rx) = AppState::new();
+    let (app_state, summary_rx) = AppState::new();
+    let workspace = app_state.workspace.clone();
+    let db = app_state.db.clone();
+    let http_client = app_state.http_client.clone();
+    let settings = app_state.settings.clone();
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
-        .setup(move |_app| {
-            // Slice 0 placeholder drain; Slice 4 replaces with debounced summarizer worker.
-            tauri::async_runtime::spawn(async move {
-                while summary_rx.recv().await.is_some() {}
-            });
+        .setup(move |app| {
+            let app_handle = app.handle().clone();
+            ai::summarizer::spawn_summarizer_worker(
+                summary_rx,
+                workspace,
+                db,
+                http_client,
+                settings,
+                Duration::from_millis(1500),
+                move |evt| {
+                    let _ = app_handle.emit("axiom://summary-updated", evt);
+                },
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -29,6 +46,11 @@ pub fn run() {
             ipc::commands::save_camera,
             ipc::commands::export_json,
             ipc::commands::import_json,
+            ipc::commands::run_lens,
+            ipc::commands::cancel_run,
+            ipc::commands::get_settings,
+            ipc::commands::save_settings,
+            ipc::commands::test_provider_connection,
         ]);
 
     if let Err(err) = builder.run(tauri::generate_context!()) {

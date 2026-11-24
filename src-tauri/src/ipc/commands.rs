@@ -1,11 +1,16 @@
 use std::path::{Path, PathBuf};
 
+use tokio_util::sync::CancellationToken;
+
+use crate::ai;
+use crate::ai::runner::{execute_lens_run, prepare_lens_context, LensRunParams};
 use crate::db;
 use crate::error::IpcError;
 use crate::graph::compiler::compile_context;
 use crate::graph::models::{
-    ApplyResult, CameraState, CompiledXray, EdgeType, GraphOp, NodePositionUpdate, NodeType,
-    SearchHit, SpawnConnectedResult, WorkspaceSnapshot,
+    AppSettingsDto, ApplyResult, CameraState, CompiledXray, EdgeType, GraphOp, LensKind,
+    LensStreamEvent, NodePositionUpdate, NodeType, SaveSettingsInput, SearchHit,
+    SpawnConnectedResult, TestConnectionResult, WorkspaceSnapshot,
 };
 use crate::graph::spatial::compute_tidy_subtree;
 use crate::graph::GraphEngine;
@@ -252,4 +257,122 @@ pub fn import_json(
     *db_guard = Some(conn);
 
     Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn run_lens(
+    lens: LensKind,
+    focus_ids: Vec<String>,
+    custom_prompt: Option<String>,
+    on_event: tauri::ipc::Channel<LensStreamEvent>,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, IpcError> {
+    let token_budget = {
+        let ws_guard = state
+            .workspace
+            .read()
+            .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+        let active = ws_guard
+            .as_ref()
+            .ok_or_else(IpcError::workspace_not_open)?;
+        active.token_budget
+    };
+
+    prepare_lens_context(
+        &state.workspace,
+        lens,
+        &focus_ids,
+        token_budget,
+        custom_prompt.as_deref(),
+    )?;
+
+    let (config, api_key) = state.settings.tier_config_and_key("reasoning")?;
+    let run_id = format!("run_{}", ulid::Ulid::new());
+    let cancel = CancellationToken::new();
+
+    {
+        let mut runs = state
+            .active_runs
+            .lock()
+            .map_err(|_| IpcError::db("Active runs lock poisoned"))?;
+        runs.insert(run_id.clone(), cancel.clone());
+    }
+
+    let workspace = state.workspace.clone();
+    let db = state.db.clone();
+    let active_runs = state.active_runs.clone();
+    let summary_tx = state.summary_tx.clone();
+    let http_client = state.http_client.clone();
+    let spawned_run_id = run_id.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let _ = execute_lens_run(
+            LensRunParams {
+                run_id: spawned_run_id,
+                lens,
+                focus_ids,
+                custom_prompt,
+                config,
+                api_key,
+                token_budget,
+            },
+            workspace,
+            db,
+            active_runs,
+            summary_tx,
+            http_client,
+            cancel,
+            move |evt| {
+                let _ = on_event.send(evt);
+            },
+        )
+        .await;
+    });
+
+    Ok(run_id)
+}
+
+#[tauri::command]
+pub fn cancel_run(run_id: String, state: tauri::State<'_, AppState>) -> Result<(), IpcError> {
+    let runs = state
+        .active_runs
+        .lock()
+        .map_err(|_| IpcError::db("Active runs lock poisoned"))?;
+    let Some(token) = runs.get(&run_id) else {
+        return Err(IpcError::run_not_found(&run_id));
+    };
+    token.cancel();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_settings(state: tauri::State<'_, AppState>) -> Result<AppSettingsDto, IpcError> {
+    state.settings.load_dto()
+}
+
+#[tauri::command]
+pub fn save_settings(
+    input: SaveSettingsInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppSettingsDto, IpcError> {
+    let saved = state.settings.save(input)?;
+
+    let mut ws_guard = state
+        .workspace
+        .write()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    if let Some(active) = ws_guard.as_mut() {
+        active.token_budget = saved.default_token_budget;
+    }
+
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn test_provider_connection(
+    tier: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<TestConnectionResult, IpcError> {
+    let (config, api_key) = state.settings.tier_config_and_key(&tier)?;
+    Ok(ai::provider::test_connection(&state.http_client, &config, api_key).await)
 }

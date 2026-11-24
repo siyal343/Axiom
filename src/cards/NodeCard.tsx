@@ -25,7 +25,7 @@ import {
   selectedIds,
   xrayState,
 } from "../store/selection";
-import { getRenderedMarkdown } from "./markdownCache";
+import { getRenderedMarkdown, renderMarkdownToSanitizedHtml } from "./markdownCache";
 
 interface NodeCardProps {
   node: NodeDto;
@@ -123,7 +123,9 @@ export function NodeCard({ node }: NodeCardProps) {
 
   const renderedHtml = node.layout.collapsed
     ? ""
-    : getRenderedMarkdown(node.content_hash, node.content);
+    : node.status === "draft"
+      ? renderMarkdownToSanitizedHtml(node.content)
+      : getRenderedMarkdown(node.content_hash, node.content);
 
   const applyMetaPatch = (label: string, patch: NodeMetaPatch): void => {
     const { forward, inverse } = buildUpdateMetaWithInverse(node, patch);

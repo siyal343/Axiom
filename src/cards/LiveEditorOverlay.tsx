@@ -74,7 +74,7 @@ function LiveEditorInstance({
 
   titleValRef.current = title;
 
-  const commitAndClose = (): void => {
+  const commitAndExit = (openChordAfter = false): void => {
     if (committedRef.current) {
       return;
     }
@@ -93,6 +93,10 @@ function LiveEditorInstance({
     }
 
     exitEditMode();
+    if (openChordAfter) {
+      focusId.value = nodeId;
+      modalState.value = "chord_a";
+    }
   };
 
   useEffect(() => {
@@ -123,11 +127,11 @@ function LiveEditorInstance({
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        commitAndClose();
+        commitAndExit(false);
       } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
-        commitAndClose();
+        commitAndExit(true);
       }
     };
 

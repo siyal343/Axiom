@@ -853,3 +853,252 @@ body,
   background: var(--border-subtle);
   color: var(--text-primary);
 }
+
+/* Slice 4: CustomPromptBar, SettingsModal & Triage Hint Pill */
+.triage-hint-pill {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 60;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-pill);
+  border: 1px solid var(--accent-loophole-med);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(8px);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.custom-prompt-bar {
+  position: fixed;
+  z-index: 75;
+  width: min(440px, 92vw);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-card);
+  background: var(--bg-card-elevated);
+  border: 1px solid var(--ring-edit);
+  box-shadow: var(--shadow-edit);
+}
+
+.custom-prompt-bar__input {
+  flex: 1 1 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  outline: none;
+}
+
+.custom-prompt-bar__btn {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-code);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.custom-prompt-bar__btn:hover {
+  border-color: var(--ring-edit);
+}
+
+.settings-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+}
+
+.settings-modal {
+  width: min(680px, 95vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-card);
+  background: var(--bg-card-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-edit);
+  overflow: hidden;
+}
+
+.settings-modal__header,
+.settings-modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-modal__footer {
+  border-bottom: none;
+  border-top: 1px solid var(--border-subtle);
+  justify-content: flex-end;
+}
+
+.settings-modal__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-modal__body {
+  padding: 14px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-section {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  padding: 12px;
+  background: var(--bg-card);
+}
+
+.settings-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.settings-section__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-field--wide {
+  grid-column: 1 / -1;
+}
+
+.settings-field__label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-field__label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.settings-key-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-key-row .settings-input {
+  flex: 1 1 auto;
+}
+
+.settings-input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-code);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.settings-input:focus {
+  border-color: var(--ring-edit);
+}
+
+.settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.settings-btn {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.settings-btn--primary {
+  background: var(--ring-edit);
+  border-color: var(--ring-edit);
+  color: #0e1013;
+  font-weight: 600;
+}
+
+.settings-btn--secondary {
+  background: var(--bg-code);
+  color: var(--text-primary);
+}
+
+.settings-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.settings-test-result {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.settings-test-result--ok {
+  background: color-mix(in srgb, var(--xray-full) 14%, transparent);
+  color: var(--text-primary);
+  border: 1px solid color-mix(in srgb, var(--xray-full) 45%, transparent);
+}
+
+.settings-test-result--err {
+  background: color-mix(in srgb, var(--accent-loophole-high) 14%, transparent);
+  color: var(--text-primary);
+  border: 1px solid color-mix(in srgb, var(--accent-loophole-high) 45%, transparent);
+}

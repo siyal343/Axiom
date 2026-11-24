@@ -7,8 +7,8 @@ Axiom implements a modal keyboard router, topological graph traversal, an invert
 `src/store/selection.ts` defines five mutually exclusive `ModalState` modes: `navigate`, `edit`, `command`, `chord_a`, and `connect_edge`. `createKeymapHandler` in `src/input/keymap.ts` routes keyboard events strictly by active mode:
 
 - **`edit` mode isolation:** When `modalState` equals `"edit"`, `handleKeyDown` returns immediately before inspecting any key. Typing `h`, `j`, `k`, `l`, `a`, `d`, or any other character triggers zero graph commands. In `navigate` and `connect_edge` modes, the router also skips events originating inside `input`, `textarea`, `select`, `[contenteditable='true']`, or `.cm-editor` elements.
-- **`command` mode:** Passes typing and navigation keys to `CommandPalette`, intercepting only `Escape` to close overlays.
-- **`chord_a` mode:** Entered by pressing `A` in `navigate` mode and displaying a bottom hint pill listing the available lens shortcuts. A `1500` ms timeout (`chordTimeoutMs`) resets the mode to `"navigate"` if no valid follow-up key arrives. Pressing `R` (`red_team`), `E` (`edge_case`), `D` (`diverge`), `F` (`feynman`), `S` (`synthesize` when two or more nodes are selected, or a warning toast otherwise), or `Space` (`custom`) invokes `onTriggerLens` and resets to `"navigate"`. Pressing `Escape`, any unmapped key, or blurring the window exits `chord_a` cleanly.
+- **`command` mode:** Passes typing and navigation keys to `CommandPalette`, `CustomPromptBar`, and `SettingsModal`, intercepting only `Escape` to close overlays.
+- **`chord_a` mode:** Entered by pressing `A` in `navigate` mode and displaying a bottom hint pill listing the available lens shortcuts. A `1500` ms timeout (`chordTimeoutMs`) resets the mode to `"navigate"` if no valid follow-up key arrives. Pressing `R` (`red_team`), `E` (`edge_case`), `D` (`diverge`), `F` (`feynman`), `S` (`synthesize` when two or more nodes are selected, or a warning toast otherwise), or `Space` (`custom`, opening **Custom AI Prompt**) invokes `triggerLens` (`src/store/aiRunner.ts`) and resets to `"navigate"`. Pressing `Escape`, any unmapped key, or blurring the window exits `chord_a` cleanly.
 - **`connect_edge` mode:** Entered by pressing `E` on a focused node. Displays a bottom status banner and restricts keyboard input to topological navigation (`H`, `J`, `K`, `L`, and arrow keys), `Enter` (opens the **References** / **Resolves** / **Derives** edge popover anchored at the top center of the target node), and `E` or `Escape` to cancel.
 
 ## Navigate mode keyboard bindings
@@ -56,8 +56,8 @@ Sibling lists and child candidates in `src/input/topologyNav.ts` sort determinis
 | `Cmd/Ctrl+Z` | Undoes the latest graph mutation (`performUndo`) |
 | `Cmd/Ctrl+Shift+Z` or `Ctrl+Y` | Redoes the most recently undone mutation (`performRedo`) |
 | `Cmd/Ctrl+K` | Opens **Command Palette** (`openCommandPalette`) |
-| `Cmd/Ctrl+,` | Displays an informational toast noting that the settings modal arrives in a later slice |
-| `Escape` | Follows a strict priority order: cancels an active run hook if provided, closes `edgePopover`, **Command Palette**, `chord_a`, or `connect_edge`, or collapses multi-selection down to `focusId` |
+| `Cmd/Ctrl+,` | Opens **Settings** (`openSettingsModal`) |
+| `Escape` | Follows a strict priority order: (1) cancels an active AI stream (`cancelActiveRun`), (2) closes `edgePopover`, **Command Palette**, **Custom AI Prompt**, **Settings**, `triageBanner`, `chord_a`, or `connect_edge`, and (3) collapses multi-selection down to `focusId` |
 
 ## Context X-Ray overlay
 
@@ -86,6 +86,11 @@ Opening **Command Palette** (`Cmd/Ctrl+K`) focuses the search input, exposes fiv
 - **Tauri search and local fallback:** Queries Rust `searchNodes(query, 30)` when running inside Tauri, falling back to `searchNodesLocally` (which evaluates structured filters and case-insensitive substring matches sorted by severity and `updated_at`) in browser environments or on IPC errors.
 - **Keyboard selection and camera glide:** Pressing `ArrowDown` or `ArrowUp` cycles through matching hits. Pressing `Enter` or clicking a hit closes **Command Palette**, selects that node, and animates the camera (`220` ms, zoom clamped to at least `0.85x`) to center the card. Pressing `Escape` or clicking the backdrop closes the dialog.
 
-### Ephemeral toast stack
+### Ephemeral toast stack and floating action pills
 
 `ToastStack` renders up to four concurrent toast items (`info`, `warning`, and `error` variants) with optional action buttons and a `2800` ms auto-dismiss timer. `notifyIpcError` parses structured `IpcError` payloads so `NODE_LOCKED` displays as a `warning` toast and all other IPC errors display as `error` toasts.
+
+`src/App.tsx` also renders two contextual floating pills in Navigate Mode:
+
+- **Multi-select synthesis pill:** When two or more cards are selected outside Bird's-Eye LOD and active pointer drags, clicking **Synthesize (A S)** invokes `triggerLens("synthesize")`.
+- **Red-Team loophole triage pill:** When a `red_team` run completes and auto-focuses the first spawned loophole, `.triage-hint-pill` displays `Triage: J/K step · R resolve · Tab fix · Backspace dismiss` for `8000` ms (dismissible early with `Escape`).

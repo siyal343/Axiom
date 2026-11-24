@@ -3,7 +3,6 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[allow(dead_code)]
 pub enum IpcErrorCode {
     WorkspaceNotOpen,
     DbError,
@@ -15,6 +14,21 @@ pub enum IpcErrorCode {
     RunNotFound,
 }
 
+impl IpcErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkspaceNotOpen => "WORKSPACE_NOT_OPEN",
+            Self::DbError => "DB_ERROR",
+            Self::ValidationError => "VALIDATION_ERROR",
+            Self::NodeLocked => "NODE_LOCKED",
+            Self::DuplicateEdge => "DUPLICATE_EDGE",
+            Self::ProviderAuth => "PROVIDER_AUTH",
+            Self::ProviderNetwork => "PROVIDER_NETWORK",
+            Self::RunNotFound => "RUN_NOT_FOUND",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Error)]
 #[error("{code:?}: {message}")]
 pub struct IpcError {
@@ -22,7 +36,6 @@ pub struct IpcError {
     pub message: String,
 }
 
-#[allow(dead_code)]
 impl IpcError {
     pub fn new(code: IpcErrorCode, message: impl Into<String>) -> Self {
         Self {

@@ -8,12 +8,13 @@ Axiom separates persistent graph truth, layout math, and rendering across a Rust
 
 ### Rust back end
 
-The Rust crate under `src-tauri/src/` owns persistence, spatial layout, context compilation, and stream framing:
+The Rust crate under `src-tauri/src/` owns persistence, spatial layout, context compilation, AI streaming, settings, and background summarization:
 
-- **Storage and migrations (`src-tauri/src/db/`):** Opens local SQLite databases in write-ahead logging (WAL) mode with foreign-key enforcement and an external-content FTS5 full-text search index, executes atomic `apply_ops` transactions, persists camera coordinates, and runs deterministic JSON export and import.
+- **Storage and migrations (`src-tauri/src/db/`):** Opens local SQLite databases in write-ahead logging (WAL) mode with foreign-key enforcement and an external-content FTS5 full-text search index, executes atomic `apply_ops` transactions, updates stale summaries, persists camera coordinates, and runs deterministic JSON export and import.
 - **Graph engine and context compiler (`src-tauri/src/graph/`):** Maintains the in-memory `GraphEngine`, enforces node and edge invariants, computes collision-free placements and `tidy_subtree` layouts with an `rstar` 2D R-tree, and executes `compile_context` for deterministic prompt and X-Ray assembly.
-- **Stream framing parser (`src-tauri/src/ai/parser.rs`):** Implements `NodeStreamParser`, a line-delimited, code-fence-aware parser for `@@NODE` and `@@END` card framing.
-- **IPC boundary (`src-tauri/src/ipc/`):** Exposes typed Tauri commands (`open_workspace`, `apply_ops`, `spawn_connected_node`, `compile_xray`, `search_nodes`, `tidy_subtree`, `save_camera`, `export_json`, `import_json`) backed by `AppState` and structured `IpcError` codes.
+- **AI streaming and summarization (`src-tauri/src/ai/`):** Embeds lens and utility prompts (`prompts.rs`), streams `OpenaiCompat`, `Anthropic`, and `Ollama` responses (`provider.rs`), parses `@@NODE` and `@@END` frames (`parser.rs`), executes cancellable lens runs (`runner.rs`), and runs the debounced background summarizer (`summarizer.rs`).
+- **Settings and OS keychain (`src-tauri/src/settings.rs`):** Persists non-secret workspace and tier settings in `settings.json` while storing API keys in the OS keychain (`"dev.axiom.canvas"`).
+- **IPC boundary (`src-tauri/src/ipc/`):** Exposes typed Tauri commands (`open_workspace`, `apply_ops`, `spawn_connected_node`, `compile_xray`, `search_nodes`, `tidy_subtree`, `save_camera`, `export_json`, `import_json`, `run_lens`, `cancel_run`, `get_settings`, `save_settings`, `test_provider_connection`) backed by `AppState` and structured `IpcError` codes.
 
 ### TypeScript front end
 
@@ -21,22 +22,22 @@ The front end under `src/` separates a 60–120 FPS canvas loop from Preact UI s
 
 - **Camera and Canvas2D renderer (`src/canvas/`):** Runs a `requestAnimationFrame` camera loop (`CanvasCameraController`) that draws the dot grid, directed cubic Bezier edges, X-Ray halos, marquee selection boxes, edge previews, and Bird's-Eye level-of-detail (LOD) cards under `0.45x` zoom directly onto a single `<canvas>` element.
 - **Viewport culling and pointer gestures (`src/canvas/spatialIndex.ts`, `src/canvas/pointer.ts`):** Uses `rbush` to cull off-screen DOM cards, supports grid-snapped multi-node dragging without Preact re-renders, and handles marquee selection and `Alt+Drag` edge creation.
-- **Static cards and single live editor (`src/cards/`):** Renders visible cards with a `content_hash`-keyed LRU cache backed by `markdown-it`, KaTeX, `highlight.js`, and DOMPurify, while mounting at most one CodeMirror 6 `LiveEditorOverlay` instance during editing.
-- **Modal keyboard router and overlays (`src/input/`, `src/overlays/`):** Enforces strict modal isolation (`navigate`, `edit`, `command`, `chord_a`, `connect_edge`), topological `H/J/K/L` navigation, `Hold V` X-Ray HUD, `Cmd/Ctrl+K` Command Palette, and ephemeral toast notifications.
-- **Client state (`src/store/`):** Stores `nodesMap`, `edgesMap`, `cardDomRefs`, and `dragOffsets` outside `@preact/signals` so pan, zoom, and drag loops never trigger framework re-renders, alongside the 100-entry `UndoRedoHistory` ring buffer.
+- **Static cards and single live editor (`src/cards/`):** Renders visible cards with a `content_hash`-keyed LRU cache (bypassing the cache for streaming `draft` cards) backed by `markdown-it`, KaTeX, `highlight.js`, and DOMPurify, while mounting at most one CodeMirror 6 `LiveEditorOverlay` instance during editing.
+- **Modal keyboard router and overlays (`src/input/`, `src/overlays/`):** Enforces strict modal isolation (`navigate`, `edit`, `command`, `chord_a`, `connect_edge`), topological `H/J/K/L` navigation, `Hold V` X-Ray HUD, `Cmd/Ctrl+K` Command Palette, `CustomPromptBar`, `SettingsModal`, and ephemeral toast notifications.
+- **Client state and AI runner (`src/store/`):** Stores `nodesMap`, `edgesMap`, `cardDomRefs`, and `dragOffsets` outside `@preact/signals` so pan, zoom, and drag loops never trigger framework re-renders, alongside the 100-entry `UndoRedoHistory` ring buffer and frame-coalesced `aiRunner.ts` stream handlers.
 
 ## Repository layout
 
 | Path | Responsibility |
 | --- | --- |
-| `src-tauri/src/` | Rust back end: SQLite persistence, graph engine, `rstar` spatial math, context compiler, stream parser, and Tauri commands |
-| `src-tauri/tests/` | Rust integration and benchmark test suites (`slice1_suite.rs`) |
+| `src-tauri/src/` | Rust back end: SQLite persistence, graph engine, `rstar` spatial math, context compiler, AI streaming runtime (`ai/`), settings (`settings.rs`), and Tauri commands (`ipc/`) |
+| `src-tauri/tests/` | Rust integration and benchmark test suites (`slice1_suite.rs`, `slice4_suite.rs`) |
 | `src/canvas/` | Camera math, `requestAnimationFrame` controller, Canvas2D renderer, pointer gestures, and `rbush` spatial index |
 | `src/cards/` | `CardLayer`, `NodeCard`, `LiveEditorOverlay` (CodeMirror 6), and sanitized Markdown/KaTeX cache |
 | `src/input/` | Modal keyboard router (`keymap.ts`) and deterministic topological navigation helpers (`topologyNav.ts`) |
-| `src/ipc/` | Typed Tauri IPC client wrappers and shared TypeScript DTO definitions |
-| `src/overlays/` | `XrayHud`, `CommandPalette`, and `ToastStack` ephemeral UI overlays |
-| `src/store/` | Non-reactive graph maps, Preact signals for selection and UI state, 100-entry undo/redo history, and local fallback mutations |
+| `src/ipc/` | Typed Tauri IPC client wrappers, channel listeners, and shared TypeScript DTO definitions |
+| `src/overlays/` | `XrayHud`, `CommandPalette`, `CustomPromptBar`, `SettingsModal`, and `ToastStack` overlays |
+| `src/store/` | Non-reactive graph maps, Preact signals for selection and UI state, 100-entry undo/redo history, AI stream coordinator (`aiRunner.ts`), and local fallback mutations |
 | `src/styles/` | Dark and light CSS custom properties and component layout styles (`theme.css`) |
 | `docs/features/` | Feature-level technical documentation for implemented subsystems |
 
@@ -106,3 +107,4 @@ Read the following guides for implementation details on each subsystem:
 - [Graph engine and context compiler](docs/features/graph-engine-and-context-compiler.md): Node and edge semantics, `rstar` R-tree layout and `tidy_subtree`, deterministic `compile_context`, structured FTS5 search, and the fence-aware stream parser.
 - [Canvas rendering and editor](docs/features/canvas-rendering-and-editor.md): Three-layer rendering architecture, `requestAnimationFrame` camera loop, `0.45x` Bird's-Eye LOD cutoff, `rbush` culling, pointer interactions, and the single CodeMirror 6 editor overlay.
 - [Keyboard navigation and overlays](docs/features/keyboard-navigation-and-overlays.md): Modal keyboard router, topological navigation, `Hold V` X-Ray HUD, 100-entry undo/redo history, Command Palette, and toast stack.
+- [AI streaming and settings](docs/features/ai-streaming-and-settings.md): OS keychain credentials, multi-tier settings, multi-provider streaming adapters, AI lens execution, and debounced background summarization.

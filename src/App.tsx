@@ -6,11 +6,20 @@ import { getEffectiveNodeHeight } from "./canvas/spatialIndex";
 import { CardLayer } from "./cards/CardLayer";
 import { LiveEditorOverlay } from "./cards/LiveEditorOverlay";
 import { attachKeymap } from "./input/keymap";
-import { isTauriRuntime, openWorkspace, saveCamera } from "./ipc/client";
+import {
+  getSettings,
+  isTauriRuntime,
+  listenSummaryUpdated,
+  openWorkspace,
+  saveCamera,
+} from "./ipc/client";
 import type { EdgeDto, EdgeType, GraphOp } from "./ipc/types";
 import { CommandPalette } from "./overlays/CommandPalette";
+import { CustomPromptBar } from "./overlays/CustomPromptBar";
+import { SettingsModal } from "./overlays/SettingsModal";
 import { notifyIpcError, ToastStack } from "./overlays/ToastStack";
 import { XrayHud } from "./overlays/XrayHud";
+import { applySummaryUpdate, triageBanner, triggerLens } from "./store/aiRunner";
 import {
   cameraControllerRef,
   dragOffsets,
@@ -21,6 +30,7 @@ import {
   mutateGraphUndoable,
   nodesMap,
   theme,
+  tokenBudget,
   unresolvedLoopholes,
   viewportSpatialIndex,
   visibleNodeIds,
@@ -46,6 +56,7 @@ export function App() {
   const birdsEye = isBirdsEye.value;
   const interacting = isInteracting.value;
   const currentModal = modalState.value;
+  const activeTriage = triageBanner.value;
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme.value);
@@ -119,7 +130,27 @@ export function App() {
     const detachKeymap = attachKeymap();
 
     let active = true;
+    let unlistenSummary: (() => void) | null = null;
+
     if (isTauriRuntime()) {
+      void getSettings()
+        .then((s) => {
+          if (!active) return;
+          theme.value = s.theme;
+          tokenBudget.value = s.default_token_budget;
+        })
+        .catch(() => {
+          // Non-fatal: defaults remain active
+        });
+
+      void listenSummaryUpdated(applySummaryUpdate).then((unlisten) => {
+        if (active) {
+          unlistenSummary = unlisten;
+        } else {
+          unlisten();
+        }
+      });
+
       openWorkspace("")
         .then((ws) => {
           if (!active) {
@@ -139,6 +170,7 @@ export function App() {
 
     return () => {
       active = false;
+      unlistenSummary?.();
       detachKeymap();
       detachPointer();
       resizeObs?.disconnect();
@@ -231,7 +263,7 @@ export function App() {
             type="button"
             class="multi-select-pill__btn"
             onClick={() => {
-              modalState.value = "chord_a";
+              void triggerLens("synthesize");
             }}
           >
             Synthesize (A S)
@@ -281,8 +313,16 @@ export function App() {
         </div>
       )}
 
+      {currentModal === "navigate" && activeTriage !== null && (
+        <div class="triage-hint-pill" role="status">
+          {activeTriage}
+        </div>
+      )}
+
       <XrayHud />
       <CommandPalette />
+      <CustomPromptBar />
+      <SettingsModal />
       <ToastStack />
     </main>
   );

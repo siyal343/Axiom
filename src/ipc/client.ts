@@ -1,5 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AppSettingsDto,
   ApplyResult,
   CameraState,
   CompiledXray,
@@ -7,10 +9,15 @@ import type {
   EdgeType,
   GraphOp,
   IpcError,
+  LensKind,
+  LensStreamEvent,
   NodeDto,
   NodePositionUpdate,
   NodeType,
+  SaveSettingsInput,
   SearchHit,
+  SummaryUpdatedEvent,
+  TestConnectionResult,
   WorkspaceSnapshot,
 } from "./types";
 
@@ -108,4 +115,46 @@ export async function importJson(
   destSqlitePath: string,
 ): Promise<WorkspaceSnapshot> {
   return invoke<WorkspaceSnapshot>("import_json", { srcPath, destSqlitePath });
+}
+
+export async function runLens(
+  lens: LensKind,
+  focusIds: string[],
+  onEvent: (event: LensStreamEvent) => void,
+  customPrompt?: string,
+): Promise<string> {
+  const channel = new Channel<LensStreamEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("run_lens", {
+    lens,
+    focusIds,
+    customPrompt,
+    onEvent: channel,
+  });
+}
+
+export async function cancelRun(runId: string): Promise<void> {
+  return invoke<void>("cancel_run", { runId });
+}
+
+export async function getSettings(): Promise<AppSettingsDto> {
+  return invoke<AppSettingsDto>("get_settings", {});
+}
+
+export async function saveSettings(input: SaveSettingsInput): Promise<AppSettingsDto> {
+  return invoke<AppSettingsDto>("save_settings", { input });
+}
+
+export async function testProviderConnection(
+  tier: "reasoning" | "utility",
+): Promise<TestConnectionResult> {
+  return invoke<TestConnectionResult>("test_provider_connection", { tier });
+}
+
+export async function listenSummaryUpdated(
+  handler: (event: SummaryUpdatedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SummaryUpdatedEvent>("axiom://summary-updated", (evt) => {
+    handler(evt.payload);
+  });
 }

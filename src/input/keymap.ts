@@ -21,6 +21,14 @@ import type {
 } from "../ipc/types";
 import { notifyIpcError, pushToast, type ToastVariant } from "../overlays/ToastStack";
 import {
+  cancelActiveRun,
+  closeCustomPromptBar,
+  closeSettingsModal,
+  dismissTriageBanner,
+  openSettingsModal,
+  triggerLens,
+} from "../store/aiRunner";
+import {
   applyTidyPositions,
   cameraControllerRef,
   edgesMap,
@@ -87,6 +95,7 @@ export interface KeymapDeps {
   tidySubtree: (rootId: string) => Promise<NodePositionUpdate[]>;
   applyTidy?: (prevMoves: NodePositionUpdate[], nextMoves: NodePositionUpdate[]) => void;
   openCommandPalette: () => void;
+  openSettings?: () => void;
   closeOverlays: () => void;
   setConnectSourceId?: (id: string | null) => void;
   openEdgePopoverFor: (sourceId: string, targetId: string) => void;
@@ -349,7 +358,11 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
     }
     if (mod && e.key === ",") {
       e.preventDefault();
-      deps.pushToast("Settings modal arrives in Slice 4", "info");
+      if (deps.openSettings) {
+        deps.openSettings();
+      } else {
+        deps.pushToast("Settings modal unavailable", "info");
+      }
       return;
     }
     if (mod && e.shiftKey && lower === "z") {
@@ -735,7 +748,7 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
 
 export function attachKeymap(
   onTriggerLens: (lens: LensKind) => void = (lens) => {
-    pushToast(`AI Lens "${lens}" runtime arrives in Slice 4`, "info");
+    void triggerLens(lens);
   },
 ): () => void {
   const controller = createKeymapHandler({
@@ -788,13 +801,18 @@ export function attachKeymap(
       syncHistorySignals();
     },
     openCommandPalette,
+    openSettings: openSettingsModal,
     closeOverlays: () => {
       edgePopover.value = null;
       closeCommandPalette();
+      closeCustomPromptBar();
+      closeSettingsModal();
+      dismissTriageBanner();
       if (modalState.value === "chord_a" || modalState.value === "connect_edge") {
         modalState.value = "navigate";
       }
     },
+    onCancelActiveRun: cancelActiveRun,
     setConnectSourceId: (id) => {
       connectSourceId.value = id;
     },
