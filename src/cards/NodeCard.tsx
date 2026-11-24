@@ -1,0 +1,315 @@
+import { useEffect, useRef, useState } from "preact/hooks";
+import type { NodeDto } from "../ipc/types";
+import {
+  cardDomRefs,
+  dragOffsets,
+  mutateGraph,
+  queueNodeResize,
+  spawnChild,
+  unresolvedLoopholes,
+} from "../store/graphStore";
+import {
+  enterEditMode,
+  focusId,
+  hoveredId,
+  isInteracting,
+  lockedShakeId,
+  modalState,
+  selectedIds,
+  xrayState,
+} from "../store/selection";
+import { getRenderedMarkdown } from "./markdownCache";
+
+interface NodeCardProps {
+  node: NodeDto;
+}
+
+export function NodeCard({ node }: NodeCardProps) {
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  const isFocused = focusId.value === node.id;
+  const isSelected = selectedIds.value.has(node.id);
+  const isShaking = lockedShakeId.value === node.id;
+  const isHovered = hoveredId.value === node.id;
+  const interacting = isInteracting.value;
+  const xray = xrayState.value;
+  const loopholeInfo = unresolvedLoopholes.value.get(node.id);
+
+  const xrayMode = xray ? xray.node_modes[node.id] : undefined;
+  const isXrayDimmed = xray !== null && xrayMode === undefined;
+  const showHoverPill =
+    !interacting &&
+    modalState.value === "navigate" &&
+    selectedIds.value.size < 2 &&
+    (isHovered || isFocused);
+
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) {
+      return;
+    }
+    cardDomRefs.set(node.id, el);
+
+    if (typeof ResizeObserver === "undefined") {
+      return () => {
+        cardDomRefs.delete(node.id);
+      };
+    }
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const observer = new ResizeObserver(() => {
+      if (node.layout.collapsed) {
+        return;
+      }
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+      timer = setTimeout(() => {
+        const currentEl = cardRef.current;
+        if (!currentEl) {
+          return;
+        }
+        const h = currentEl.offsetHeight;
+        const w = currentEl.offsetWidth || node.layout.width;
+        if (h > 0) {
+          queueNodeResize(node.id, w, h);
+        }
+      }, 90);
+    });
+    observer.observe(el);
+
+    return () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+      observer.disconnect();
+      cardDomRefs.delete(node.id);
+    };
+  }, [node.id, node.layout.collapsed, node.layout.width]);
+
+  useEffect(() => {
+    if (!showHoverPill && moreOpen) {
+      setMoreOpen(false);
+    }
+  }, [showHoverPill, moreOpen]);
+
+  const offset = dragOffsets.get(node.id);
+  const tx = node.layout.x + (offset?.x ?? 0);
+  const ty = node.layout.y + (offset?.y ?? 0);
+
+  const classes = [
+    "node-card",
+    `node-card--${node.type}`,
+    `node-card--status-${node.status}`,
+  ];
+  if (node.type === "loophole" && node.metadata.severity) {
+    classes.push(`node-card--severity-${node.metadata.severity}`);
+  }
+  if (node.context_controls.pin_global) classes.push("node-card--pinned");
+  if (node.context_controls.exclude_from_ai) classes.push("node-card--excluded");
+  if (node.layout.collapsed) classes.push("node-card--collapsed");
+  if (isFocused) classes.push("node-card--focused");
+  if (isSelected) classes.push("node-card--selected");
+  if (isShaking) classes.push("node-card--shaking");
+  if (isXrayDimmed) classes.push("node-card--xray-dim");
+
+  const renderedHtml = node.layout.collapsed
+    ? ""
+    : getRenderedMarkdown(node.content_hash, node.content);
+
+  const handleSpawnChild = (e: MouseEvent): void => {
+    e.stopPropagation();
+    const edgeType = node.type === "loophole" ? "resolves" : "derives";
+    void spawnChild(node.id, edgeType, "core").then(({ node: created }) => {
+      enterEditMode(created);
+    });
+  };
+
+  const handleOpenLens = (e: MouseEvent): void => {
+    e.stopPropagation();
+    focusId.value = node.id;
+    modalState.value = "chord_a";
+  };
+
+  const handleTogglePin = (e: MouseEvent): void => {
+    e.stopPropagation();
+    void mutateGraph([
+      {
+        op: "update_node_meta",
+        id: node.id,
+        pin_global: !node.context_controls.pin_global,
+      },
+    ]);
+  };
+
+  const handleToggleCollapse = (e: MouseEvent): void => {
+    e.stopPropagation();
+    void mutateGraph([
+      {
+        op: "update_node_meta",
+        id: node.id,
+        collapsed: !node.layout.collapsed,
+      },
+    ]);
+  };
+
+  return (
+    <article
+      ref={cardRef}
+      class={classes.join(" ")}
+      data-node-id={node.id}
+      style={{
+        transform: `translate3d(${tx}px, ${ty}px, 0)`,
+        width: `${node.layout.width}px`,
+      }}
+      onPointerEnter={() => {
+        hoveredId.value = node.id;
+      }}
+      onPointerLeave={() => {
+        if (hoveredId.value === node.id) {
+          hoveredId.value = null;
+        }
+      }}
+    >
+      {showHoverPill && (
+        <div
+          class="hover-pill"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button type="button" class="hover-pill__btn" onClick={handleSpawnChild}>
+            + Child (Tab)
+          </button>
+          <button type="button" class="hover-pill__btn" onClick={handleOpenLens}>
+            AI Lens (A)
+          </button>
+          <button type="button" class="hover-pill__btn" onClick={handleTogglePin}>
+            Pin (P)
+          </button>
+          <button type="button" class="hover-pill__btn" onClick={handleToggleCollapse}>
+            Collapse (C)
+          </button>
+          <button
+            type="button"
+            class="hover-pill__btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMoreOpen((v) => !v);
+            }}
+          >
+            More (...)
+          </button>
+          {moreOpen && (
+            <div class="hover-pill__menu">
+              <button
+                type="button"
+                class="hover-pill__menu-item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMoreOpen(false);
+                  void mutateGraph([
+                    {
+                      op: "update_node_meta",
+                      id: node.id,
+                      exclude_from_ai: !node.context_controls.exclude_from_ai,
+                    },
+                  ]);
+                }}
+              >
+                {node.context_controls.exclude_from_ai ? "Include in AI" : "Exclude from AI"}
+              </button>
+              <button
+                type="button"
+                class="hover-pill__menu-item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMoreOpen(false);
+                  void mutateGraph([
+                    {
+                      op: "update_node_meta",
+                      id: node.id,
+                      status: node.status === "locked" ? "active" : "locked",
+                    },
+                  ]);
+                }}
+              >
+                {node.status === "locked" ? "Unlock" : "Lock"}
+              </button>
+              {node.type === "loophole" && (
+                <button
+                  type="button"
+                  class="hover-pill__menu-item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMoreOpen(false);
+                    void mutateGraph([
+                      {
+                        op: "update_node_meta",
+                        id: node.id,
+                        status: node.status === "resolved" ? "active" : "resolved",
+                      },
+                    ]);
+                  }}
+                >
+                  {node.status === "resolved" ? "Reopen Loophole" : "Mark Resolved"}
+                </button>
+              )}
+              <button
+                type="button"
+                class="hover-pill__menu-item hover-pill__menu-item--danger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMoreOpen(false);
+                  void mutateGraph([{ op: "delete_nodes", ids: [node.id] }]);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <header class="node-card__header">
+        <span class="node-card__title">{node.title || "Untitled"}</span>
+        <div class="node-card__badges">
+          {node.type === "loophole" && node.metadata.severity && (
+            <span class={`badge badge--sev-${node.metadata.severity}`}>
+              {node.metadata.severity.toUpperCase()}
+            </span>
+          )}
+          {node.context_controls.pin_global && <span class="badge badge--pin">PIN</span>}
+          {node.context_controls.exclude_from_ai && (
+            <span class="badge badge--no-ai">NO AI</span>
+          )}
+          {node.status === "locked" && (
+            <span class="badge badge--locked" title="Locked">
+              LOCKED
+            </span>
+          )}
+          {loopholeInfo && loopholeInfo.count > 0 && (
+            <span
+              class={`badge badge--loophole-count badge--sev-${loopholeInfo.maxSeverity ?? "medium"}`}
+            >
+              ⚠ {loopholeInfo.count}
+            </span>
+          )}
+        </div>
+      </header>
+
+      {!node.layout.collapsed && (
+        <div
+          class="node-card__body markdown-body"
+          // Sanitized exclusively by DOMPurify in markdownCache.ts
+          dangerouslySetInnerHTML={{ __html: renderedHtml }}
+        />
+      )}
+
+      {node.status === "draft" && !node.layout.collapsed && (
+        <footer class="node-card__footer">
+          <span class="node-card__streaming-hint">Esc to stop</span>
+        </footer>
+      )}
+    </article>
+  );
+}
