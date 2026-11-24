@@ -1,7 +1,8 @@
-mod db;
-mod error;
-mod graph;
-mod ipc;
+pub mod ai;
+pub mod db;
+pub mod error;
+pub mod graph;
+pub mod ipc;
 
 use ipc::AppState;
 
@@ -18,7 +19,17 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ipc::commands::open_workspace]);
+        .invoke_handler(tauri::generate_handler![
+            ipc::commands::open_workspace,
+            ipc::commands::apply_ops,
+            ipc::commands::spawn_connected_node,
+            ipc::commands::compile_xray,
+            ipc::commands::search_nodes,
+            ipc::commands::tidy_subtree,
+            ipc::commands::save_camera,
+            ipc::commands::export_json,
+            ipc::commands::import_json,
+        ]);
 
     if let Err(err) = builder.run(tauri::generate_context!()) {
         eprintln!("Failed to run Axiom application: {err}");

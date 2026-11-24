@@ -1,4 +1,6 @@
+pub mod json_io;
 pub mod migrations;
+pub mod queries;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -37,7 +39,7 @@ fn map_from_sql_err(err: IpcError, col_idx: usize) -> rusqlite::Error {
     )
 }
 
-fn row_to_node_dto(row: &Row<'_>) -> rusqlite::Result<NodeDto> {
+pub(crate) fn row_to_node_dto(row: &Row<'_>) -> rusqlite::Result<NodeDto> {
     let type_str: String = row.get(1)?;
     let status_str: String = row.get(2)?;
     let severity_opt: Option<String> = row.get(8)?;
@@ -90,7 +92,7 @@ fn row_to_node_dto(row: &Row<'_>) -> rusqlite::Result<NodeDto> {
     })
 }
 
-fn row_to_edge_dto(row: &Row<'_>) -> rusqlite::Result<EdgeDto> {
+pub(crate) fn row_to_edge_dto(row: &Row<'_>) -> rusqlite::Result<EdgeDto> {
     let type_str: String = row.get(3)?;
     let weight_str: String = row.get(4)?;
     let edge_type = EdgeType::from_db_str(&type_str).map_err(|e| map_from_sql_err(e, 3))?;

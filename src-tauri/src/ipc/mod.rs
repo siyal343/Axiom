@@ -13,6 +13,7 @@ use crate::graph::GraphEngine;
 pub struct ActiveWorkspace {
     pub path: String,
     pub engine: GraphEngine,
+    pub token_budget: u32,
 }
 
 #[allow(dead_code)]

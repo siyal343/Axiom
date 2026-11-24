@@ -387,6 +387,12 @@ pub struct ApplyResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnConnectedResult {
+    pub node: NodeDto,
+    pub edge: EdgeDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct CompiledXray {
     pub total_tokens: u32,
