@@ -33,6 +33,7 @@ import {
   modalState,
   selectedIds,
   selectSingle,
+  shortcutsHelpOpen,
 } from "./selection";
 
 export const activeRunId = signal<string | null>(null);
@@ -269,6 +270,7 @@ export function closeCustomPromptBar(): void {
 export function openSettingsModal(): void {
   edgePopover.value = null;
   hoveredId.value = null;
+  shortcutsHelpOpen.value = false;
   commandPaletteOpen.value = false;
   customPromptOpen.value = false;
   settingsModalOpen.value = true;

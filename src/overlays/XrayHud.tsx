@@ -1,3 +1,4 @@
+import { isTauriRuntime } from "../ipc/client";
 import { xrayState } from "../store/selection";
 
 const LEGEND_ITEMS: Array<{ key: string; label: string; colorVar: string }> = [
@@ -17,7 +18,9 @@ export function XrayHud() {
 
   const budget = Math.max(1, xray.budget_tokens);
   const ratio = xray.total_tokens / budget;
+  const clampedScale = Math.min(1, Math.max(0, ratio));
   const pct = Math.min(100, Math.round(ratio * 100));
+  const desktopOnly = !isTauriRuntime();
   const fillClass =
     ratio > 1
       ? "xray-hud__fill xray-hud__fill--over"
@@ -31,10 +34,11 @@ export function XrayHud() {
         <span class="xray-hud__title">Context X-Ray</span>
         <span class="xray-hud__tokens">
           {xray.total_tokens.toLocaleString()} / {xray.budget_tokens.toLocaleString()} tokens ({pct}%)
+          {desktopOnly && <span class="xray-hud__runtime-note"> (desktop only)</span>}
         </span>
       </div>
       <div class="xray-hud__bar">
-        <div class={fillClass} style={{ width: `${pct}%` }} />
+        <div class={fillClass} style={{ transform: `scaleX(${clampedScale})` }} />
       </div>
       <div class="xray-hud__legend">
         {LEGEND_ITEMS.map((item) => (

@@ -3,7 +3,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { worldToScreen } from "../canvas/camera";
+import { type CameraTransform, worldToScreen } from "../canvas/camera";
 import { cameraControllerRef, mutateGraphUndoable, nodesMap } from "../store/graphStore";
 import { buildUpdateTextWithInverse } from "../store/history";
 import { exitEditMode, focusId, modalState } from "../store/selection";
@@ -34,6 +34,35 @@ const monochromeEditorTheme = EditorView.theme({
   },
 });
 
+interface OverlayRect {
+  left: number;
+  top: number;
+  width: number;
+  minHeight: number;
+}
+
+function computeOverlayRect(
+  worldX: number,
+  worldY: number,
+  worldW: number,
+  worldH: number,
+  cam: CameraTransform,
+): OverlayRect {
+  const screenPos = worldToScreen(worldX, worldY, cam);
+  const width = Math.max(320, Math.min(560, Math.round(worldW * Math.max(0.85, cam.zoom))));
+  const minHeight = Math.max(180, Math.round(worldH * Math.max(0.85, cam.zoom)));
+  const maxLeft =
+    typeof window !== "undefined" ? Math.max(16, window.innerWidth - width - 16) : 900;
+  const maxTop =
+    typeof window !== "undefined" ? Math.max(16, window.innerHeight - minHeight - 16) : 600;
+  return {
+    left: Math.max(16, Math.min(maxLeft, screenPos.x)),
+    top: Math.max(16, Math.min(maxTop, screenPos.y)),
+    width,
+    minHeight,
+  };
+}
+
 export function LiveEditorOverlay() {
   const mode = modalState.value;
   const activeId = focusId.value;
@@ -43,7 +72,18 @@ export function LiveEditorOverlay() {
     return null;
   }
 
-  return <LiveEditorInstance key={node.id} nodeId={node.id} initialTitle={node.title} initialContent={node.content} worldX={node.layout.x} worldY={node.layout.y} worldW={node.layout.width} worldH={node.layout.height} />;
+  return (
+    <LiveEditorInstance
+      key={node.id}
+      nodeId={node.id}
+      initialTitle={node.title}
+      initialContent={node.content}
+      worldX={node.layout.x}
+      worldY={node.layout.y}
+      worldW={node.layout.width}
+      worldH={node.layout.height}
+    />
+  );
 }
 
 interface LiveEditorInstanceProps {
@@ -66,6 +106,7 @@ function LiveEditorInstance({
   worldH,
 }: LiveEditorInstanceProps) {
   const [title, setTitle] = useState(initialTitle);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLInputElement | null>(null);
   const cmHostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -121,7 +162,28 @@ function LiveEditorInstance({
       parent: host,
     });
     viewRef.current = view;
-    view.focus();
+
+    const focusInitialTarget = (): void => {
+      if (
+        initialContent.trim() === "" &&
+        (initialTitle === "New Concept" || initialTitle === "New Node")
+      ) {
+        titleRef.current?.focus();
+        titleRef.current?.select();
+      } else {
+        view.focus();
+      }
+    };
+
+    let focusRafId: number | null = null;
+    if (typeof requestAnimationFrame === "function") {
+      focusRafId = requestAnimationFrame(() => {
+        focusRafId = null;
+        focusInitialTarget();
+      });
+    } else {
+      focusInitialTarget();
+    }
 
     const onWindowKeyDown = (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
@@ -138,11 +200,32 @@ function LiveEditorInstance({
     window.addEventListener("keydown", onWindowKeyDown, true);
 
     return () => {
+      if (focusRafId !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(focusRafId);
+      }
       window.removeEventListener("keydown", onWindowKeyDown, true);
       view.destroy();
       viewRef.current = null;
     };
   }, [nodeId]);
+
+  useEffect(() => {
+    const ctrl = cameraControllerRef.current;
+    if (!ctrl?.subscribeFrame) {
+      return;
+    }
+    return ctrl.subscribeFrame((nextCam) => {
+      const el = overlayRef.current;
+      if (!el) {
+        return;
+      }
+      const rect = computeOverlayRect(worldX, worldY, worldW, worldH, nextCam);
+      el.style.left = `${rect.left}px`;
+      el.style.top = `${rect.top}px`;
+      el.style.width = `${rect.width}px`;
+      el.style.minHeight = `${rect.minHeight}px`;
+    });
+  }, [nodeId, worldX, worldY, worldW, worldH]);
 
   const cam = cameraControllerRef.current?.getCamera() ?? {
     x: 0,
@@ -150,22 +233,19 @@ function LiveEditorInstance({
     zoom: 1,
     last_focus_id: null,
   };
-  const screenPos = worldToScreen(worldX, worldY, cam);
-  const widthPx = Math.max(320, Math.min(560, Math.round(worldW * Math.max(0.85, cam.zoom))));
-  const minHeightPx = Math.max(180, Math.round(worldH * Math.max(0.85, cam.zoom)));
-  const maxLeft = typeof window !== "undefined" ? Math.max(16, window.innerWidth - widthPx - 16) : 900;
-  const maxTop = typeof window !== "undefined" ? Math.max(16, window.innerHeight - minHeightPx - 16) : 600;
-  const left = Math.max(16, Math.min(maxLeft, screenPos.x));
-  const top = Math.max(16, Math.min(maxTop, screenPos.y));
+  const initialRect = computeOverlayRect(worldX, worldY, worldW, worldH, cam);
 
   return (
     <div
+      ref={overlayRef}
       class="live-editor-overlay"
+      role="dialog"
+      aria-label="Edit node"
       style={{
-        left: `${left}px`,
-        top: `${top}px`,
-        width: `${widthPx}px`,
-        minHeight: `${minHeightPx}px`,
+        left: `${initialRect.left}px`,
+        top: `${initialRect.top}px`,
+        width: `${initialRect.width}px`,
+        minHeight: `${initialRect.minHeight}px`,
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -173,6 +253,7 @@ function LiveEditorInstance({
         ref={titleRef}
         type="text"
         class="live-editor-overlay__title"
+        aria-label="Node title"
         value={title}
         placeholder="Node title..."
         onInput={(e) => setTitle(e.currentTarget.value)}

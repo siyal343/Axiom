@@ -35,6 +35,9 @@ export interface CameraControllerHandle {
   getCamera: () => CameraState;
   getViewportSize: () => { width: number; height: number };
   animateTo: (targetCam: CameraTransform, durationMs?: number) => void;
+  subscribeFrame?: (listener: (cam: CameraTransform) => void) => () => void;
+  zoomByStep?: (factor: number) => void;
+  resetZoom?: () => void;
 }
 
 // Non-reactive stores kept OUTSIDE signals so rAF rendering & drags never trigger Preact re-renders.
@@ -308,6 +311,7 @@ function syncStoreAfterIpc(ops: GraphOp[], result: ApplyResult): void {
 }
 
 export function loadSnapshot(snapshot: WorkspaceSnapshot): void {
+  cancelTidyAnimation();
   nodesMap.clear();
   edgesMap.clear();
   cardDomRefs.clear();
@@ -343,6 +347,7 @@ export async function mutateGraph(ops: GraphOp[]): Promise<ApplyResult> {
   if (ops.length === 0) {
     return { updated_nodes: [], deleted_node_ids: [], deleted_edge_ids: [] };
   }
+  cancelTidyAnimation();
 
   let result: ApplyResult;
   if (isTauriRuntime()) {
@@ -400,13 +405,40 @@ export async function performRedo(): Promise<ApplyResult | null> {
   return mutateGraph(entry.forward);
 }
 
+let tidyAnimRafId: number | null = null;
+let tidyAnimatedIds: string[] = [];
+
+function cancelTidyAnimation(): void {
+  if (tidyAnimRafId !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(tidyAnimRafId);
+  }
+  tidyAnimRafId = null;
+  for (const id of tidyAnimatedIds) {
+    dragOffsets.delete(id);
+    const node = nodesMap.get(id);
+    const el = cardDomRefs.get(id);
+    if (node && el) {
+      el.style.transform = `translate3d(${node.layout.x}px, ${node.layout.y}px, 0)`;
+    }
+  }
+  tidyAnimatedIds = [];
+}
+
 export function applyTidyPositions(updates: NodePositionUpdate[]): void {
   if (updates.length === 0) {
     return;
   }
+  cancelTidyAnimation();
+
+  const deltas: Array<{ id: string; finalX: number; finalY: number; dx: number; dy: number }> = [];
   for (const u of updates) {
     const existing = nodesMap.get(u.id);
     if (existing) {
+      const dx = existing.layout.x - u.x;
+      const dy = existing.layout.y - u.y;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+        deltas.push({ id: u.id, finalX: u.x, finalY: u.y, dx, dy });
+      }
       const moved: NodeDto = {
         ...existing,
         layout: { ...existing.layout, x: u.x, y: u.y },
@@ -415,6 +447,64 @@ export function applyTidyPositions(updates: NodePositionUpdate[]): void {
       viewportSpatialIndex.upsert(moved);
     }
   }
+
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  if (deltas.length > 0 && !prefersReducedMotion && typeof requestAnimationFrame === "function") {
+    tidyAnimatedIds = deltas.map((d) => d.id);
+    for (const d of deltas) {
+      dragOffsets.set(d.id, { x: d.dx, y: d.dy });
+      const el = cardDomRefs.get(d.id);
+      if (el) {
+        el.style.transform = `translate3d(${d.finalX + d.dx}px, ${d.finalY + d.dy}px, 0)`;
+      }
+    }
+    graphVersion.value += 1;
+    cameraControllerRef.current?.refreshCull();
+    cameraControllerRef.current?.markDirty();
+
+    const durationMs = 180;
+    const startTime = performance.now();
+    const step = (now: number): void => {
+      const t = Math.min(1, (now - startTime) / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const remaining = 1 - eased;
+
+      for (const d of deltas) {
+        if (t < 1) {
+          const ox = d.dx * remaining;
+          const oy = d.dy * remaining;
+          dragOffsets.set(d.id, { x: ox, y: oy });
+          const el = cardDomRefs.get(d.id);
+          if (el) {
+            el.style.transform = `translate3d(${d.finalX + ox}px, ${d.finalY + oy}px, 0)`;
+          }
+        } else {
+          dragOffsets.delete(d.id);
+          const el = cardDomRefs.get(d.id);
+          if (el) {
+            el.style.transform = `translate3d(${d.finalX}px, ${d.finalY}px, 0)`;
+          }
+        }
+      }
+
+      cameraControllerRef.current?.markDirty();
+
+      if (t < 1) {
+        tidyAnimRafId = requestAnimationFrame(step);
+      } else {
+        tidyAnimRafId = null;
+        tidyAnimatedIds = [];
+      }
+    };
+
+    tidyAnimRafId = requestAnimationFrame(step);
+    return;
+  }
+
   graphVersion.value += 1;
   cameraControllerRef.current?.refreshCull();
   cameraControllerRef.current?.markDirty();
@@ -437,7 +527,35 @@ export async function spawnChild(
     const now = Date.now();
     const id = `node_local_${now}_${Math.random().toString(36).slice(2, 7)}`;
     const px = (parentBefore?.layout.x ?? 0) + (parentBefore?.layout.width ?? 320) + 100;
-    const py = parentBefore?.layout.y ?? 0;
+    let py = parentBefore?.layout.y ?? 0;
+    const nodeW = 320;
+    const nodeH = 180;
+    const gap = 20;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const candidates = viewportSpatialIndex.queryViewport(
+        { minX: px, minY: py, maxX: px + nodeW, maxY: py + nodeH },
+        24,
+      );
+      let overlaps = false;
+      for (const existingId of candidates) {
+        const existing = nodesMap.get(existingId);
+        if (!existing) continue;
+        const eh = existing.layout.collapsed ? 44 : existing.layout.height;
+        if (
+          px < existing.layout.x + existing.layout.width + gap &&
+          px + nodeW + gap > existing.layout.x &&
+          py < existing.layout.y + eh + gap &&
+          py + nodeH + gap > existing.layout.y
+        ) {
+          overlaps = true;
+          break;
+        }
+      }
+      if (!overlaps) {
+        break;
+      }
+      py += 40;
+    }
     const nodeTitle = title && title.trim().length > 0 ? title : "New Node";
     const node: NodeDto = {
       id,

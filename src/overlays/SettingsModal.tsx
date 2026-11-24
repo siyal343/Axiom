@@ -64,6 +64,11 @@ function TierEditor({
 }: TierEditorProps) {
   const isClearing = keyInput === "";
   const showSavedBadge = config.has_api_key && !isClearing;
+  const [tempText, setTempText] = useState<string>(() => String(config.temperature));
+
+  useEffect(() => {
+    setTempText(String(config.temperature));
+  }, [config.temperature]);
 
   return (
     <section class="settings-section">
@@ -157,13 +162,32 @@ function TierEditor({
             min="0"
             max="2"
             class="settings-input"
-            value={config.temperature}
-            onInput={(e) =>
-              onChangeConfig({
-                ...config,
-                temperature: Number.parseFloat(e.currentTarget.value) || 0,
-              })
-            }
+            value={tempText}
+            onInput={(e) => {
+              const raw = e.currentTarget.value;
+              setTempText(raw);
+              const parsed = Number.parseFloat(raw);
+              if (Number.isFinite(parsed)) {
+                const clamped = Math.min(2, Math.max(0, parsed));
+                onChangeConfig({
+                  ...config,
+                  temperature: clamped,
+                });
+              }
+            }}
+            onBlur={() => {
+              const parsed = Number.parseFloat(tempText);
+              const clamped = Number.isFinite(parsed)
+                ? Math.min(2, Math.max(0, parsed))
+                : config.temperature;
+              setTempText(String(clamped));
+              if (clamped !== config.temperature) {
+                onChangeConfig({
+                  ...config,
+                  temperature: clamped,
+                });
+              }
+            }}
           />
         </label>
 
@@ -335,6 +359,7 @@ export function SettingsModal() {
       <div
         class="settings-modal"
         role="dialog"
+        aria-modal="true"
         aria-label="Axiom Settings"
         onKeyDown={(e) => {
           if (e.key === "Escape") {
@@ -356,6 +381,11 @@ export function SettingsModal() {
         </header>
 
         <div class="settings-modal__body">
+          {!isTauriRuntime() && (
+            <p class="settings-preview-banner" role="note">
+              Browser preview mode: API keys and keychain tests require the Axiom desktop app.
+            </p>
+          )}
           <TierEditor
             title="Reasoning Tier (AI Lenses)"
             tier="reasoning"

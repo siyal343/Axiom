@@ -36,10 +36,11 @@ export function pushToast(
   const next: ToastItem = { id, message, variant, action };
   toastsSignal.value = [...toastsSignal.value.slice(-3), next];
 
+  const timeoutMs = variant === "error" || action !== undefined ? 5000 : 3200;
   const timer = setTimeout(() => {
     toastTimers.delete(id);
     dismissToast(id);
-  }, 2800);
+  }, timeoutMs);
   toastTimers.set(id, timer);
   return id;
 }

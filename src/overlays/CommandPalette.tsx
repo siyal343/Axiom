@@ -36,6 +36,14 @@ const SEVERITY_RANK: Record<Severity, number> = {
   low: 1,
 };
 
+const QUICK_ACTION_IDS: ReadonlySet<string> = new Set([
+  "settings",
+  "toggle-theme",
+  "new-workspace",
+  "open-workspace",
+  "toggle-perf-hud",
+]);
+
 interface PaletteCommand {
   id: string;
   label: string;
@@ -272,7 +280,15 @@ export function CommandPalette() {
   const isCommandMode = query.trimStart().startsWith(">");
   const allCommands = buildPaletteCommands();
   const visibleCommands = isCommandMode ? filterPaletteCommands(allCommands, query) : [];
-  const itemCount = isCommandMode ? visibleCommands.length : hits.length;
+  const showQuickActions = !isCommandMode && query.trim() === "" && hits.length === 0;
+  const quickActions = showQuickActions
+    ? allCommands.filter((cmd) => QUICK_ACTION_IDS.has(cmd.id))
+    : [];
+  const itemCount = isCommandMode
+    ? visibleCommands.length
+    : showQuickActions
+      ? quickActions.length
+      : hits.length;
 
   useEffect(() => {
     if (!isOpen) {
@@ -392,6 +408,7 @@ export function CommandPalette() {
       <div
         class="command-palette"
         role="dialog"
+        aria-modal="true"
         aria-label="Command Palette"
         onKeyDown={(e) => {
           if (e.key === "Escape") {
@@ -410,6 +427,11 @@ export function CommandPalette() {
             e.preventDefault();
             if (isCommandMode) {
               const chosen = visibleCommands[activeIndex] ?? visibleCommands[0];
+              if (chosen) {
+                executeCommand(chosen);
+              }
+            } else if (showQuickActions) {
+              const chosen = quickActions[activeIndex] ?? quickActions[0];
               if (chosen) {
                 executeCommand(chosen);
               }
@@ -481,6 +503,29 @@ export function CommandPalette() {
                 </button>
               ))
             )
+          ) : showQuickActions ? (
+            <>
+              <div class="command-palette__section-label">Quick Actions</div>
+              {quickActions.map((cmd, idx) => (
+                <button
+                  key={cmd.id}
+                  type="button"
+                  class={`command-palette__item command-palette__item--cmd ${
+                    idx === activeIndex ? "command-palette__item--active" : ""
+                  }`}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  onClick={() => executeCommand(cmd)}
+                >
+                  <div class="command-palette__item-top">
+                    <span class="command-palette__item-title">{cmd.label}</span>
+                    <div class="command-palette__item-badges">
+                      <span class="badge">{cmd.badge}</span>
+                    </div>
+                  </div>
+                  <div class="command-palette__item-snippet">{cmd.description}</div>
+                </button>
+              ))}
+            </>
           ) : hits.length === 0 ? (
             <div class="command-palette__empty">No matching nodes</div>
           ) : (

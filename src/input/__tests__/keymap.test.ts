@@ -177,4 +177,134 @@ describe("UT-TS-04: modal keymap isolation & A-chord state machine", () => {
     expect(triggeredLenses).toEqual([]);
     handler.dispose();
   });
+
+  it("handles Ctrl+=, Ctrl+-, Ctrl+0, ? and does not intercept Tab/Enter on interactive buttons", () => {
+    let zoomInCount = 0;
+    let zoomOutCount = 0;
+    let resetZoomCount = 0;
+    let helpToggleCount = 0;
+    let spawnCount = 0;
+    let enterEditCount = 0;
+
+    const handler = createKeymapHandler({
+      ...buildDeps(),
+      enterEditMode: () => {
+        enterEditCount += 1;
+        return true;
+      },
+      spawnChild: async () => {
+        spawnCount += 1;
+        return {
+          node: makeNode("child"),
+          edge: {
+            id: "e1",
+            source_id: "root",
+            target_id: "child",
+            type: "derives",
+            weight: "summary",
+            created_at: 1,
+          },
+        };
+      },
+      zoomIn: () => {
+        zoomInCount += 1;
+      },
+      zoomOut: () => {
+        zoomOutCount += 1;
+      },
+      resetZoom: () => {
+        resetZoomCount += 1;
+      },
+      toggleShortcutsHelp: () => {
+        helpToggleCount += 1;
+      },
+    });
+
+    const zoomInEv = new KeyboardEvent("keydown", {
+      key: "=",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    handler.handleKeyDown(zoomInEv);
+    expect(zoomInEv.defaultPrevented).toBe(true);
+    expect(zoomInCount).toBe(1);
+
+    const zoomOutEv = new KeyboardEvent("keydown", {
+      key: "-",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    handler.handleKeyDown(zoomOutEv);
+    expect(zoomOutEv.defaultPrevented).toBe(true);
+    expect(zoomOutCount).toBe(1);
+
+    const resetEv = new KeyboardEvent("keydown", {
+      key: "0",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    handler.handleKeyDown(resetEv);
+    expect(resetEv.defaultPrevented).toBe(true);
+    expect(resetZoomCount).toBe(1);
+
+    const helpEv = new KeyboardEvent("keydown", {
+      key: "?",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    handler.handleKeyDown(helpEv);
+    expect(helpEv.defaultPrevented).toBe(true);
+    expect(helpToggleCount).toBe(1);
+
+    // Tab and Enter on buttons inside .hover-pill or .edge-popover must NOT be hijacked.
+    const host = document.createElement("div");
+    const hoverPill = document.createElement("div");
+    hoverPill.className = "hover-pill";
+    const pillBtn = document.createElement("button");
+    hoverPill.appendChild(pillBtn);
+    const edgePopover = document.createElement("div");
+    edgePopover.className = "edge-popover";
+    const popBtn = document.createElement("button");
+    edgePopover.appendChild(popBtn);
+    host.appendChild(hoverPill);
+    host.appendChild(edgePopover);
+    document.body.appendChild(host);
+    host.addEventListener("keydown", handler.handleKeyDown);
+
+    const tabOnPill = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    pillBtn.dispatchEvent(tabOnPill);
+    expect(tabOnPill.defaultPrevented).toBe(false);
+    expect(spawnCount).toBe(0);
+
+    const enterOnPill = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    pillBtn.dispatchEvent(enterOnPill);
+    expect(enterOnPill.defaultPrevented).toBe(false);
+    expect(enterEditCount).toBe(0);
+
+    modal = "connect_edge";
+    const enterOnPopover = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    popBtn.dispatchEvent(enterOnPopover);
+    expect(enterOnPopover.defaultPrevented).toBe(false);
+    expect(actionsCount).toBe(0);
+
+    host.removeEventListener("keydown", handler.handleKeyDown);
+    host.remove();
+    handler.dispose();
+  });
 });

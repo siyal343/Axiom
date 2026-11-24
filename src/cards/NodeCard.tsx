@@ -118,6 +118,7 @@ export function NodeCard({ node }: NodeCardProps) {
   if (node.layout.collapsed) classes.push("node-card--collapsed");
   if (isFocused) classes.push("node-card--focused");
   if (isSelected) classes.push("node-card--selected");
+  if (isHovered || isFocused || moreOpen) classes.push("node-card--elevated");
   if (isShaking) classes.push("node-card--shaking");
   if (isXrayDimmed) classes.push("node-card--xray-dim");
 
@@ -177,29 +178,57 @@ export function NodeCard({ node }: NodeCardProps) {
       {showHoverPill && (
         <div
           class="hover-pill"
+          data-source={isHovered ? "pointer" : "keyboard"}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <button type="button" class="hover-pill__btn" onClick={handleSpawnChild}>
-            + Child (Tab)
-          </button>
-          <button type="button" class="hover-pill__btn" onClick={handleOpenLens}>
-            AI Lens (A)
-          </button>
-          <button type="button" class="hover-pill__btn" onClick={handleTogglePin}>
-            Pin (P)
-          </button>
-          <button type="button" class="hover-pill__btn" onClick={handleToggleCollapse}>
-            Collapse (C)
+          <button
+            type="button"
+            class="hover-pill__btn"
+            title="Add child node (Tab)"
+            onClick={handleSpawnChild}
+          >
+            + Child
           </button>
           <button
             type="button"
             class="hover-pill__btn"
+            title="Open AI Lens menu (A)"
+            onClick={handleOpenLens}
+          >
+            Lens
+          </button>
+          <button
+            type="button"
+            class="hover-pill__btn"
+            title={
+              node.context_controls.pin_global
+                ? "Unpin from global AI context (P)"
+                : "Pin to global AI context (P)"
+            }
+            onClick={handleTogglePin}
+          >
+            {node.context_controls.pin_global ? "Unpin" : "Pin"}
+          </button>
+          <button
+            type="button"
+            class="hover-pill__btn"
+            title={node.layout.collapsed ? "Unfold card body (C)" : "Fold card body (C)"}
+            onClick={handleToggleCollapse}
+          >
+            {node.layout.collapsed ? "Unfold" : "Fold"}
+          </button>
+          <button
+            type="button"
+            class="hover-pill__btn"
+            title="More node actions"
+            aria-label="More node actions"
+            aria-expanded={moreOpen}
             onClick={(e) => {
               e.stopPropagation();
               setMoreOpen((v) => !v);
             }}
           >
-            More (...)
+            ···
           </button>
           {moreOpen && (
             <div class="hover-pill__menu">
@@ -275,18 +304,25 @@ export function NodeCard({ node }: NodeCardProps) {
               {node.metadata.severity.toUpperCase()}
             </span>
           )}
-          {node.context_controls.pin_global && <span class="badge badge--pin">PIN</span>}
+          {node.context_controls.pin_global && (
+            <span class="badge badge--pin" title="Pinned to global AI context">
+              PIN
+            </span>
+          )}
           {node.context_controls.exclude_from_ai && (
-            <span class="badge badge--no-ai">NO AI</span>
+            <span class="badge badge--no-ai" title="Excluded from AI context">
+              NO AI
+            </span>
           )}
           {node.status === "locked" && (
-            <span class="badge badge--locked" title="Locked">
+            <span class="badge badge--locked" title="Node is locked against edits">
               LOCKED
             </span>
           )}
           {loopholeInfo && loopholeInfo.count > 0 && (
             <span
               class={`badge badge--loophole-count badge--sev-${loopholeInfo.maxSeverity ?? "medium"}`}
+              title={`${loopholeInfo.count} unresolved loophole${loopholeInfo.count === 1 ? "" : "s"}`}
             >
               ⚠ {loopholeInfo.count}
             </span>
@@ -304,6 +340,7 @@ export function NodeCard({ node }: NodeCardProps) {
 
       {node.status === "draft" && !node.layout.collapsed && (
         <footer class="node-card__footer">
+          <span class="node-card__streaming-dot" aria-hidden="true" />
           <span class="node-card__streaming-hint">Esc to stop</span>
         </footer>
       )}

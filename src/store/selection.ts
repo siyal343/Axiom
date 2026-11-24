@@ -19,11 +19,13 @@ export const lockedShakeId = signal<string | null>(null);
 export const edgePopover = signal<EdgePopoverState | null>(null);
 export const isInteracting = signal<boolean>(false);
 export const commandPaletteOpen = signal<boolean>(false);
+export const shortcutsHelpOpen = signal<boolean>(false);
 export const connectSourceId = signal<string | null>(null);
 
 export function openCommandPalette(): void {
   edgePopover.value = null;
   hoveredId.value = null;
+  shortcutsHelpOpen.value = false;
   commandPaletteOpen.value = true;
   modalState.value = "command";
 }

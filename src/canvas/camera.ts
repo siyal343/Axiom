@@ -97,6 +97,7 @@ export class CanvasCameraController implements CameraControllerHandle {
   private readonly onViewportCull: CameraControllerOptions["onViewportCull"];
   private readonly onSaveCamera?: CameraControllerOptions["onSaveCamera"];
   private readonly onFrameSample?: CameraControllerOptions["onFrameSample"];
+  private readonly frameListeners = new Set<(cam: CameraTransform) => void>();
   private lastFrameStartAt: number | null = null;
 
   private cam: CameraState;
@@ -153,6 +154,21 @@ export class CanvasCameraController implements CameraControllerHandle {
     return { width: this.width, height: this.height };
   }
 
+  subscribeFrame(listener: (cam: CameraTransform) => void): () => void {
+    this.frameListeners.add(listener);
+    return () => {
+      this.frameListeners.delete(listener);
+    };
+  }
+
+  zoomByStep(factor: number): void {
+    this.zoomAt(this.width / 2, this.height / 2, this.cam.zoom * factor);
+  }
+
+  resetZoom(): void {
+    this.zoomAt(this.width / 2, this.height / 2, 1.0);
+  }
+
   setCamera(cam: CameraState): void {
     this.cancelAnimation();
     this.cam = {
@@ -187,6 +203,21 @@ export class CanvasCameraController implements CameraControllerHandle {
 
   animateTo(targetCam: CameraTransform, durationMs = 220): void {
     this.cancelAnimation();
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReducedMotion) {
+      this.cam.x = targetCam.x;
+      this.cam.y = targetCam.y;
+      this.cam.zoom = clampZoom(targetCam.zoom);
+      isBirdsEye.value = this.cam.zoom < LOD_THRESHOLD;
+      this.markDirty();
+      this.refreshCull();
+      this.scheduleSaveCamera();
+      return;
+    }
+
     const startX = this.cam.x;
     const startY = this.cam.y;
     const startZoom = this.cam.zoom;
@@ -265,6 +296,13 @@ export class CanvasCameraController implements CameraControllerHandle {
       this.cardLayerEl.style.transform = `translate3d(${this.cam.x}px, ${this.cam.y}px, 0) scale(${this.cam.zoom})`;
     }
 
+    if (this.frameListeners.size > 0) {
+      const snap: CameraTransform = { x: this.cam.x, y: this.cam.y, zoom: this.cam.zoom };
+      for (const listener of this.frameListeners) {
+        listener(snap);
+      }
+    }
+
     const movedEnough =
       Number.isNaN(this.lastCullX) ||
       Math.hypot(this.cam.x - this.lastCullX, this.cam.y - this.lastCullY) >
@@ -282,7 +320,8 @@ export class CanvasCameraController implements CameraControllerHandle {
 
     if (this.onFrameSample) {
       const drawMs = Math.max(0, performance.now() - frameStart);
-      this.onFrameSample(drawMs, intervalMs);
+      const activeIntervalMs = intervalMs > 0 && intervalMs <= 250 ? intervalMs : 0;
+      this.onFrameSample(drawMs, activeIntervalMs);
     }
   }
 
@@ -307,6 +346,7 @@ export class CanvasCameraController implements CameraControllerHandle {
   }
 
   dispose(): void {
+    this.frameListeners.clear();
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;

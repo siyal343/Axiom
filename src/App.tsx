@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { CanvasCameraController, worldToScreen } from "./canvas/camera";
+import { CanvasCameraController, screenToWorld, worldToScreen } from "./canvas/camera";
 import { globalFrameTracker } from "./canvas/perfMetrics";
 import { attachCanvasPointer, type PointerOverlayState } from "./canvas/pointer";
 import { renderCanvas2d } from "./canvas/renderer2d";
@@ -14,11 +14,12 @@ import {
   openWorkspace,
   saveCamera,
 } from "./ipc/client";
-import type { EdgeDto, EdgeType, GraphOp } from "./ipc/types";
+import type { EdgeDto, EdgeType, GraphOp, NodeDto } from "./ipc/types";
 import { CommandPalette } from "./overlays/CommandPalette";
 import { CustomPromptBar } from "./overlays/CustomPromptBar";
 import { PerfHud } from "./overlays/PerfHud";
 import { SettingsModal } from "./overlays/SettingsModal";
+import { ShortcutsModal } from "./overlays/ShortcutsModal";
 import { notifyIpcError, ToastStack } from "./overlays/ToastStack";
 import { XrayHud } from "./overlays/XrayHud";
 import { applySummaryUpdate, triageBanner, triggerLens } from "./store/aiRunner";
@@ -37,18 +38,23 @@ import {
   viewportSpatialIndex,
   visibleNodeIds,
 } from "./store/graphStore";
+import { buildCreateNodeWithInverse } from "./store/history";
 import {
   edgePopover,
+  enterEditMode,
   focusId,
   isInteracting,
   modalState,
   selectedIds,
+  selectSingle,
+  shortcutsHelpOpen,
   xrayState,
 } from "./store/selection";
 
 export function App() {
   const shellRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const zoomLabelRef = useRef<HTMLButtonElement | null>(null);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -116,6 +122,17 @@ export function App() {
 
     cameraControllerRef.current = controller;
 
+    const syncZoomLabel = (zoom: number): void => {
+      const labelEl = zoomLabelRef.current;
+      if (labelEl) {
+        labelEl.textContent = `${Math.round(zoom * 100)}%`;
+      }
+    };
+    syncZoomLabel(controller.getCamera().zoom);
+    const unsubscribeZoom = controller.subscribeFrame((cam) => {
+      syncZoomLabel(cam.zoom);
+    });
+
     const rect = shell.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       controller.setSize(rect.width, rect.height);
@@ -176,6 +193,7 @@ export function App() {
     return () => {
       active = false;
       unlistenSummary?.();
+      unsubscribeZoom();
       detachKeymap();
       detachPointer();
       resizeObs?.disconnect();
@@ -189,6 +207,19 @@ export function App() {
   useEffect(() => {
     cameraControllerRef.current?.markDirty();
   }, [version, currentSelected, focusId.value, xrayState.value]);
+
+  const viewportSize = cameraControllerRef.current?.getViewportSize() ?? {
+    width: typeof window !== "undefined" ? window.innerWidth : 1280,
+    height: typeof window !== "undefined" ? window.innerHeight : 800,
+  };
+  const clampOverlayPoint = (rawX: number, rawY: number): { x: number; y: number } => {
+    const maxX = Math.max(64, viewportSize.width - 64);
+    const maxY = Math.max(48, viewportSize.height - 64);
+    return {
+      x: Math.max(64, Math.min(maxX, rawX)),
+      y: Math.max(48, Math.min(maxY, rawY)),
+    };
+  };
 
   let multiPillPos: { x: number; y: number } | null = null;
   if (
@@ -215,9 +246,55 @@ export function App() {
         minY,
         cameraControllerRef.current.getCamera(),
       );
-      multiPillPos = { x: screenPt.x, y: screenPt.y - 12 };
+      multiPillPos = clampOverlayPoint(screenPt.x, screenPt.y - 12);
     }
   }
+
+  const clampedPopoverPos = activePopover
+    ? clampOverlayPoint(activePopover.x, activePopover.y)
+    : null;
+
+  const handleCreateFirstNode = (): void => {
+    const ctrl = cameraControllerRef.current;
+    const cam = ctrl?.getCamera() ?? { x: 0, y: 0, zoom: 1, last_focus_id: null };
+    const center = screenToWorld(viewportSize.width / 2, viewportSize.height / 2, cam);
+    const now = Date.now();
+    const node: NodeDto = {
+      id: `node_${now}_${Math.random().toString(36).slice(2, 7)}`,
+      type: "core",
+      status: "active",
+      title: "New Concept",
+      content: "",
+      summary: "",
+      content_hash: "",
+      summary_hash: "",
+      metadata: {
+        severity: null,
+        lens: "manual",
+        created_by: "user",
+        model: null,
+        token_count: 3,
+      },
+      context_controls: { pin_global: false, exclude_from_ai: false },
+      layout: {
+        x: center.x - 160,
+        y: center.y - 90,
+        width: 320,
+        height: 180,
+        collapsed: false,
+      },
+      created_at: now,
+      updated_at: now,
+    };
+    const { forward, inverse } = buildCreateNodeWithInverse(node);
+    void mutateGraphUndoable("New free node", forward, inverse)
+      .then((res) => {
+        const created = res.updated_nodes.find((n) => n.id === node.id) ?? node;
+        selectSingle(created.id);
+        enterEditMode(created);
+      })
+      .catch(notifyIpcError);
+  };
 
   const handleConnectEdge = (edgeType: EdgeType): void => {
     if (!activePopover) {
@@ -276,10 +353,10 @@ export function App() {
         </div>
       )}
 
-      {activePopover && (
+      {activePopover && clampedPopoverPos && (
         <div
           class="edge-popover"
-          style={{ left: `${activePopover.x}px`, top: `${activePopover.y}px` }}
+          style={{ left: `${clampedPopoverPos.x}px`, top: `${clampedPopoverPos.y}px` }}
           onPointerDown={(e) => e.stopPropagation()}
         >
           <button
@@ -324,11 +401,72 @@ export function App() {
         </div>
       )}
 
+      {nodesMap.size === 0 && currentModal === "navigate" && (
+        <div class="empty-canvas-prompt" onPointerDown={(e) => e.stopPropagation()}>
+          <p class="empty-canvas-prompt__text">
+            Press <kbd class="shortcuts-kbd">N</kbd> to create a node ·{" "}
+            <kbd class="shortcuts-kbd">Ctrl+K</kbd> for commands ·{" "}
+            <kbd class="shortcuts-kbd">?</kbd> for shortcuts
+          </p>
+          <button
+            type="button"
+            class="empty-canvas-prompt__btn"
+            onClick={handleCreateFirstNode}
+          >
+            + New Node
+          </button>
+        </div>
+      )}
+
+      <div class="canvas-controls" onPointerDown={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          class="canvas-controls__btn"
+          title="Zoom out (Ctrl/Cmd+-)"
+          aria-label="Zoom out"
+          onClick={() => cameraControllerRef.current?.zoomByStep?.(1 / 1.15)}
+        >
+          −
+        </button>
+        <button
+          ref={zoomLabelRef}
+          type="button"
+          class="canvas-controls__btn canvas-controls__zoom"
+          title="Reset zoom to 100% (Ctrl/Cmd+0)"
+          aria-label="Reset zoom to 100%"
+          onClick={() => cameraControllerRef.current?.resetZoom?.()}
+        >
+          100%
+        </button>
+        <button
+          type="button"
+          class="canvas-controls__btn"
+          title="Zoom in (Ctrl/Cmd+=)"
+          aria-label="Zoom in"
+          onClick={() => cameraControllerRef.current?.zoomByStep?.(1.15)}
+        >
+          +
+        </button>
+        <span class="canvas-controls__sep" aria-hidden="true" />
+        <button
+          type="button"
+          class="canvas-controls__btn"
+          title="Keyboard shortcuts (?)"
+          aria-label="Keyboard shortcuts"
+          onClick={() => {
+            shortcutsHelpOpen.value = !shortcutsHelpOpen.value;
+          }}
+        >
+          ?
+        </button>
+      </div>
+
       <XrayHud />
       <PerfHud />
       <CommandPalette />
       <CustomPromptBar />
       <SettingsModal />
+      <ShortcutsModal />
       <ToastStack />
     </main>
   );

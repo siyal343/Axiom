@@ -59,6 +59,7 @@ import {
   selectedIds,
   selectSingle,
   setSelection,
+  shortcutsHelpOpen,
   triggerLockedShake,
   xrayState,
   type ModalState,
@@ -96,6 +97,10 @@ export interface KeymapDeps {
   applyTidy?: (prevMoves: NodePositionUpdate[], nextMoves: NodePositionUpdate[]) => void;
   openCommandPalette: () => void;
   openSettings?: () => void;
+  zoomIn?: () => void;
+  zoomOut?: () => void;
+  resetZoom?: () => void;
+  toggleShortcutsHelp?: () => void;
   closeOverlays: () => void;
   setConnectSourceId?: (id: string | null) => void;
   openEdgePopoverFor: (sourceId: string, targetId: string) => void;
@@ -126,6 +131,14 @@ function isInputLikeElement(target: EventTarget | null): boolean {
     return false;
   }
   return Boolean(target.closest("input, textarea, select, [contenteditable='true'], .cm-editor"));
+}
+
+function isInteractiveButtonTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.tagName === "BUTTON" ||
+      target.closest(".hover-pill, .edge-popover, .multi-select-pill, .canvas-controls") !== null)
+  );
 }
 
 export function createKeymapHandler(deps: KeymapDeps): KeymapController {
@@ -315,6 +328,9 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
         return;
       }
       if (e.key === "Enter") {
+        if (isInteractiveButtonTarget(e.target)) {
+          return;
+        }
         e.preventDefault();
         const targetId = deps.getFocusId();
         if (localConnectSource && targetId && localConnectSource !== targetId) {
@@ -380,8 +396,31 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
       void deps.undo().catch(notifyIpcError);
       return;
     }
+    if (mod && !e.altKey) {
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        deps.zoomIn?.();
+        return;
+      }
+      if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        deps.zoomOut?.();
+        return;
+      }
+      if (e.key === "0") {
+        e.preventDefault();
+        deps.resetZoom?.();
+        return;
+      }
+    }
 
     if (mod || e.altKey) {
+      return;
+    }
+
+    if (e.key === "?") {
+      e.preventDefault();
+      deps.toggleShortcutsHelp?.();
       return;
     }
 
@@ -410,6 +449,10 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
     ) {
       e.preventDefault();
       handleDirectionalNav(lower, e.shiftKey);
+      return;
+    }
+
+    if ((e.key === "Tab" || e.key === "Enter") && isInteractiveButtonTarget(e.target)) {
       return;
     }
 
@@ -464,6 +507,7 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
 
     if (lower === "n" && !e.shiftKey) {
       e.preventDefault();
+      e.stopPropagation();
       const cam = deps.getCamera();
       const { width, height } = deps.getViewportSize();
       const center = screenToWorld(width / 2, height / 2, cam);
@@ -513,7 +557,6 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
       localConnectSource = fid;
       deps.setConnectSourceId?.(fid);
       deps.setModalState("connect_edge");
-      deps.pushToast("Navigate to target node and press Enter to connect", "info");
       return;
     }
 
@@ -802,8 +845,21 @@ export function attachKeymap(
     },
     openCommandPalette,
     openSettings: openSettingsModal,
+    zoomIn: () => {
+      cameraControllerRef.current?.zoomByStep?.(1.15);
+    },
+    zoomOut: () => {
+      cameraControllerRef.current?.zoomByStep?.(1 / 1.15);
+    },
+    resetZoom: () => {
+      cameraControllerRef.current?.resetZoom?.();
+    },
+    toggleShortcutsHelp: () => {
+      shortcutsHelpOpen.value = !shortcutsHelpOpen.value;
+    },
     closeOverlays: () => {
       edgePopover.value = null;
+      shortcutsHelpOpen.value = false;
       closeCommandPalette();
       closeCustomPromptBar();
       closeSettingsModal();

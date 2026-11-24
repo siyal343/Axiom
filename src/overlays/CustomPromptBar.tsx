@@ -41,7 +41,7 @@ export function CustomPromptBar() {
       node.layout.y + getEffectiveNodeHeight(node),
       cam,
     );
-    const barW = 420;
+    const barW = 440;
     const left = Math.max(16, Math.min(width - barW - 16, screenPos.x));
     const top = Math.max(16, Math.min(height - 72, screenPos.y + 10));
     stylePos = { left: `${left}px`, top: `${top}px` };
@@ -61,6 +61,7 @@ export function CustomPromptBar() {
       class="custom-prompt-bar"
       style={stylePos}
       role="dialog"
+      aria-modal="true"
       aria-label="Custom AI Prompt"
       onPointerDown={(e) => e.stopPropagation()}
     >

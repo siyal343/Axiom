@@ -6,7 +6,7 @@ Axiom implements a modal keyboard router, topological graph traversal, an invert
 
 `src/store/selection.ts` defines five mutually exclusive `ModalState` modes: `navigate`, `edit`, `command`, `chord_a`, and `connect_edge`. `createKeymapHandler` in `src/input/keymap.ts` routes keyboard events strictly by active mode:
 
-- **`edit` mode isolation:** When `modalState` equals `"edit"`, `handleKeyDown` returns immediately before inspecting any key. Typing `h`, `j`, `k`, `l`, `a`, `d`, or any other character triggers zero graph commands. In `navigate` and `connect_edge` modes, the router also skips events originating inside `input`, `textarea`, `select`, `[contenteditable='true']`, or `.cm-editor` elements.
+- **`edit` mode isolation:** When `modalState` equals `"edit"`, `handleKeyDown` returns immediately before inspecting any key. Typing `h`, `j`, `k`, `l`, `a`, `d`, or any other character triggers zero graph commands. In `navigate` and `connect_edge` modes, the router also skips events originating inside `input`, `textarea`, `select`, `[contenteditable='true']`, or `.cm-editor` elements, and in `navigate` mode skips `Tab` and `Enter` when focus sits on a `<button>`, `[role="button"]`, `.hover-pill`, or `.edge-popover` control.
 - **`command` mode:** Passes typing and navigation keys to `CommandPalette`, `CustomPromptBar`, and `SettingsModal`, intercepting only `Escape` to close overlays.
 - **`chord_a` mode:** Entered by pressing `A` in `navigate` mode and displaying a bottom hint pill listing the available lens shortcuts. A `1500` ms timeout (`chordTimeoutMs`) resets the mode to `"navigate"` if no valid follow-up key arrives. Pressing `R` (`red_team`), `E` (`edge_case`), `D` (`diverge`), `F` (`feynman`), `S` (`synthesize` when two or more nodes are selected, or a warning toast otherwise), or `Space` (`custom`, opening **Custom AI Prompt**) invokes `triggerLens` (`src/store/aiRunner.ts`) and resets to `"navigate"`. Pressing `Escape`, any unmapped key, or blurring the window exits `chord_a` cleanly.
 - **`connect_edge` mode:** Entered by pressing `E` on a focused node. Displays a bottom status banner and restricts keyboard input to topological navigation (`H`, `J`, `K`, `L`, and arrow keys), `Enter` (opens the **References** / **Resolves** / **Derives** edge popover anchored at the top center of the target node), and `E` or `Escape` to cancel.
@@ -55,9 +55,13 @@ Sibling lists and child candidates in `src/input/topologyNav.ts` sort determinis
 | `Backspace` or `Delete` | Runs two-step loophole triage: when one `active` `loophole` is targeted, the first press sets `status` to `dismissed` (undoable); a second press (or any deletion of non-active loopholes, other node types, or multi-selections) deletes the node(s) and captures incident edges for undo |
 | `Cmd/Ctrl+Z` | Undoes the latest graph mutation (`performUndo`) |
 | `Cmd/Ctrl+Shift+Z` or `Ctrl+Y` | Redoes the most recently undone mutation (`performRedo`) |
+| `Cmd/Ctrl+=` or `Cmd/Ctrl++` | Zooms in by `1.15x` anchored at the viewport center (`zoomByStep(1.15)`) |
+| `Cmd/Ctrl+-` or `Cmd/Ctrl+_` | Zooms out by `1 / 1.15` anchored at the viewport center (`zoomByStep(1 / 1.15)`) |
+| `Cmd/Ctrl+0` | Resets camera zoom to `100%` (`1.0x`) anchored at the viewport center (`resetZoom`) |
+| `?` | Toggles **Keyboard Shortcuts** (`ShortcutsModal` in `src/overlays/ShortcutsModal.tsx`) |
 | `Cmd/Ctrl+K` | Opens **Command Palette** (`openCommandPalette`) |
 | `Cmd/Ctrl+,` | Opens **Settings** (`openSettingsModal`) |
-| `Escape` | Follows a strict priority order: (1) cancels an active AI stream (`cancelActiveRun`), (2) closes `edgePopover`, **Command Palette**, **Custom AI Prompt**, **Settings**, `triageBanner`, `chord_a`, or `connect_edge`, and (3) collapses multi-selection down to `focusId` |
+| `Escape` | Follows a strict priority order: (1) cancels an active AI stream (`cancelActiveRun`), (2) closes `edgePopover`, **Keyboard Shortcuts**, **Command Palette**, **Custom AI Prompt**, **Settings**, `triageBanner`, `chord_a`, or `connect_edge`, and (3) collapses multi-selection down to `focusId` |
 
 ## Context X-Ray overlay
 
@@ -81,19 +85,26 @@ When `Hold V` activates `xrayState`, `XrayHud` in `src/overlays/XrayHud.tsx` mou
 
 ### Command Palette search, actions, and Perf HUD
 
-Opening **Command Palette** (`Cmd/Ctrl+K`) focuses the search input, provides a **> Commands** mode toggle alongside five node-filter chips (`status:active`, `type:loophole`, `severity:critical`, `pinned:true`, `excluded:true`), and supports two modes:
+Opening **Command Palette** (`Cmd/Ctrl+K`, `aria-modal="true"`) focuses the search input, provides a **> Commands** mode toggle alongside five node-filter chips (`status:active`, `type:loophole`, `severity:critical`, `pinned:true`, `excluded:true`), and supports three views:
 
-- **Node search mode (default):** Debounces queries by `60` ms and calls Rust `searchNodes(query, 30)` when running inside Tauri, falling back to `searchNodesLocally` in browser environments or on IPC errors. Pressing `ArrowDown` or `ArrowUp` cycles through hits; pressing `Enter` or clicking a hit closes **Command Palette**, selects that node, and animates the camera (`220` ms, zoom clamped to at least `0.85x`) to center the card.
+- **Quick Actions (empty query with zero node hits):** When the search input is empty and returns zero node hits, displays **Quick Actions** (`QUICK_ACTION_IDS`: **> Open Workspace**, **> New Workspace**, **> Toggle Theme**, **> Settings**, and **> Toggle Perf HUD**) so you can run workspace actions directly.
+- **Node search mode:** Debounces non-empty queries by `60` ms and calls Rust `searchNodes(query, 30)` when running inside Tauri, falling back to `searchNodesLocally` in browser environments or on IPC errors. Pressing `ArrowDown` or `ArrowUp` cycles through hits; pressing `Enter` or clicking a hit closes **Command Palette**, selects that node, and animates the camera (`220` ms, zoom clamped to at least `0.85x`) to center the card.
 - **Action mode:** Activated by entering `>` or clicking **> Commands**; filters workspace, appearance, preference, and diagnostic commands with substring and fuzzy subsequence matching: **> Export JSON**, **> Import JSON**, **> Open Workspace**, **> New Workspace**, **> Toggle Theme**, **> Settings**, **> Toggle Perf HUD**, and dev-only **> Seed Stress 500** (`import.meta.env.DEV`).
 - **Performance HUD (`PerfHud`):** Toggled from **> Toggle Perf HUD** (or opened automatically when seeding the dev stress graph), `src/overlays/PerfHud.tsx` polls `globalFrameTracker.getStats()` every `250` ms to display live **FPS**, **p95 draw**, **Graph** counts, **DOM cards**, and **LOD** state without writing signals inside the render loop.
 
 Pressing `Escape` or clicking the backdrop closes **Command Palette**.
 
-### Ephemeral toast stack and floating action pills
+### Keyboard shortcuts reference modal
 
-`ToastStack` renders up to four concurrent toast items (`info`, `warning`, and `error` variants) with optional action buttons and a `2800` ms auto-dismiss timer. `notifyIpcError` parses structured `IpcError` payloads so `NODE_LOCKED` displays as a `warning` toast and all other IPC errors display as `error` toasts.
+Pressing `?` in Navigate Mode (or clicking **Keyboard shortcuts** in the bottom-left controls) opens **Keyboard Shortcuts** (`src/overlays/ShortcutsModal.tsx`, `aria-modal="true"`), organizing shortcuts into four tables: **Navigation & Editing**, **Graph & Context**, **AI Lenses & Triage**, and **Canvas & Workspace**. Pressing `Escape`, clicking **Close (Esc)**, or clicking the backdrop closes the dialog.
 
-`src/App.tsx` also renders two contextual floating pills in Navigate Mode:
+### Ephemeral toast stack, canvas controls, and floating pills
 
+`ToastStack` renders up to four concurrent toast items (`info`, `warning`, and `error` variants) with optional action buttons, auto-dismissing `error` or action toasts after `5000` ms and `info` or `warning` toasts after `3200` ms. `notifyIpcError` parses structured `IpcError` payloads so `NODE_LOCKED` displays as a `warning` toast and all other IPC errors display as `error` toasts.
+
+`src/App.tsx` also renders persistent and contextual canvas controls in Navigate Mode:
+
+- **Bottom-left canvas controls (`.canvas-controls`):** Provides **Zoom out** (`−`), a live zoom percentage readout button (**Reset zoom to 100%**) updated directly through `subscribeFrame` without Preact re-renders, **Zoom in** (`+`), and **Keyboard shortcuts** (`?`).
+- **Empty-canvas onboarding prompt (`.empty-canvas-prompt`):** Appears centered on the canvas when `nodesMap.size === 0` in `"navigate"` mode, summarizing `N`, `Ctrl+K`, and `?` shortcuts alongside a **+ New Node** button that creates and opens a `core` card at the viewport center.
 - **Multi-select synthesis pill:** When two or more cards are selected outside Bird's-Eye LOD and active pointer drags, clicking **Synthesize (A S)** invokes `triggerLens("synthesize")`.
 - **Red-Team loophole triage pill:** When a `red_team` run completes and auto-focuses the first spawned loophole, `.triage-hint-pill` displays `Triage: J/K step · R resolve · Tab fix · Backspace dismiss` for `8000` ms (dismissible early with `Escape`).
