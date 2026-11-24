@@ -227,7 +227,6 @@ pub fn find_free_position(
 
 struct SubtreeSpan {
     probe_band: f64,
-    loophole_band: f64,
     own_span: f64,
     subtree_height: f64,
 }
@@ -421,7 +420,6 @@ pub fn compute_tidy_subtree(
             u_id.clone(),
             SubtreeSpan {
                 probe_band,
-                loophole_band,
                 own_span,
                 subtree_height: own_span.max(children_span),
             },

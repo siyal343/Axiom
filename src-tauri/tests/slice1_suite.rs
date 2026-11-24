@@ -183,7 +183,7 @@ fn ut_rs_02_move_nodes_fts_immunity_and_resolves_auto_flip() {
         &mut conn,
         &mut engine,
         &[
-            GraphOp::CreateNode { node: core.clone() },
+            GraphOp::CreateNode { node: core },
             GraphOp::CreateNode { node: loophole },
             GraphOp::CreateNode { node: fix },
             GraphOp::CreateEdge { edge: challenge },
@@ -573,7 +573,7 @@ fn ut_rs_11_rtree_non_overlap() {
     let mut engine = GraphEngine::default();
 
     let root = make_node("node_root", NodeType::Core, "Root", "", 0.0, 0.0);
-    apply_ops(&mut conn, &mut engine, &[GraphOp::CreateNode { node: root.clone() }])
+    apply_ops(&mut conn, &mut engine, &[GraphOp::CreateNode { node: root }])
         .expect("create root");
 
     // 10 sequential children off root
