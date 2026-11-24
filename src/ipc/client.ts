@@ -151,6 +151,10 @@ export async function testProviderConnection(
   return invoke<TestConnectionResult>("test_provider_connection", { tier });
 }
 
+export async function seedStress500(): Promise<WorkspaceSnapshot> {
+  return invoke<WorkspaceSnapshot>("seed_stress_500", {});
+}
+
 export async function listenSummaryUpdated(
   handler: (event: SummaryUpdatedEvent) => void,
 ): Promise<UnlistenFn> {

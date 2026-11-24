@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -153,13 +153,7 @@ fn remove_if_exists(path: &Path) -> Result<(), IpcError> {
     }
 }
 
-pub fn import_json(
-    src_path: &Path,
-    dest_sqlite_path: &Path,
-) -> Result<WorkspaceSnapshot, IpcError> {
-    let raw = std::fs::read_to_string(src_path)?;
-    let doc: AxiomWorkspaceJson = serde_json::from_str(&raw)?;
-
+fn validate_workspace_json(doc: &AxiomWorkspaceJson) -> Result<(), IpcError> {
     if doc.format != AXIOM_EXPORT_FORMAT {
         return Err(IpcError::validation(format!(
             "Invalid export format '{}', expected '{}'",
@@ -172,6 +166,76 @@ pub fn import_json(
             doc.version, AXIOM_EXPORT_VERSION
         )));
     }
+
+    let mut node_ids: HashSet<&str> = HashSet::with_capacity(doc.nodes.len());
+    for node in &doc.nodes {
+        if node.id.trim().is_empty() {
+            return Err(IpcError::validation("Node id cannot be empty"));
+        }
+        if !node_ids.insert(node.id.as_str()) {
+            return Err(IpcError::validation(format!(
+                "Duplicate node id '{}' in import payload",
+                node.id
+            )));
+        }
+    }
+
+    let mut edge_ids: HashSet<&str> = HashSet::with_capacity(doc.edges.len());
+    let mut edge_triples: HashSet<(&str, &str, &str)> = HashSet::with_capacity(doc.edges.len());
+    for edge in &doc.edges {
+        if edge.id.trim().is_empty() {
+            return Err(IpcError::validation("Edge id cannot be empty"));
+        }
+        if !edge_ids.insert(edge.id.as_str()) {
+            return Err(IpcError::validation(format!(
+                "Duplicate edge id '{}' in import payload",
+                edge.id
+            )));
+        }
+        if edge.source_id == edge.target_id {
+            return Err(IpcError::validation(format!(
+                "Edge '{}' forms a self-loop on node '{}'",
+                edge.id, edge.source_id
+            )));
+        }
+        if !node_ids.contains(edge.source_id.as_str()) {
+            return Err(IpcError::validation(format!(
+                "Edge '{}' references missing source_id '{}'",
+                edge.id, edge.source_id
+            )));
+        }
+        if !node_ids.contains(edge.target_id.as_str()) {
+            return Err(IpcError::validation(format!(
+                "Edge '{}' references missing target_id '{}'",
+                edge.id, edge.target_id
+            )));
+        }
+        let triple = (
+            edge.source_id.as_str(),
+            edge.target_id.as_str(),
+            edge.edge_type.as_str(),
+        );
+        if !edge_triples.insert(triple) {
+            return Err(IpcError::duplicate_edge(format!(
+                "Duplicate edge ({}, {}, {}) in import payload",
+                edge.source_id,
+                edge.target_id,
+                edge.edge_type.as_str()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn import_json(
+    src_path: &Path,
+    dest_sqlite_path: &Path,
+) -> Result<WorkspaceSnapshot, IpcError> {
+    let raw = std::fs::read_to_string(src_path)?;
+    let doc: AxiomWorkspaceJson = serde_json::from_str(&raw)?;
+
+    validate_workspace_json(&doc)?;
 
     let wal_path = PathBuf::from(format!("{}-wal", dest_sqlite_path.to_string_lossy()));
     let shm_path = PathBuf::from(format!("{}-shm", dest_sqlite_path.to_string_lossy()));

@@ -2,6 +2,7 @@ pub mod commands;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ pub struct AppState {
     pub summary_tx: mpsc::UnboundedSender<String>,
     pub http_client: reqwest::Client,
     pub settings: Arc<SettingsStore>,
+    pub seed_stress_on_open: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -45,6 +47,7 @@ impl AppState {
                 summary_tx,
                 http_client,
                 settings,
+                seed_stress_on_open: Arc::new(AtomicBool::new(false)),
             },
             summary_rx,
         )

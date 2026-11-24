@@ -86,6 +86,7 @@ export interface CameraControllerOptions {
   ) => void;
   onViewportCull: (bounds: BBox, zoom: number, birdsEye: boolean) => void;
   onSaveCamera?: (cam: CameraState) => void;
+  onFrameSample?: (drawMs: number, intervalMs: number) => void;
   initialCamera?: CameraState;
 }
 
@@ -95,6 +96,8 @@ export class CanvasCameraController implements CameraControllerHandle {
   private readonly renderFrame: CameraControllerOptions["renderFrame"];
   private readonly onViewportCull: CameraControllerOptions["onViewportCull"];
   private readonly onSaveCamera?: CameraControllerOptions["onSaveCamera"];
+  private readonly onFrameSample?: CameraControllerOptions["onFrameSample"];
+  private lastFrameStartAt: number | null = null;
 
   private cam: CameraState;
   private width = 1280;
@@ -113,6 +116,7 @@ export class CanvasCameraController implements CameraControllerHandle {
     this.renderFrame = options.renderFrame;
     this.onViewportCull = options.onViewportCull;
     this.onSaveCamera = options.onSaveCamera;
+    this.onFrameSample = options.onFrameSample;
     this.cam = options.initialCamera
       ? {
           ...options.initialCamera,
@@ -238,6 +242,11 @@ export class CanvasCameraController implements CameraControllerHandle {
   }
 
   private flushFrame(): void {
+    const frameStart = performance.now();
+    const intervalMs =
+      this.lastFrameStartAt === null ? 0 : Math.max(0, frameStart - this.lastFrameStartAt);
+    this.lastFrameStartAt = frameStart;
+
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     const targetW = Math.max(1, Math.round(this.width * dpr));
     const targetH = Math.max(1, Math.round(this.height * dpr));
@@ -269,6 +278,11 @@ export class CanvasCameraController implements CameraControllerHandle {
 
     if (movedEnough || crossedLod || zoomedEnough) {
       this.refreshCull();
+    }
+
+    if (this.onFrameSample) {
+      const drawMs = Math.max(0, performance.now() - frameStart);
+      this.onFrameSample(drawMs, intervalMs);
     }
   }
 

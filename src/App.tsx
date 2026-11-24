@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { CanvasCameraController, worldToScreen } from "./canvas/camera";
+import { globalFrameTracker } from "./canvas/perfMetrics";
 import { attachCanvasPointer, type PointerOverlayState } from "./canvas/pointer";
 import { renderCanvas2d } from "./canvas/renderer2d";
 import { getEffectiveNodeHeight } from "./canvas/spatialIndex";
@@ -16,6 +17,7 @@ import {
 import type { EdgeDto, EdgeType, GraphOp } from "./ipc/types";
 import { CommandPalette } from "./overlays/CommandPalette";
 import { CustomPromptBar } from "./overlays/CustomPromptBar";
+import { PerfHud } from "./overlays/PerfHud";
 import { SettingsModal } from "./overlays/SettingsModal";
 import { notifyIpcError, ToastStack } from "./overlays/ToastStack";
 import { XrayHud } from "./overlays/XrayHud";
@@ -106,6 +108,9 @@ export function App() {
         if (isTauriRuntime()) {
           void saveCamera(cam);
         }
+      },
+      onFrameSample: (drawMs, intervalMs) => {
+        globalFrameTracker.record(drawMs, intervalMs);
       },
     });
 
@@ -320,6 +325,7 @@ export function App() {
       )}
 
       <XrayHud />
+      <PerfHud />
       <CommandPalette />
       <CustomPromptBar />
       <SettingsModal />

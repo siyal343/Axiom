@@ -30,13 +30,13 @@ The front end under `src/` separates a 60–120 FPS canvas loop from Preact UI s
 
 | Path | Responsibility |
 | --- | --- |
-| `src-tauri/src/` | Rust back end: SQLite persistence, graph engine, `rstar` spatial math, context compiler, AI streaming runtime (`ai/`), settings (`settings.rs`), and Tauri commands (`ipc/`) |
-| `src-tauri/tests/` | Rust integration and benchmark test suites (`slice1_suite.rs`, `slice4_suite.rs`) |
-| `src/canvas/` | Camera math, `requestAnimationFrame` controller, Canvas2D renderer, pointer gestures, and `rbush` spatial index |
+| `src-tauri/src/` | Rust back end: SQLite persistence (`db/`, including `stress.rs`), graph engine, `rstar` spatial math, context compiler, AI streaming runtime (`ai/`), settings (`settings.rs`), and Tauri commands (`ipc/`) |
+| `src-tauri/tests/` | Rust integration and benchmark test suites (`slice1_suite.rs`, `slice4_suite.rs`, `slice5_suite.rs`) |
+| `src/canvas/` | Camera math, `requestAnimationFrame` controller, Canvas2D renderer, pointer gestures, `rbush` spatial index, and frame-time telemetry (`perfMetrics.ts`) |
 | `src/cards/` | `CardLayer`, `NodeCard`, `LiveEditorOverlay` (CodeMirror 6), and sanitized Markdown/KaTeX cache |
 | `src/input/` | Modal keyboard router (`keymap.ts`) and deterministic topological navigation helpers (`topologyNav.ts`) |
-| `src/ipc/` | Typed Tauri IPC client wrappers, channel listeners, and shared TypeScript DTO definitions |
-| `src/overlays/` | `XrayHud`, `CommandPalette`, `CustomPromptBar`, `SettingsModal`, and `ToastStack` overlays |
+| `src/ipc/` | Typed Tauri IPC client wrappers, native dialog workspace actions (`workspaceActions.ts`), channel listeners, and shared TypeScript DTO definitions |
+| `src/overlays/` | `XrayHud`, `PerfHud`, `CommandPalette`, `CustomPromptBar`, `SettingsModal`, and `ToastStack` overlays |
 | `src/store/` | Non-reactive graph maps, Preact signals for selection and UI state, 100-entry undo/redo history, AI stream coordinator (`aiRunner.ts`), and local fallback mutations |
 | `src/styles/` | Dark and light CSS custom properties and component layout styles (`theme.css`) |
 | `docs/features/` | Feature-level technical documentation for implemented subsystems |
@@ -108,3 +108,4 @@ Read the following guides for implementation details on each subsystem:
 - [Canvas rendering and editor](docs/features/canvas-rendering-and-editor.md): Three-layer rendering architecture, `requestAnimationFrame` camera loop, `0.45x` Bird's-Eye LOD cutoff, `rbush` culling, pointer interactions, and the single CodeMirror 6 editor overlay.
 - [Keyboard navigation and overlays](docs/features/keyboard-navigation-and-overlays.md): Modal keyboard router, topological navigation, `Hold V` X-Ray HUD, 100-entry undo/redo history, Command Palette, and toast stack.
 - [AI streaming and settings](docs/features/ai-streaming-and-settings.md): OS keychain credentials, multi-tier settings, multi-provider streaming adapters, AI lens execution, and debounced background summarization.
+- [Portability and stress testing](docs/features/portability-and-stress-testing.md): Pre-import JSON validation, native file dialogs, Command Palette `>` actions, dev-only 500-node stress generator, and `PerfHud` telemetry.

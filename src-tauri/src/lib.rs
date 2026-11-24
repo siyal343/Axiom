@@ -5,6 +5,7 @@ pub mod graph;
 pub mod ipc;
 pub mod settings;
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tauri::Emitter;
@@ -13,6 +14,11 @@ use ipc::AppState;
 
 pub fn run() {
     let (app_state, summary_rx) = AppState::new();
+    if cfg!(debug_assertions) && std::env::args().any(|a| a == "--seed-stress-500") {
+        app_state
+            .seed_stress_on_open
+            .store(true, Ordering::SeqCst);
+    }
     let workspace = app_state.workspace.clone();
     let db = app_state.db.clone();
     let http_client = app_state.http_client.clone();
@@ -51,6 +57,7 @@ pub fn run() {
             ipc::commands::get_settings,
             ipc::commands::save_settings,
             ipc::commands::test_provider_connection,
+            ipc::commands::seed_stress_500,
         ]);
 
     if let Err(err) = builder.run(tauri::generate_context!()) {

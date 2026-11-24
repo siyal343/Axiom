@@ -1,6 +1,7 @@
 pub mod json_io;
 pub mod migrations;
 pub mod queries;
+pub mod stress;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

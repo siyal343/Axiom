@@ -79,12 +79,15 @@ When `Hold V` activates `xrayState`, `XrayHud` in `src/overlays/XrayHud.tsx` mou
 
 `CommandPalette` (`src/overlays/CommandPalette.tsx`) and `ToastStack` (`src/overlays/ToastStack.tsx`) provide search navigation and non-blocking feedback.
 
-### Command Palette search and jump
+### Command Palette search, actions, and Perf HUD
 
-Opening **Command Palette** (`Cmd/Ctrl+K`) focuses the search input, exposes five toggleable filter chips (`status:active`, `type:loophole`, `severity:critical`, `pinned:true`, `excluded:true`), and debounces queries by `60` ms:
+Opening **Command Palette** (`Cmd/Ctrl+K`) focuses the search input, provides a **> Commands** mode toggle alongside five node-filter chips (`status:active`, `type:loophole`, `severity:critical`, `pinned:true`, `excluded:true`), and supports two modes:
 
-- **Tauri search and local fallback:** Queries Rust `searchNodes(query, 30)` when running inside Tauri, falling back to `searchNodesLocally` (which evaluates structured filters and case-insensitive substring matches sorted by severity and `updated_at`) in browser environments or on IPC errors.
-- **Keyboard selection and camera glide:** Pressing `ArrowDown` or `ArrowUp` cycles through matching hits. Pressing `Enter` or clicking a hit closes **Command Palette**, selects that node, and animates the camera (`220` ms, zoom clamped to at least `0.85x`) to center the card. Pressing `Escape` or clicking the backdrop closes the dialog.
+- **Node search mode (default):** Debounces queries by `60` ms and calls Rust `searchNodes(query, 30)` when running inside Tauri, falling back to `searchNodesLocally` in browser environments or on IPC errors. Pressing `ArrowDown` or `ArrowUp` cycles through hits; pressing `Enter` or clicking a hit closes **Command Palette**, selects that node, and animates the camera (`220` ms, zoom clamped to at least `0.85x`) to center the card.
+- **Action mode:** Activated by entering `>` or clicking **> Commands**; filters workspace, appearance, preference, and diagnostic commands with substring and fuzzy subsequence matching: **> Export JSON**, **> Import JSON**, **> Open Workspace**, **> New Workspace**, **> Toggle Theme**, **> Settings**, **> Toggle Perf HUD**, and dev-only **> Seed Stress 500** (`import.meta.env.DEV`).
+- **Performance HUD (`PerfHud`):** Toggled from **> Toggle Perf HUD** (or opened automatically when seeding the dev stress graph), `src/overlays/PerfHud.tsx` polls `globalFrameTracker.getStats()` every `250` ms to display live **FPS**, **p95 draw**, **Graph** counts, **DOM cards**, and **LOD** state without writing signals inside the render loop.
+
+Pressing `Escape` or clicking the backdrop closes **Command Palette**.
 
 ### Ephemeral toast stack and floating action pills
 

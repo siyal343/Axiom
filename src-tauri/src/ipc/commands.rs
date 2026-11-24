@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 use tokio_util::sync::CancellationToken;
 
@@ -29,8 +30,14 @@ pub fn open_workspace(
     let path_str = resolved_path.to_string_lossy().into_owned();
 
     let mut conn = db::open_connection(&resolved_path)?;
-    let snapshot = db::hydrate_or_seed_workspace(&mut conn, &path_str)?;
-    let engine = GraphEngine::from_snapshot(&snapshot.nodes, &snapshot.edges);
+    let mut snapshot = db::hydrate_or_seed_workspace(&mut conn, &path_str)?;
+    let mut engine = GraphEngine::from_snapshot(&snapshot.nodes, &snapshot.edges);
+
+    if (cfg!(debug_assertions) || cfg!(test))
+        && state.seed_stress_on_open.swap(false, Ordering::SeqCst)
+    {
+        snapshot = db::stress::seed_stress_500_into_workspace(&mut conn, &mut engine, &path_str)?;
+    }
 
     // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
     let mut workspace_guard = state
@@ -375,4 +382,35 @@ pub async fn test_provider_connection(
 ) -> Result<TestConnectionResult, IpcError> {
     let (config, api_key) = state.settings.tier_config_and_key(&tier)?;
     Ok(ai::provider::test_connection(&state.http_client, &config, api_key).await)
+}
+
+#[tauri::command]
+pub fn seed_stress_500(state: tauri::State<'_, AppState>) -> Result<WorkspaceSnapshot, IpcError> {
+    if !cfg!(debug_assertions) && !cfg!(test) {
+        return Err(IpcError::validation(
+            "Stress generator is only available in development builds",
+        ));
+    }
+
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let mut workspace_guard = state
+        .workspace
+        .write()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    let snapshot =
+        db::stress::seed_stress_500_into_workspace(conn, &mut active.engine, &active.path)?;
+    active.token_budget = snapshot.token_budget;
+    Ok(snapshot)
 }
