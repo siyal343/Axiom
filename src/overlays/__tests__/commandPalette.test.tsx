@@ -14,9 +14,16 @@ import { CommandPalette } from "../CommandPalette";
 import { PerfHud } from "../PerfHud";
 
 async function flushUi(): Promise<void> {
+  await Promise.resolve();
+  if (typeof requestAnimationFrame === "function") {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  }
   await new Promise<void>((resolve) => {
-    setTimeout(resolve, 20);
+    setTimeout(resolve, 40);
   });
+  await Promise.resolve();
 }
 
 describe("CommandPalette > Action Mode & PerfHud", () => {

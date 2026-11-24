@@ -276,10 +276,11 @@ export function CommandPalette() {
 
   useEffect(() => {
     if (!isOpen) {
+      setQuery("");
+      setHits([]);
+      setActiveIndex(0);
       return;
     }
-    setQuery("");
-    setActiveIndex(0);
     queueMicrotask(() => {
       inputRef.current?.focus();
     });
@@ -326,6 +327,8 @@ export function CommandPalette() {
   }
 
   const jumpToHit = (hit: SearchHit): void => {
+    setQuery("");
+    setActiveIndex(0);
     closeCommandPalette();
     selectSingle(hit.id);
 
@@ -352,6 +355,8 @@ export function CommandPalette() {
   };
 
   const executeCommand = (cmd: PaletteCommand): void => {
+    setQuery("");
+    setActiveIndex(0);
     closeCommandPalette();
     cmd.run();
   };
