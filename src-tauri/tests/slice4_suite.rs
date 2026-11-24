@@ -781,3 +781,41 @@ fn settings_store_never_writes_api_keys_to_json() {
     assert_eq!(reloaded.utility.provider, ProviderKind::Ollama);
     assert_eq!(reloaded.default_token_budget, 8000);
 }
+
+#[test]
+fn spawn_summarizer_worker_works_outside_tokio_runtime() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let settings = Arc::new(SettingsStore::with_config_path(
+        dir.path().join("settings.json"),
+        false,
+    ));
+    let fx = setup_workspace(vec![make_focus_node(
+        "n_sync",
+        "Sync Test",
+        "Short note under 160 chars.",
+        0.0,
+        0.0,
+    )]);
+
+    let (summary_tx, summary_rx) = mpsc::unbounded_channel();
+    let (evt_tx, evt_rx) = std::sync::mpsc::channel::<SummaryUpdatedEvent>();
+    let _worker = spawn_summarizer_worker(
+        summary_rx,
+        fx.ws.clone(),
+        fx.db.clone(),
+        reqwest::Client::new(),
+        settings,
+        Duration::from_millis(30),
+        move |evt| {
+            let _ = evt_tx.send(evt);
+        },
+    );
+
+    summary_tx.send("n_sync".to_owned()).expect("send n_sync");
+    let evt = evt_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive summary event outside tokio runtime");
+    assert_eq!(evt.node_id, "n_sync");
+    assert_eq!(evt.summary, "Short note under 160 chars.");
+    drop(summary_tx);
+}

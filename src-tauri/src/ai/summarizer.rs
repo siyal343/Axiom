@@ -22,11 +22,11 @@ pub fn spawn_summarizer_worker<F>(
     settings: Arc<SettingsStore>,
     debounce: Duration,
     emit_event: F,
-) -> tokio::task::JoinHandle<()>
+) -> tauri::async_runtime::JoinHandle<()>
 where
     F: Fn(SummaryUpdatedEvent) + Send + Sync + 'static,
 {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let mut pending: HashMap<String, Instant> = HashMap::new();
 
         loop {
