@@ -1,8 +1,8 @@
-// @vitest-environment happy-dom
+// @vitest-environment jsdom
 import { render } from "preact";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { NodeDto } from "../../ipc/types";
-import { isBirdsEye, loadSnapshot } from "../../store/graphStore";
+import { isBirdsEye, loadSnapshot, visibleNodeIds } from "../../store/graphStore";
 import { enterEditMode, exitEditMode, modalState } from "../../store/selection";
 import { CardLayer } from "../CardLayer";
 import { LiveEditorOverlay } from "../LiveEditorOverlay";
@@ -46,10 +46,51 @@ async function flushDom(): Promise<void> {
   });
 }
 
+function ensureJsdomCodeMirrorShims(): void {
+  if (typeof Range !== "undefined") {
+    if (typeof Range.prototype.getClientRects !== "function") {
+      Range.prototype.getClientRects = (): DOMRectList =>
+        Object.assign([] as DOMRect[], {
+          item: (): DOMRect | null => null,
+        });
+    }
+    if (typeof Range.prototype.getBoundingClientRect !== "function") {
+      Range.prototype.getBoundingClientRect = (): DOMRect =>
+        ({
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          toJSON: (): Record<string, number> => ({
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+          }),
+        }) as DOMRect;
+    }
+  }
+  if (
+    typeof HTMLElement !== "undefined" &&
+    typeof HTMLElement.prototype.scrollIntoView !== "function"
+  ) {
+    HTMLElement.prototype.scrollIntoView = (): void => {};
+  }
+}
+
 describe("Slice 2 architectural invariants: One Live Editor & LOD cutoff", () => {
   let container: HTMLDivElement;
 
   beforeEach(() => {
+    ensureJsdomCodeMirrorShims();
     container = document.createElement("div");
     document.body.appendChild(container);
     exitEditMode();
@@ -74,8 +115,6 @@ describe("Slice 2 architectural invariants: One Live Editor & LOD cutoff", () =>
       camera: { x: 0, y: 0, zoom: 1.0, last_focus_id: "node_active" },
       token_budget: 6000,
     });
-    // Ensure visibleNodeIds contains loaded nodes in unit test without full Canvas ResizeObserver
-    const { visibleNodeIds } = await import("../../store/graphStore");
     visibleNodeIds.value = ["node_active", "node_locked"];
 
     render(

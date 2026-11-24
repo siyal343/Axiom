@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearMarkdownCache,
@@ -33,19 +33,22 @@ describe("UT-TS-02: markdownCache KaTeX, highlighting, LRU & DOMPurify XSS sanit
     expect(html).toContain("<code>$not_math$</code>");
   });
 
-  it("strips <script>, onerror=, and javascript: XSS vectors via DOMPurify", () => {
-    const malicious = [
+  it("strips <script>, onerror=, onclick=, and javascript: XSS vectors via DOMPurify", () => {
+    const rawHtmlXss = [
       '<script>window.__xss = 1;</script>',
       '<img src="x" onerror="alert(1)">',
-      '[click me](javascript:alert(1))',
-      '<a href="javascript:void(0)" onclick="alert(2)">link</a>',
+      '<a href="javascript:alert(1)" onclick="alert(2)">link</a>',
     ].join("\n\n");
 
-    const sanitized = renderMarkdownToSanitizedHtml(malicious);
+    const sanitized = renderMarkdownToSanitizedHtml(rawHtmlXss);
     expect(sanitized.toLowerCase()).not.toContain("<script");
     expect(sanitized.toLowerCase()).not.toContain("onerror");
     expect(sanitized.toLowerCase()).not.toContain("onclick");
     expect(sanitized.toLowerCase()).not.toContain("javascript:");
+
+    const mdJavascriptLink = renderMarkdownToSanitizedHtml("[click me](javascript:alert(1))");
+    expect(mdJavascriptLink.toLowerCase()).not.toContain("<a");
+    expect(mdJavascriptLink.toLowerCase()).not.toContain("href=");
   });
 
   it("caches rendered HTML by content_hash and enforces 600-entry LRU bound", () => {
