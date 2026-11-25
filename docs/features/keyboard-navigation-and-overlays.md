@@ -49,6 +49,7 @@ Sibling lists and child candidates in `src/input/topologyNav.ts` sort determinis
 | Shortcut | Action |
 | --- | --- |
 | `T` | Invokes Rust `tidy_subtree` on the focused node, updates card positions (`applyTidyPositions`), and records a `move_nodes` undo entry |
+| `G` | Wraps `2` or more selected nodes into a named color-coded spatial group (`createCanvasGroup`) and opens `.group-inspector-pill` |
 | `F` | Animates (`220` ms) the camera to fit the focused subtree with `80` px padding (`computeFitTransform`) |
 | `F` then `F` (within `500` ms) | Animates (`220` ms) the camera to fit every node in the workspace |
 | Hold `V` | Calls `compile_xray` on selected or focused nodes (`compileXray` with local fallback outside Tauri) to highlight Context X-Ray halos and display `XrayHud`; releasing `V` or blurring the window clears `xrayState` |
@@ -58,6 +59,7 @@ Sibling lists and child candidates in `src/input/topologyNav.ts` sort determinis
 | `Cmd/Ctrl+=` or `Cmd/Ctrl++` | Zooms in by `1.15x` anchored at the viewport center (`zoomByStep(1.15)`) |
 | `Cmd/Ctrl+-` or `Cmd/Ctrl+_` | Zooms out by `1 / 1.15` anchored at the viewport center (`zoomByStep(1 / 1.15)`) |
 | `Cmd/Ctrl+0` | Resets camera zoom to `100%` (`1.0x`) anchored at the viewport center (`resetZoom`) |
+| `Shift+Q` | Toggles **Study & Recall Studio** (`StudyDeckModal`) and syncs due flashcards from the active flow |
 | `?` | Toggles **Keyboard Shortcuts** (`ShortcutsModal` in `src/overlays/ShortcutsModal.tsx`) |
 | `Cmd/Ctrl+K` | Opens **Command Palette** (`openCommandPalette`) |
 | `Cmd/Ctrl+,` | Opens **Settings** (`openSettingsModal`) |
@@ -74,8 +76,8 @@ When `Hold V` activates `xrayState`, `XrayHud` in `src/overlays/XrayHud.tsx` mou
 
 `UndoRedoHistory` in `src/store/history.ts` maintains a ring buffer with `HISTORY_CAPACITY = 100`, exposed through the `graphHistory` singleton and reactive `canUndoSignal` and `canRedoSignal` flags.
 
-- **Forward and inverse pairs:** Every `HistoryEntry` stores paired `forward` and `inverse` `GraphOp` arrays built by `buildCreateNodeWithInverse`, `buildUpdateTextWithInverse`, `buildUpdateMetaWithInverse`, `buildMoveNodesWithInverse`, and `buildDeleteWithInverse`.
-- **Cascade-deleted edge restoration:** When deleting nodes, `buildDeleteWithInverse` snapshots full `NodeDto` records and all incident `EdgeDto` records from `edgesMap` so undoing a deletion recreates both nodes and edges atomically.
+- **Forward and inverse pairs:** Every `HistoryEntry` stores paired `forward` and `inverse` `GraphOp` arrays built by `buildCreateNodeWithInverse`, `buildUpdateTextWithInverse`, `buildUpdateMetaWithInverse`, `buildMoveNodesWithInverse`, `buildDeleteWithInverse`, `buildCreateGroupWithInverse`, `buildUpdateGroupWithInverse`, and `buildDeleteGroupWithInverse`.
+- **Cascade-deleted edge and group membership restoration:** When deleting nodes, `buildDeleteWithInverse` snapshots full `NodeDto` records, all incident `EdgeDto` records from `edgesMap`, and `restoreGroupOps` (`update_group` member lists for affected groups in `groupsMap`) so undoing a deletion recreates nodes, edges, and group membership atomically.
 - **Loophole resolution tracking:** `spawnChild` and `handleConnectEdge` record the target loophole's prior status in the inverse patch when creating a `resolves` edge, so undoing the creation restores the loophole's previous status.
 - **Branch truncation and failure recovery:** Pushing an entry after one or more undos discards the forward redo tail. If `performUndo` encounters an IPC or database error, it restores the entry onto `graphHistory` before rethrowing. Loading a workspace (`loadSnapshot`) clears the history buffer.
 
@@ -89,7 +91,7 @@ Opening **Command Palette** (`Cmd/Ctrl+K`, `aria-modal="true"`) focuses the sear
 
 - **Quick Actions (empty query with zero node hits):** When the search input is empty and returns zero node hits, displays **Quick Actions** (`QUICK_ACTION_IDS`: **> Open Workspace**, **> New Workspace**, **> Toggle Theme**, **> Settings**, and **> Toggle Perf HUD**) so you can run workspace actions directly.
 - **Node search mode:** Debounces non-empty queries by `60` ms and calls Rust `searchNodes(query, 30)` when running inside Tauri, falling back to `searchNodesLocally` in browser environments or on IPC errors. Pressing `ArrowDown` or `ArrowUp` cycles through hits; pressing `Enter` or clicking a hit closes **Command Palette**, selects that node, and animates the camera (`220` ms, zoom clamped to at least `0.85x`) to center the card.
-- **Action mode:** Activated by entering `>` or clicking **> Commands**; filters workspace, appearance, preference, and diagnostic commands with substring and fuzzy subsequence matching: **> Export JSON**, **> Import JSON**, **> Open Workspace**, **> New Workspace**, **> Toggle Theme**, **> Settings**, **> Toggle Perf HUD**, and dev-only **> Seed Stress 500** (`import.meta.env.DEV`).
+- **Action mode:** Activated by entering `>` or clicking **> Commands**; filters workspace, appearance, preference, and diagnostic commands with substring and fuzzy subsequence matching: **> Export JSON**, **> Import JSON**, **> Open Workspace**, **> New Workspace**, **> Toggle Theme**, **> Settings**, **> Toggle Perf HUD**, **> Study & Recall Drill (Shift+Q)**, **> Group Selected Nodes (G)**, and dev-only **> Seed Stress 500** (`import.meta.env.DEV`).
 - **Performance HUD (`PerfHud`):** Toggled from **> Toggle Perf HUD** (or opened automatically when seeding the dev stress graph), `src/overlays/PerfHud.tsx` polls `globalFrameTracker.getStats()` every `250` ms to display live **FPS**, **p95 draw**, **Graph** counts, **DOM cards**, and **LOD** state without writing signals inside the render loop.
 
 Pressing `Escape` or clicking the backdrop closes **Command Palette**.
@@ -104,7 +106,16 @@ Pressing `?` in Navigate Mode (or clicking **Keyboard shortcuts** in the bottom-
 
 `src/App.tsx` also renders persistent and contextual canvas controls in Navigate Mode:
 
-- **Bottom-left canvas controls (`.canvas-controls`):** Provides **Zoom out** (`−`), a live zoom percentage readout button (**Reset zoom to 100%**) updated directly through `subscribeFrame` without Preact re-renders, **Zoom in** (`+`), and **Keyboard shortcuts** (`?`).
+- **Bottom-left canvas controls (`.canvas-controls`):** Provides **Zoom out** (`−`), a live zoom percentage readout button (**Reset zoom to 100%**) updated directly through `subscribeFrame` without Preact re-renders, **Zoom in** (`+`), **Study** (opening `StudyDeckModal` with a live `.study-due-pill` badge when `dueStudyCount > 0`), and **Keyboard shortcuts** (`?`).
 - **Empty-canvas onboarding prompt (`.empty-canvas-prompt`):** Appears centered on the canvas when `nodesMap.size === 0` in `"navigate"` mode, summarizing `N`, `Ctrl+K`, and `?` shortcuts alongside a **+ New Node** button that creates and opens a `core` card at the viewport center.
-- **Multi-select synthesis pill:** When two or more cards are selected outside Bird's-Eye LOD and active pointer drags, clicking **Synthesize (A S)** invokes `triggerLens("synthesize")`.
+- **Multi-select synthesis and group pill (`.multi-select-pill`):** When two or more cards are selected outside Bird's-Eye LOD and active pointer drags, provides **Synthesize (A S)** (`triggerLens("synthesize")`), **Group (G)** (`createCanvasGroup`), bulk **Pin (P)** / **Exclude (X)** / **Fold (C)** / **Fit (F)**, alignment controls, and **Delete**.
+- **Spatial group inspector pill (`.group-inspector-pill`):** Appears when `selectedGroupId` is active outside drags and Bird's-Eye LOD, offering inline title editing, six color swatches (`cobalt`, `emerald`, `amber`, `rose`, `violet`, `slate`), **Add / Sync Selection** (when `selectedIds` differs from `member_ids`), and **Ungroup**.
 - **Red-Team loophole triage pill:** When a `red_team` run completes and auto-focuses the first spawned loophole, `.triage-hint-pill` displays `Triage: J/K step · R resolve · Tab fix · Backspace dismiss` for `8000` ms (dismissible early with `Escape`).
+
+## Study & Recall Studio (`StudyDeckModal`) and Context Menu Actions
+
+`StudyDeckModal` (`src/overlays/StudyDeckModal.tsx`, `Shift+Q`) renders as a native `<dialog class="study-dialog" closedby="any" aria-labelledby="study-dialog-title">` (with a pointer-outside light-dismiss fallback when `closedBy` is absent on `HTMLDialogElement.prototype`):
+
+- **Scopes and manual authoring:** Switches between **Due Now** (`due`), **Current Flow** (`flow`), and **Focused Subtree** (`subtree`), and provides an inline **+ New Card** form linked to `studyFocusNodeId` (or standalone when no node is focused).
+- **Keyboard-first recall loop:** Renders Markdown, code blocks, and KaTeX math via `renderMarkdownToSanitizedHtml`. Press `Space` or `Enter` to reveal the answer, `1`–`4` to grade (`Again`, `Hard`, `Good`, `Easy`) with SM-2 interval previews (`formatIntervalPreview`), `J` to jump to the source node (`clampZoom(Math.max(cam.zoom, 0.85))`), or `Esc` to close.
+- **`NodeContextMenu` integration:** Right-clicking any node offers **Add Study Card** (opens `StudyDeckModal` in `flow` scope with the create form focused on that node) and **Study Deck (`Shift+Q`)**.

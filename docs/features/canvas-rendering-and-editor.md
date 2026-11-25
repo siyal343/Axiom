@@ -6,9 +6,16 @@ Axiom renders the infinite workspace using a three-layer pipeline designed to ke
 
 `src/App.tsx` mounts three stacked layers inside `.axiom-canvas-shell`:
 
-1. **Layer 1 — Full-viewport Canvas2D (`.canvas-layer`):** Drawn by `renderCanvas2d` in `src/canvas/renderer2d.ts` with device-pixel-ratio scaling. Renders the background fill, procedural dot grid (base `24` px world step that doubles when screen spacing drops under `10` px and fades out under `0.50x` zoom), dynamic 4-side cubic Bezier edges with obstacle deflection, animated directional connection pulses, `Hold V` X-Ray halos, Bird's-Eye level-of-detail (LOD) cards under `0.45x` zoom, marquee box-select rectangles, and live `Alt+Drag` edge previews.
+1. **Layer 1 — Full-viewport Canvas2D (`.canvas-layer`):** Drawn by `renderCanvas2d` in `src/canvas/renderer2d.ts` with device-pixel-ratio scaling. Renders the background fill, procedural dot grid (base `24` px world step that doubles when screen spacing drops under `10` px and fades out under `0.50x` zoom), spatial canvas groups (skipped in `O(1)` when `groups` is empty), dynamic 4-side cubic Bezier edges with obstacle deflection, animated directional connection pulses, `Hold V` X-Ray halos, Bird's-Eye level-of-detail (LOD) cards under `0.45x` zoom, marquee box-select rectangles, and live `Alt+Drag` edge previews.
+
+### Theme palette synchronization and spatial canvas groups
+
+`src/canvas/renderer2d.ts` and `src/store/graphStore.ts` keep Canvas2D colors synchronized with CSS custom properties in `src/styles/theme.css`:
+
+- **Live `data-theme` synchronization (`getPalette` & `setTheme`):** `setTheme(nextTheme)` updates `theme.value`, sets `document.documentElement.setAttribute("data-theme", nextTheme)` synchronously, and marks the camera dirty. Before returning a cached `ThemePalette`, `getPalette(themeKey)` verifies `document.documentElement.getAttribute("data-theme") === themeKey`; on any mismatch it sets `data-theme` immediately and refreshes the CSS variable cache via `getComputedStyle(document.documentElement)`. `src/styles/theme.css` declares `color-scheme: dark;` on `:root, [data-theme="dark"]` and `color-scheme: light;` on `[data-theme="light"]`, alongside six `--group-*` accent variables (`cobalt`, `emerald`, `amber`, `rose`, `violet`, `slate`).
+- **Spatial group pass (`computeGroupBounds` & `hitTestGroupHeader`):** When `groups` is non-empty (`O(1)` skip otherwise), `renderCanvas2d` computes each group's live bounding box with `computeGroupBounds(group, sceneRects)` (`GROUP_PADDING = 26`, `GROUP_TOP_HEADER = 38`, `headerH = 26`, respecting active `dragOffsets` and `resizeSizes`), culls off-screen groups, draws the tinted dashed/solid region, and draws the `<title> · <memberCount>` header chip whenever `cam.zoom >= 0.2`. `hitTestGroupHeader(scenePoint, groups, sceneRects, zoom)` tests headers in reverse paint order for hover cursors and click/drag selection.
 2. **Layer 2 — GPU-transformed static cards (`CardLayer` in `src/cards/CardLayer.tsx`):** Positions `.card-layer` with `transform: translate3d(x, y, 0) scale(zoom)` (`transform-origin: 0 0`) and renders only the viewport-culled `NodeCard` elements listed in `visibleNodeIds`.
-3. **Layer 3 — Single live editor and ephemeral pills:** `LiveEditorOverlay` (`src/cards/LiveEditorOverlay.tsx`) mounts when `modalState` equals `"edit"`, accompanied by `.node-context-menu`, `.workspace-sidebar`, `.multi-select-pill`, and `.edge-popover` controls.
+3. **Layer 3 — Single live editor and ephemeral pills:** `LiveEditorOverlay` (`src/cards/LiveEditorOverlay.tsx`) mounts when `modalState` equals `"edit"`, accompanied by `.node-context-menu`, `.workspace-sidebar`, `.multi-select-pill`, `.group-inspector-pill`, and `.edge-popover` controls.
 
 ### Dynamic edge routing and visual emphasis
 
@@ -60,6 +67,7 @@ Mutable graph collections (`nodesMap`, `edgesMap`, `cardDomRefs`, and `dragOffse
 | Click card | Single-selects the card (`selectSingle`) |
 | `Shift+Click` card | Toggles the card in multi-selection (`toggleSelect`) |
 | Drag card past `4` px (`DRAG_THRESHOLD_PX`) | Multi-drags all selected cards, snaps the primary card delta to a `12` px grid (`GRID_SNAP_PX`, hold `Alt` to bypass), updates `dragOffsets` and direct DOM `style.transform` at 60 FPS, commits one undoable `move_nodes` batch, and runs `resolveAndAnimateOverlaps` |
+| Hover or drag spatial group header (`hitTestGroupHeader`) | Shows `grab` cursor on hover; clicking selects all live group members and sets `selectedGroupId`, and dragging past `4` px moves all member cards at 60–120 FPS via `dragOffsets` and direct DOM transforms without Preact re-renders, committing one `"Move group"` undoable `move_nodes` batch |
 | Drag `[data-resize-handle]` (`e`, `s`, or `se`) | Resizes card width (`220`–`960` px) and height (`112`–`1200` px) with `12` px grid snapping (`Alt` bypasses), updates `resizeSizes` and DOM styles directly without Preact re-renders, commits `resize_nodes` with `buildResizeNodesWithInverse`, and runs `resolveAndAnimateOverlaps` |
 | Drag empty canvas past `4` px | Draws a marquee selection box (`overlay.marqueeWorld`) and selects intersecting cards using `viewportSpatialIndex.queryRect` on release |
 | Click empty canvas | Clears selection (unless `Shift` is held) |
@@ -69,7 +77,7 @@ Mutable graph collections (`nodesMap`, `edgesMap`, `cardDomRefs`, and `dragOffse
 
 Right-clicking any card in Navigate Mode opens `.node-context-menu` with keyboard navigation (`ArrowUp`, `ArrowDown`, `Home`, `End`, `Escape`) and groups actions into four categories:
 
-- **Card edits:** **Edit**, **Copy Text**, **Duplicate** (creates a user-owned copy nearby and resolves overlaps), and **Add Child**.
+- **Card edits:** **Edit**, **Copy Text**, **Duplicate** (creates a user-owned copy nearby and resolves overlaps), **Add Child**, **Add Study Card**, and **Study Deck** (`Shift+Q`).
 - **Node mode toggles:** **Pin Global** / **Unpin Global**, **Exclude from AI** / **Include in AI**, **Fold** / **Unfold**, **Lock** / **Unlock**, **Tidy Subtree**, plus **Resolve Loophole** / **Reopen Loophole** and **Dismiss Loophole** / **Restore Loophole** on loophole cards.
 - **Action tags:** All nine `@tag` actions (`@custom`, `@feynman`, `@redteam`, `@edgecase`, `@diverge`, `@synthesize`, `@research`, `@study`, `@triage`).
 - **Removal:** **Delete** (`Del`).

@@ -288,7 +288,7 @@ pub fn compile_context(
     if !global_pins.is_empty() {
         let body = global_pins
             .iter()
-            .map(|n| format!("### {}\n{}", n.title, n.content))
+            .map(|n| format!("### {}{}\n{}", n.title, group_annotation(engine, &n.id), n.content))
             .collect::<Vec<_>>()
             .join("\n\n");
         sections.push(format!("[GLOBAL CONSTRAINTS]\n{body}"));
@@ -299,10 +299,11 @@ pub fn compile_context(
             .iter()
             .map(|n| {
                 let is_full = *anc_full_mode.get(n.id.as_str()).unwrap_or(&false);
+                let grp = group_annotation(engine, &n.id);
                 if is_full || n.summary.is_empty() {
-                    format!("### {}\n{}", n.title, n.content)
+                    format!("### {}{}\n{}", n.title, grp, n.content)
                 } else {
-                    format!("### {} (summary)\n{}", n.title, n.summary)
+                    format!("### {} (summary){}\n{}", n.title, grp, n.summary)
                 }
             })
             .collect::<Vec<_>>()
@@ -330,14 +331,16 @@ pub fn compile_context(
                     .unwrap_or_default();
                 relations.sort_unstable();
                 relations.dedup();
+                let grp = group_annotation(engine, &n.id);
                 if relations.is_empty() {
-                    format!("### {} [{:?}]\n{}", n.title, n.node_type, n.content)
+                    format!("### {} [{:?}]{}\n{}", n.title, n.node_type, grp, n.content)
                 } else {
                     format!(
-                        "### {} [{:?} · {}]\n{}",
+                        "### {} [{:?} · {}]{}\n{}",
                         n.title,
                         n.node_type,
                         relations.join(", "),
+                        grp,
                         n.content
                     )
                 }
@@ -353,11 +356,13 @@ pub fn compile_context(
             .map(|(lh, targets)| {
                 let sev = format!("{:?}", lh.metadata.severity.unwrap_or(Severity::Medium))
                     .to_uppercase();
+                let grp = group_annotation(engine, &lh.id);
                 format!(
-                    "### [{}] {} (challenges: {})\n{}",
+                    "### [{}] {} (challenges: {}){}\n{}",
                     sev,
                     lh.title,
                     targets.join(", "),
+                    grp,
                     lh.content
                 )
             })
@@ -375,7 +380,7 @@ pub fn compile_context(
                     EdgeWeight::Summary if !n.summary.is_empty() => &n.summary,
                     EdgeWeight::Summary => &n.content,
                 };
-                format!("### {}\n{}", n.title, text)
+                format!("### {}{}\n{}", n.title, group_annotation(engine, &n.id), text)
             })
             .collect::<Vec<_>>()
             .join("\n\n");
@@ -384,7 +389,15 @@ pub fn compile_context(
 
     let focus_body = focus_nodes
         .iter()
-        .map(|n| format!("### {} [{:?}]\n{}", n.title, n.node_type, n.content))
+        .map(|n| {
+            format!(
+                "### {} [{:?}]{}\n{}",
+                n.title,
+                n.node_type,
+                group_annotation(engine, &n.id),
+                n.content
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n\n");
     sections.push(format!("[FOCUS NODE]\n{focus_body}"));
@@ -483,6 +496,24 @@ pub(crate) fn kahn_topo_sort_cycle_safe(
     }
 
     result
+}
+
+fn group_annotation(engine: &GraphEngine, node_id: &str) -> String {
+    if engine.groups.is_empty() {
+        return String::new();
+    }
+    let mut titles: Vec<&str> = engine
+        .groups
+        .values()
+        .filter(|g| g.member_ids.iter().any(|mid| mid == node_id))
+        .map(|g| g.title.as_str())
+        .collect();
+    if titles.is_empty() {
+        return String::new();
+    }
+    titles.sort_unstable();
+    titles.dedup();
+    format!(" [GROUP: {}]", titles.join(", "))
 }
 
 fn severity_rank(s: Option<Severity>) -> u8 {

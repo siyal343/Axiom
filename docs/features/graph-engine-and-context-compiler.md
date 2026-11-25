@@ -115,7 +115,31 @@ Both the `compile_xray` IPC command and `compile_context` in `src-tauri/src/grap
    5. `[REFERENCED CONTEXT]`
    6. `[FOCUS NODE]`
 
+   For every included node, `group_annotation` checks `engine.groups` and appends ` [GROUP: <Title1>, <Title2>]` (sorted and deduplicated) to the node's Markdown heading so both `compile_xray` (`Hold V`) and `run_lens` share spatial group context.
+
 `compile_context` returns both the compiled `prompt_text` and a `CompiledXray` payload (`total_tokens`, `budget_tokens`, `node_modes`, and sorted `active_edges`).
+
+## Spatial canvas groups
+
+`GraphEngine` (`src-tauri/src/graph/mod.rs`) maintains `groups: HashMap<String, CanvasGroupDto>` alongside `nodes` and `edges`. Each `CanvasGroupDto` in `src-tauri/src/graph/models.rs` stores `id`, `title`, `color_key`, `member_ids`, `collapsed`, `created_at`, and `updated_at`.
+
+- **Group `GraphOp` variants:** `CreateGroup { id, title, color_key, member_ids }`, `UpdateGroup { id, title, color_key, member_ids, collapsed }`, and `DeleteGroup { id }` execute atomically through `apply_ops` (`src-tauri/src/db/queries.rs`) and update `GraphEngine::upsert_group` / `GraphEngine::remove_group` only after commit.
+- **Automatic member pruning:** When `GraphEngine::remove_node` or `GraphOp::DeleteNodes` removes a node, its ID is automatically retained out of `member_ids` across all groups.
+
+## Spaced-repetition study engine (`graph::study`)
+
+`src-tauri/src/graph/study.rs` implements candidate extraction from the live graph and SM-2 spaced-repetition scheduling over `StudyCardDto` (`StudyCardKind`: `qa`, `feynman`, `loophole`, `manual`; `StudyRating`: `again`, `hard`, `good`, `easy`).
+
+- **Candidate extraction (`extract_study_candidates`):** Iterates `engine.all_nodes_sorted()`, skipping `NodeStatus::Dismissed` nodes and placeholder content (`""`, `"thinking..."`, `"thinking…"`, `"..."`, `"todo"`):
+  - **`qa`:** Matches nodes tagged `@study` or with `metadata.lens == NodeLensOrigin::Study`. `parse_qa_blocks` parses explicit `Q:`/`A:` or `Question:`/`Answer:` blocks (including bold/underline Markdown and inline `— A:` forms, numbering multi-pair quizzes) and falls back to `(title, content)` when `title` is non-empty.
+  - **`feynman`:** Matches nodes tagged `@feynman` or with `metadata.lens == NodeLensOrigin::Feynman` whose `content` has at least `15` characters and non-placeholder `title`, prompting `"Explain from first principles: <title>"`.
+  - **`loophole`:** For any node with non-empty `title`, collects incoming `challenges` edges from `active` loopholes sorted by severity (`critical > high > medium > low`, then `id ASC`), formats up to `3` loopholes via `format_loophole_answer`, and prompts `"What failure mode or loophole threatens \"<title>\"?"`.
+- **Non-destructive deck sync (`sync_study_deck`):** Updates changed `prompt`/`answer` fields on existing `(node_id, card_kind)` rows without resetting SM-2 progress (`repetitions`, `interval_days`, `ease_factor`, `lapses`, `due_at`, `last_reviewed_at`), leaves `manual` cards untouched, inserts newly discovered cards with `due_at = now_ms` and `ease_factor = 2.5`, and removes `loophole` cards whose target node no longer has active challenges.
+- **SM-2 scheduling (`apply_sm2_review`):**
+  - `Again`: `repetitions = 0`, `interval_days = 0`, `lapses += 1`, `ease_factor = (ease_factor - 0.2).max(1.3)`, `due_at = now_ms + 60_000`.
+  - `Hard`: `interval_days = 1` (rep `0`), `3` (rep `1`), or `round(interval_days * 1.2).max(1)` (rep `>= 2`); `repetitions += 1`; `ease_factor = (ease_factor - 0.15).max(1.3)`.
+  - `Good`: `interval_days = 1` (rep `0`), `6` (rep `1`), or `round(interval_days * ease_factor).max(1)` (rep `>= 2`); `repetitions += 1`.
+  - `Easy`: `interval_days = 4` (rep `0`) or `round(interval_days * ease_factor * 1.3).max(1)` (rep `>= 1`); `repetitions += 1`; `ease_factor = (ease_factor + 0.15).min(3.5)`.
 
 ## Full-text and structured node search
 

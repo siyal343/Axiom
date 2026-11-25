@@ -28,6 +28,7 @@ import { notifyIpcError, pushToast } from "../overlays/ToastStack";
 import {
   cameraControllerRef,
   edgesMap,
+  groupsMap,
   loadSnapshot,
   nodesMap,
   tokenBudget,
@@ -257,6 +258,7 @@ function buildCurrentSnapshot(dbPath: string): WorkspaceSnapshot {
     path: dbPath,
     nodes: Array.from(nodesMap.values()),
     edges: Array.from(edgesMap.values()),
+    groups: Array.from(groupsMap.value.values()),
     camera: {
       x: cam.x,
       y: cam.y,
@@ -339,6 +341,7 @@ function loadFlowSnapshotLocal(flow: FlowEntryDto): WorkspaceSnapshot {
           path: typeof parsed.path === "string" ? parsed.path : flow.db_path,
           nodes: parsed.nodes,
           edges: parsed.edges,
+          groups: Array.isArray(parsed.groups) ? parsed.groups : [],
           camera: parsed.camera,
           token_budget: typeof parsed.token_budget === "number" ? parsed.token_budget : 6000,
         };

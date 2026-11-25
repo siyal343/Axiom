@@ -361,6 +361,7 @@ pub fn seed_stress_500_into_workspace(
         .unwrap_or_default();
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute("DELETE FROM canvas_groups", [])?;
     tx.execute("DELETE FROM edges", [])?;
     tx.execute("DELETE FROM nodes", [])?;
 
@@ -392,6 +393,7 @@ pub fn seed_stress_500_into_workspace(
         path: path.to_owned(),
         nodes,
         edges,
+        groups: Vec::new(),
         camera,
         token_budget,
         system_prompt,

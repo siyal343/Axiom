@@ -344,6 +344,17 @@ pub struct EdgeDto {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CanvasGroupDto {
+    pub id: String,
+    pub title: String,
+    pub color_key: String,
+    pub member_ids: Vec<String>,
+    pub collapsed: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraState {
     pub x: f64,
@@ -357,6 +368,8 @@ pub struct WorkspaceSnapshot {
     pub path: String,
     pub nodes: Vec<NodeDto>,
     pub edges: Vec<EdgeDto>,
+    #[serde(default)]
+    pub groups: Vec<CanvasGroupDto>,
     pub camera: CameraState,
     pub token_budget: u32,
     #[serde(default)]
@@ -414,6 +427,22 @@ pub enum GraphOp {
         weight: EdgeWeight,
     },
     DeleteEdge {
+        id: String,
+    },
+    CreateGroup {
+        id: String,
+        title: String,
+        color_key: String,
+        member_ids: Vec<String>,
+    },
+    UpdateGroup {
+        id: String,
+        title: Option<String>,
+        color_key: Option<String>,
+        member_ids: Option<Vec<String>>,
+        collapsed: Option<bool>,
+    },
+    DeleteGroup {
         id: String,
     },
 }
@@ -753,6 +782,68 @@ pub struct CheckpointDiff {
     pub modified_nodes: Vec<CheckpointNodeChange>,
     pub added_edges_count: usize,
     pub removed_edges_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StudyRating {
+    Again,
+    Hard,
+    Good,
+    Easy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StudyCardKind {
+    Qa,
+    Feynman,
+    Loophole,
+    Manual,
+}
+
+impl StudyCardKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Qa => "qa",
+            Self::Feynman => "feynman",
+            Self::Loophole => "loophole",
+            Self::Manual => "manual",
+        }
+    }
+
+    pub fn from_db_str(s: &str) -> Result<Self, IpcError> {
+        match s {
+            "qa" => Ok(Self::Qa),
+            "feynman" => Ok(Self::Feynman),
+            "loophole" => Ok(Self::Loophole),
+            "manual" => Ok(Self::Manual),
+            other => Err(IpcError::db(format!("Invalid study card kind: {other}"))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StudyCardDto {
+    pub id: String,
+    pub node_id: Option<String>,
+    pub prompt: String,
+    pub answer: String,
+    pub card_kind: StudyCardKind,
+    pub repetitions: u32,
+    pub interval_days: i64,
+    pub ease_factor: f64,
+    pub lapses: u32,
+    pub due_at: i64,
+    pub last_reviewed_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StudySyncResult {
+    pub cards: Vec<StudyCardDto>,
+    pub added_count: usize,
 }
 
 pub fn estimate_tokens(text: &str) -> u32 {

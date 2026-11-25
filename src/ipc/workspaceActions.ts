@@ -1,7 +1,7 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { perfHudOpen } from "../canvas/perfMetrics";
 import { notifyIpcError, pushToast } from "../overlays/ToastStack";
-import { loadSnapshot, theme } from "../store/graphStore";
+import { loadSnapshot, setTheme, theme } from "../store/graphStore";
 import {
   exportJson,
   exportMarkdownArtifact,
@@ -313,7 +313,7 @@ export async function runNewWorkspaceAction(): Promise<void> {
 
 export async function runToggleThemeAction(): Promise<void> {
   const nextTheme: "dark" | "light" = theme.value === "dark" ? "light" : "dark";
-  theme.value = nextTheme;
+  setTheme(nextTheme);
   if (isTauriRuntime()) {
     try {
       const current = await getSettings();

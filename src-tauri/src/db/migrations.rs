@@ -10,14 +10,14 @@ PRAGMA busy_timeout = 5000;
 PRAGMA temp_store = MEMORY;
 "#;
 
-const SCHEMA_V3_SQL: &str = r#"
+const SCHEMA_V4_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS workspace_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 
 INSERT OR IGNORE INTO workspace_meta (key, value) VALUES
-    ('schema_version', '3'),
+    ('schema_version', '4'),
     ('system_prompt', ''),
     ('camera_x', '0.0'),
     ('camera_y', '0.0'),
@@ -134,6 +134,37 @@ CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE OF title, content, summary ON
     INSERT INTO nodes_fts(rowid, title, content, summary)
     VALUES (new.rowid, new.title, new.content, new.summary);
 END;
+
+CREATE TABLE IF NOT EXISTS study_cards (
+    id               TEXT PRIMARY KEY NOT NULL,
+    node_id          TEXT,
+    prompt           TEXT NOT NULL,
+    answer           TEXT NOT NULL,
+    card_kind        TEXT NOT NULL DEFAULT 'qa'
+                         CHECK(card_kind IN ('qa','feynman','loophole','manual')),
+    repetitions      INTEGER NOT NULL DEFAULT 0,
+    interval_days    INTEGER NOT NULL DEFAULT 0,
+    ease_factor      REAL NOT NULL DEFAULT 2.5,
+    lapses           INTEGER NOT NULL DEFAULT 0,
+    due_at           INTEGER NOT NULL,
+    last_reviewed_at INTEGER,
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_cards_due_at ON study_cards(due_at);
+CREATE INDEX IF NOT EXISTS idx_study_cards_node_id ON study_cards(node_id);
+
+CREATE TABLE IF NOT EXISTS canvas_groups (
+    id         TEXT PRIMARY KEY NOT NULL,
+    title      TEXT NOT NULL,
+    color_key  TEXT NOT NULL DEFAULT 'cobalt',
+    member_ids TEXT NOT NULL DEFAULT '[]',
+    collapsed  INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 "#;
 
 const MIGRATE_V1_TO_V2_SQL: &str = r#"
@@ -274,6 +305,41 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 INSERT OR REPLACE INTO workspace_meta (key, value) VALUES ('schema_version', '3');
 "#;
 
+const MIGRATE_V3_TO_V4_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS study_cards (
+    id               TEXT PRIMARY KEY NOT NULL,
+    node_id          TEXT,
+    prompt           TEXT NOT NULL,
+    answer           TEXT NOT NULL,
+    card_kind        TEXT NOT NULL DEFAULT 'qa'
+                         CHECK(card_kind IN ('qa','feynman','loophole','manual')),
+    repetitions      INTEGER NOT NULL DEFAULT 0,
+    interval_days    INTEGER NOT NULL DEFAULT 0,
+    ease_factor      REAL NOT NULL DEFAULT 2.5,
+    lapses           INTEGER NOT NULL DEFAULT 0,
+    due_at           INTEGER NOT NULL,
+    last_reviewed_at INTEGER,
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_cards_due_at ON study_cards(due_at);
+CREATE INDEX IF NOT EXISTS idx_study_cards_node_id ON study_cards(node_id);
+
+CREATE TABLE IF NOT EXISTS canvas_groups (
+    id         TEXT PRIMARY KEY NOT NULL,
+    title      TEXT NOT NULL,
+    color_key  TEXT NOT NULL DEFAULT 'cobalt',
+    member_ids TEXT NOT NULL DEFAULT '[]',
+    collapsed  INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+INSERT OR REPLACE INTO workspace_meta (key, value) VALUES ('schema_version', '4');
+"#;
+
 fn migrate_v1_to_v2(conn: &Connection) -> Result<(), IpcError> {
     conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
     let res = (|| -> Result<(), IpcError> {
@@ -301,6 +367,16 @@ fn migrate_v2_to_v3(conn: &Connection) -> Result<(), IpcError> {
     Ok(())
 }
 
+fn migrate_v3_to_v4(conn: &Connection) -> Result<(), IpcError> {
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    if let Err(err) = conn.execute_batch(MIGRATE_V3_TO_V4_SQL) {
+        let _ = conn.execute_batch("ROLLBACK;");
+        return Err(err.into());
+    }
+    conn.execute_batch("COMMIT;")?;
+    Ok(())
+}
+
 pub fn run_migrations(conn: &Connection) -> Result<(), IpcError> {
     conn.execute_batch(CONNECTION_PRAGMAS_SQL)?;
     let nodes_exists: bool = conn.query_row(
@@ -309,7 +385,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), IpcError> {
         |r| r.get(0),
     )?;
     if !nodes_exists {
-        conn.execute_batch(SCHEMA_V3_SQL)?;
+        conn.execute_batch(SCHEMA_V4_SQL)?;
         return Ok(());
     }
 
@@ -328,6 +404,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), IpcError> {
     }
     if version < 3 {
         migrate_v2_to_v3(conn)?;
+        version = 3;
+    }
+    if version < 4 {
+        migrate_v3_to_v4(conn)?;
     }
     Ok(())
 }

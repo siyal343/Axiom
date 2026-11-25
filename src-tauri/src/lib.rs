@@ -88,6 +88,11 @@ pub fn run() {
             ipc::commands::diff_checkpoint,
             ipc::commands::restore_checkpoint,
             ipc::commands::delete_checkpoint,
+            ipc::commands::sync_study_deck,
+            ipc::commands::list_study_cards,
+            ipc::commands::create_study_card,
+            ipc::commands::review_study_card,
+            ipc::commands::delete_study_card,
         ]);
 
     if let Err(err) = builder.run(tauri::generate_context!()) {

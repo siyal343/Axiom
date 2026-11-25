@@ -15,10 +15,12 @@ import {
   duplicateNode,
   edgesMap,
   graphVersion,
+  groupsMap,
   mutateGraphUndoable,
   nodesMap,
   spawnChild,
 } from "../store/graphStore";
+import { openStudyModal } from "../store/studyStore";
 import {
   buildDeleteWithInverse,
   buildMoveNodesWithInverse,
@@ -307,7 +309,12 @@ export function NodeContextMenu() {
   const handleDelete = (): void => {
     closeNodeContextMenu();
     const deleteIds = targetNodes.map((n) => n.id);
-    const { forward, inverse } = buildDeleteWithInverse(deleteIds, nodesMap, edgesMap);
+    const { forward, inverse } = buildDeleteWithInverse(
+      deleteIds,
+      nodesMap,
+      edgesMap,
+      groupsMap.value,
+    );
     if (forward.length > 0) {
       void mutateGraphUndoable(
         isBulkActive ? `Delete ${bulkCount} nodes` : "Delete node",
@@ -315,6 +322,16 @@ export function NodeContextMenu() {
         inverse,
       ).catch(notifyIpcError);
     }
+  };
+
+  const handleAddStudyCard = (): void => {
+    closeNodeContextMenu();
+    void openStudyModal("flow", node.id, { openCreateForm: true }).catch(notifyIpcError);
+  };
+
+  const handleOpenStudyDeck = (): void => {
+    closeNodeContextMenu();
+    void openStudyModal("due", node.id).catch(notifyIpcError);
   };
 
   const handleExportSubgraph = (): void => {
@@ -465,6 +482,23 @@ export function NodeContextMenu() {
         >
           <span>{isSpotlightRoot ? "Exit Focus Spotlight" : "Focus Spotlight"}</span>
           <kbd>Shift+F</kbd>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="node-context-menu__item"
+          onClick={handleAddStudyCard}
+        >
+          <span>Add Study Card</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="node-context-menu__item"
+          onClick={handleOpenStudyDeck}
+        >
+          <span>Study Deck</span>
+          <kbd>Shift+Q</kbd>
         </button>
         {extRefInfo && (
           <>

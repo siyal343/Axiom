@@ -1,5 +1,6 @@
 import { signal } from "@preact/signals";
 import type {
+  CanvasGroupDto,
   EdgeDto,
   GraphOp,
   NodeDto,
@@ -190,6 +191,7 @@ export function buildDeleteWithInverse(
   ids: string[],
   nodes: Map<string, NodeDto>,
   edges: Map<string, EdgeDto>,
+  groups?: Map<string, CanvasGroupDto>,
 ): { forward: GraphOp[]; inverse: GraphOp[] } {
   const uniqueIds: string[] = [];
   const deleteSet = new Set<string>();
@@ -219,11 +221,109 @@ export function buildDeleteWithInverse(
     }
   }
 
+  const restoreGroupOps: GraphOp[] = [];
+  if (groups) {
+    for (const grp of groups.values()) {
+      if (grp.member_ids.some((mid) => deleteSet.has(mid))) {
+        restoreGroupOps.push({
+          op: "update_group",
+          id: grp.id,
+          member_ids: [...grp.member_ids],
+        });
+      }
+    }
+  }
+
   return {
     forward: [{ op: "delete_nodes", ids: uniqueIds }],
     inverse: [
       ...capturedNodes.map((node): GraphOp => ({ op: "create_node", node })),
       ...capturedEdges.map((edge): GraphOp => ({ op: "create_edge", edge })),
+      ...restoreGroupOps,
     ],
+  };
+}
+
+export interface GroupPatch {
+  title?: string | null;
+  color_key?: string | null;
+  member_ids?: string[] | null;
+  collapsed?: boolean | null;
+}
+
+export function buildCreateGroupWithInverse(group: {
+  id: string;
+  title: string;
+  color_key: string;
+  member_ids: string[];
+}): { forward: GraphOp[]; inverse: GraphOp[] } {
+  return {
+    forward: [
+      {
+        op: "create_group",
+        id: group.id,
+        title: group.title,
+        color_key: group.color_key,
+        member_ids: [...group.member_ids],
+      },
+    ],
+    inverse: [{ op: "delete_group", id: group.id }],
+  };
+}
+
+export function buildUpdateGroupWithInverse(
+  prev: CanvasGroupDto,
+  patch: GroupPatch,
+): { forward: GraphOp[]; inverse: GraphOp[] } {
+  const forwardOp: Extract<GraphOp, { op: "update_group" }> = {
+    op: "update_group",
+    id: prev.id,
+    ...patch,
+  };
+  const inverseOp: Extract<GraphOp, { op: "update_group" }> = {
+    op: "update_group",
+    id: prev.id,
+  };
+  if (patch.title !== undefined) {
+    inverseOp.title = prev.title;
+  }
+  if (patch.color_key !== undefined) {
+    inverseOp.color_key = prev.color_key;
+  }
+  if (patch.member_ids !== undefined) {
+    inverseOp.member_ids = [...prev.member_ids];
+  }
+  if (patch.collapsed !== undefined) {
+    inverseOp.collapsed = prev.collapsed;
+  }
+  return {
+    forward: [forwardOp],
+    inverse: [inverseOp],
+  };
+}
+
+export function buildDeleteGroupWithInverse(prev: CanvasGroupDto): {
+  forward: GraphOp[];
+  inverse: GraphOp[];
+} {
+  const inverse: GraphOp[] = [
+    {
+      op: "create_group",
+      id: prev.id,
+      title: prev.title,
+      color_key: prev.color_key,
+      member_ids: [...prev.member_ids],
+    },
+  ];
+  if (prev.collapsed) {
+    inverse.push({
+      op: "update_group",
+      id: prev.id,
+      collapsed: true,
+    });
+  }
+  return {
+    forward: [{ op: "delete_group", id: prev.id }],
+    inverse,
   };
 }

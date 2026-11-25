@@ -1,14 +1,17 @@
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection, Row, Transaction, TransactionBehavior};
+use rusqlite::{
+    params, params_from_iter, Connection, OptionalExtension, Row, Transaction, TransactionBehavior,
+};
 
+use crate::db::row_to_canvas_group_dto;
 use crate::error::IpcError;
 use crate::graph::models::{
-    compute_content_hash, estimate_tokens, now_epoch_ms, ApplyResult, CameraState, ContextControls,
-    CreatedBy, EdgeDto, EdgeType, EdgeWeight, GraphOp, LensKind, NodeDto, NodeLayout,
-    NodeLensOrigin, NodeMetadata, NodeStatus, NodeType, ProvenanceInput, RelatedNodeHit,
-    SearchHit, Severity, SpawnDirection,
+    compute_content_hash, estimate_tokens, now_epoch_ms, ApplyResult, CameraState, CanvasGroupDto,
+    ContextControls, CreatedBy, EdgeDto, EdgeType, EdgeWeight, GraphOp, LensKind, NodeDto,
+    NodeLayout, NodeLensOrigin, NodeMetadata, NodeStatus, NodeType, ProvenanceInput,
+    RelatedNodeHit, SearchHit, Severity, SpawnDirection, StudyCardDto, StudyCardKind,
 };
 use crate::graph::provenance::compute_stale_nodes;
 use crate::graph::spatial::{
@@ -25,6 +28,8 @@ enum EngineMutation {
     AddEdge(EdgeDto),
     UpdateEdgeWeight(String, EdgeWeight),
     RemoveEdge(String),
+    UpsertGroup(CanvasGroupDto),
+    RemoveGroup(String),
 }
 
 pub(crate) fn insert_node_tx(tx: &Transaction<'_>, node: &NodeDto) -> Result<(), IpcError> {
@@ -79,6 +84,50 @@ pub(crate) fn insert_edge_tx(tx: &Transaction<'_>, edge: &EdgeDto) -> Result<(),
     Ok(())
 }
 
+pub(crate) fn insert_group_tx(
+    tx: &Transaction<'_>,
+    group: &CanvasGroupDto,
+) -> Result<(), IpcError> {
+    let member_ids_json = serde_json::to_string(&group.member_ids)?;
+    tx.execute(
+        "INSERT INTO canvas_groups (id, title, color_key, member_ids, collapsed, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            group.id,
+            group.title,
+            group.color_key,
+            member_ids_json,
+            i64::from(group.collapsed),
+            group.created_at,
+            group.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
+fn dedup_member_ids(ids: &[String]) -> Vec<String> {
+    let mut seen = HashSet::with_capacity(ids.len());
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !id.trim().is_empty() && seen.insert(id.clone()) {
+            out.push(id.clone());
+        }
+    }
+    out
+}
+
+fn staged_group(
+    engine: &GraphEngine,
+    overrides: &HashMap<String, Option<CanvasGroupDto>>,
+    id: &str,
+) -> Option<CanvasGroupDto> {
+    if let Some(entry) = overrides.get(id) {
+        entry.clone()
+    } else {
+        engine.groups.get(id).cloned()
+    }
+}
+
 fn staged_node(
     engine: &GraphEngine,
     overrides: &HashMap<String, Option<NodeDto>>,
@@ -122,6 +171,7 @@ pub fn apply_ops(
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     let mut node_overrides: HashMap<String, Option<NodeDto>> = HashMap::new();
+    let mut group_overrides: HashMap<String, Option<CanvasGroupDto>> = HashMap::new();
     let mut mutations: Vec<EngineMutation> = Vec::new();
     let mut updated_map: HashMap<String, NodeDto> = HashMap::new();
     let mut updated_order: Vec<String> = Vec::new();
@@ -323,6 +373,38 @@ pub fn apply_ops(
                     node_overrides.insert(id.clone(), None);
                     mutations.push(EngineMutation::RemoveNode(id.clone()));
                 }
+
+                if !ids.is_empty() {
+                    let remove_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
+                    let groups_in_db: Vec<CanvasGroupDto> = {
+                        let mut stmt = tx.prepare(
+                            "SELECT id, title, color_key, member_ids, collapsed, created_at, updated_at
+                             FROM canvas_groups
+                             ORDER BY id ASC",
+                        )?;
+                        let rows = stmt.query_map([], row_to_canvas_group_dto)?;
+                        let mut out = Vec::new();
+                        for row in rows {
+                            out.push(row?);
+                        }
+                        out
+                    };
+
+                    for mut grp in groups_in_db {
+                        let before_len = grp.member_ids.len();
+                        grp.member_ids.retain(|mid| !remove_set.contains(mid.as_str()));
+                        if grp.member_ids.len() != before_len {
+                            grp.updated_at = now;
+                            let member_ids_json = serde_json::to_string(&grp.member_ids)?;
+                            tx.execute(
+                                "UPDATE canvas_groups SET member_ids = ?1, updated_at = ?2 WHERE id = ?3",
+                                params![member_ids_json, grp.updated_at, grp.id],
+                            )?;
+                            group_overrides.insert(grp.id.clone(), Some(grp.clone()));
+                            mutations.push(EngineMutation::UpsertGroup(grp));
+                        }
+                    }
+                }
             }
             GraphOp::CreateEdge { edge } => {
                 if edge.source_id == edge.target_id {
@@ -395,6 +477,98 @@ pub fn apply_ops(
                 }
                 mutations.push(EngineMutation::RemoveEdge(id.clone()));
             }
+            GraphOp::CreateGroup {
+                id,
+                title,
+                color_key,
+                member_ids,
+            } => {
+                let trimmed_id = id.trim();
+                if trimmed_id.is_empty() {
+                    return Err(IpcError::validation("Group id cannot be empty"));
+                }
+                if staged_group(engine, &group_overrides, trimmed_id).is_some() {
+                    return Err(IpcError::validation(format!(
+                        "Group {trimmed_id} already exists"
+                    )));
+                }
+                let final_title = if title.trim().is_empty() {
+                    "Group".to_owned()
+                } else {
+                    title.trim().to_owned()
+                };
+                let final_color = if color_key.trim().is_empty() {
+                    "cobalt".to_owned()
+                } else {
+                    color_key.trim().to_owned()
+                };
+                let group = CanvasGroupDto {
+                    id: trimmed_id.to_owned(),
+                    title: final_title,
+                    color_key: final_color,
+                    member_ids: dedup_member_ids(member_ids),
+                    collapsed: false,
+                    created_at: now,
+                    updated_at: now,
+                };
+                insert_group_tx(&tx, &group)?;
+                group_overrides.insert(group.id.clone(), Some(group.clone()));
+                mutations.push(EngineMutation::UpsertGroup(group));
+            }
+            GraphOp::UpdateGroup {
+                id,
+                title,
+                color_key,
+                member_ids,
+                collapsed,
+            } => {
+                let mut group = staged_group(engine, &group_overrides, id)
+                    .ok_or_else(|| IpcError::validation(format!("Group {id} not found")))?;
+                if let Some(t) = title {
+                    group.title = if t.trim().is_empty() {
+                        "Group".to_owned()
+                    } else {
+                        t.trim().to_owned()
+                    };
+                }
+                if let Some(c) = color_key {
+                    group.color_key = if c.trim().is_empty() {
+                        "cobalt".to_owned()
+                    } else {
+                        c.trim().to_owned()
+                    };
+                }
+                if let Some(mids) = member_ids {
+                    group.member_ids = dedup_member_ids(mids);
+                }
+                if let Some(col) = collapsed {
+                    group.collapsed = *col;
+                }
+                group.updated_at = now;
+
+                let member_ids_json = serde_json::to_string(&group.member_ids)?;
+                tx.execute(
+                    "UPDATE canvas_groups
+                     SET title = ?1, color_key = ?2, member_ids = ?3, collapsed = ?4, updated_at = ?5
+                     WHERE id = ?6",
+                    params![
+                        group.title,
+                        group.color_key,
+                        member_ids_json,
+                        i64::from(group.collapsed),
+                        group.updated_at,
+                        id,
+                    ],
+                )?;
+
+                group_overrides.insert(id.clone(), Some(group.clone()));
+                mutations.push(EngineMutation::UpsertGroup(group));
+            }
+            GraphOp::DeleteGroup { id } => {
+                tx.execute("DELETE FROM canvas_groups WHERE id = ?1", params![id])?;
+                group_overrides.insert(id.clone(), None);
+                mutations.push(EngineMutation::RemoveGroup(id.clone()));
+            }
         }
     }
 
@@ -429,6 +603,10 @@ pub fn apply_ops(
             }
             EngineMutation::RemoveEdge(id) => {
                 engine.remove_edge(&id);
+            }
+            EngineMutation::UpsertGroup(group) => engine.upsert_group(group),
+            EngineMutation::RemoveGroup(id) => {
+                engine.remove_group(&id);
             }
         }
     }
@@ -1089,4 +1267,133 @@ pub fn find_related_nodes(
     }
 
     Ok(out)
+}
+
+pub(crate) fn row_to_study_card_dto(row: &Row<'_>) -> rusqlite::Result<StudyCardDto> {
+    let kind_str: String = row.get(4)?;
+    let card_kind = StudyCardKind::from_db_str(&kind_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    let repetitions_raw: i64 = row.get(5)?;
+    let lapses_raw: i64 = row.get(8)?;
+    Ok(StudyCardDto {
+        id: row.get(0)?,
+        node_id: row.get(1)?,
+        prompt: row.get(2)?,
+        answer: row.get(3)?,
+        card_kind,
+        repetitions: u32::try_from(repetitions_raw).unwrap_or(0),
+        interval_days: row.get(6)?,
+        ease_factor: row.get(7)?,
+        lapses: u32::try_from(lapses_raw).unwrap_or(0),
+        due_at: row.get(9)?,
+        last_reviewed_at: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
+pub(crate) fn insert_study_card_tx(
+    tx: &Transaction<'_>,
+    card: &StudyCardDto,
+) -> Result<(), IpcError> {
+    tx.execute(
+        "INSERT INTO study_cards (
+            id, node_id, prompt, answer, card_kind, repetitions, interval_days,
+            ease_factor, lapses, due_at, last_reviewed_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            card.id,
+            card.node_id,
+            card.prompt,
+            card.answer,
+            card.card_kind.as_str(),
+            i64::from(card.repetitions),
+            card.interval_days,
+            card.ease_factor,
+            i64::from(card.lapses),
+            card.due_at,
+            card.last_reviewed_at,
+            card.created_at,
+            card.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn update_study_card_sm2_tx(
+    tx: &Transaction<'_>,
+    card: &StudyCardDto,
+) -> Result<(), IpcError> {
+    tx.execute(
+        "UPDATE study_cards
+         SET repetitions = ?1, interval_days = ?2, ease_factor = ?3,
+             lapses = ?4, due_at = ?5, last_reviewed_at = ?6, updated_at = ?7
+         WHERE id = ?8",
+        params![
+            i64::from(card.repetitions),
+            card.interval_days,
+            card.ease_factor,
+            i64::from(card.lapses),
+            card.due_at,
+            card.last_reviewed_at,
+            card.updated_at,
+            card.id,
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn list_study_cards(
+    conn: &Connection,
+    due_before_ms: Option<i64>,
+) -> Result<Vec<StudyCardDto>, IpcError> {
+    let mut out = Vec::new();
+    if let Some(cutoff) = due_before_ms {
+        let mut stmt = conn.prepare(
+            "SELECT id, node_id, prompt, answer, card_kind, repetitions, interval_days,
+                    ease_factor, lapses, due_at, last_reviewed_at, created_at, updated_at
+             FROM study_cards
+             WHERE due_at <= ?1
+             ORDER BY due_at ASC, created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![cutoff], row_to_study_card_dto)?;
+        for row in rows {
+            out.push(row?);
+        }
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT id, node_id, prompt, answer, card_kind, repetitions, interval_days,
+                    ease_factor, lapses, due_at, last_reviewed_at, created_at, updated_at
+             FROM study_cards
+             ORDER BY due_at ASC, created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], row_to_study_card_dto)?;
+        for row in rows {
+            out.push(row?);
+        }
+    }
+    Ok(out)
+}
+
+pub(crate) fn get_study_card(
+    conn: &Connection,
+    card_id: &str,
+) -> Result<Option<StudyCardDto>, IpcError> {
+    let card = conn
+        .query_row(
+            "SELECT id, node_id, prompt, answer, card_kind, repetitions, interval_days,
+                    ease_factor, lapses, due_at, last_reviewed_at, created_at, updated_at
+             FROM study_cards
+             WHERE id = ?1",
+            params![card_id],
+            row_to_study_card_dto,
+        )
+        .optional()?;
+    Ok(card)
+}
+
+pub(crate) fn delete_study_card(conn: &mut Connection, card_id: &str) -> Result<(), IpcError> {
+    conn.execute("DELETE FROM study_cards WHERE id = ?1", params![card_id])?;
+    Ok(())
 }

@@ -3,11 +3,11 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
-use crate::db::queries::{insert_edge_tx, insert_node_tx};
+use crate::db::queries::{insert_edge_tx, insert_group_tx, insert_node_tx};
 use crate::error::IpcError;
 use crate::graph::models::{
-    now_epoch_ms, CameraState, CheckpointDiff, CheckpointNodeChange, CheckpointSummary, EdgeDto,
-    EdgeType, NodeDto, WorkspaceSnapshot,
+    now_epoch_ms, CameraState, CanvasGroupDto, CheckpointDiff, CheckpointNodeChange,
+    CheckpointSummary, EdgeDto, EdgeType, NodeDto, WorkspaceSnapshot,
 };
 use crate::graph::GraphEngine;
 use crate::ipc::ActiveWorkspace;
@@ -16,6 +16,8 @@ use crate::ipc::ActiveWorkspace;
 struct CheckpointPayload {
     nodes: Vec<NodeDto>,
     edges: Vec<EdgeDto>,
+    #[serde(default)]
+    pub groups: Vec<CanvasGroupDto>,
     system_prompt: String,
     token_budget: u32,
 }
@@ -35,12 +37,14 @@ pub fn create_checkpoint(
 
     let nodes = engine.all_nodes_sorted();
     let edges = engine.all_edges_sorted();
+    let groups = engine.all_groups_sorted();
     let node_count = nodes.len();
     let edge_count = edges.len();
 
     let payload = CheckpointPayload {
         nodes,
         edges,
+        groups,
         system_prompt: system_prompt.to_owned(),
         token_budget,
     };
@@ -267,6 +271,7 @@ pub fn restore_checkpoint(
     )?;
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute("DELETE FROM canvas_groups", [])?;
     tx.execute("DELETE FROM edges", [])?;
     tx.execute("DELETE FROM nodes", [])?;
 
@@ -275,6 +280,9 @@ pub fn restore_checkpoint(
     }
     for edge in &payload.edges {
         insert_edge_tx(&tx, edge)?;
+    }
+    for group in &payload.groups {
+        insert_group_tx(&tx, group)?;
     }
 
     tx.execute(
@@ -288,7 +296,8 @@ pub fn restore_checkpoint(
     tx.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')", [])?;
     tx.commit()?;
 
-    active.engine = GraphEngine::from_snapshot(&payload.nodes, &payload.edges);
+    active.engine =
+        GraphEngine::from_snapshot_with_groups(&payload.nodes, &payload.edges, &payload.groups);
     active.system_prompt = payload.system_prompt.clone();
     active.token_budget = payload.token_budget;
 
@@ -297,6 +306,7 @@ pub fn restore_checkpoint(
         path: active.path.clone(),
         nodes: payload.nodes,
         edges: payload.edges,
+        groups: payload.groups,
         camera,
         token_budget: payload.token_budget,
         system_prompt: payload.system_prompt,

@@ -25,7 +25,7 @@ import type {
   TestConnectionResult,
 } from "../ipc/types";
 import { closeSettingsModal, settingsModalOpen } from "../store/aiRunner";
-import { flowSystemPrompt, theme, tokenBudget } from "../store/graphStore";
+import { flowSystemPrompt, setTheme, theme, tokenBudget } from "../store/graphStore";
 import { modalState } from "../store/selection";
 import { pushToast } from "./ToastStack";
 
@@ -507,7 +507,7 @@ export function SettingsModal() {
     const committedUtilityMax = commitUtilityMaxTokensDraft();
 
     if (!isTauriRuntime()) {
-      theme.value = selectedTheme;
+      setTheme(selectedTheme);
       tokenBudget.value = committedBudget;
       flowSystemPrompt.value = systemPromptDraft;
       setCustomLenses(customLenses);
@@ -538,7 +538,7 @@ export function SettingsModal() {
       setUtilityKey(null);
       setCustomLensesDraft(savedLenses);
       setCustomLenses(savedLenses);
-      theme.value = saved.theme;
+      setTheme(saved.theme);
       tokenBudget.value = saved.default_token_budget;
       if (closeAfter) {
         pushToast("Settings saved", "info");

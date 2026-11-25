@@ -4,6 +4,7 @@ import {
   cardDomRefs,
   dragOffsets,
   edgesMap,
+  groupsMap,
   isBirdsEye,
   MAX_NODE_HEIGHT,
   MAX_NODE_WIDTH,
@@ -14,6 +15,7 @@ import {
   nodesMap,
   resizeSizes,
   resolveAndAnimateOverlaps,
+  selectedGroupId,
   viewportSpatialIndex,
 } from "../store/graphStore";
 import {
@@ -39,7 +41,7 @@ import {
   toggleSelect,
 } from "../store/selection";
 import { clampZoom, LOD_THRESHOLD, screenToWorld, type CanvasCameraController } from "./camera";
-import { hitTestEdge, type EdgePreview, type MarqueeRect } from "./renderer2d";
+import { buildSceneRects, hitTestEdge, hitTestGroupHeader, type EdgePreview, type MarqueeRect } from "./renderer2d";
 import { getEffectiveNodeHeight } from "./spatialIndex";
 
 const GRID_SNAP_PX = 12;
@@ -65,6 +67,7 @@ type ActiveGesture =
       startClientX: number;
       startClientY: number;
       moved: boolean;
+      groupId?: string;
     }
   | {
       kind: "node_resize";
@@ -135,7 +138,7 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   }
   return Boolean(
     target.closest(
-      "button, input, textarea, select, a, .cm-editor, .live-editor-overlay, .hover-pill, .edge-popover, .edge-inspector-pill, .minimap-card, .multi-select-pill, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu",
+      "button, input, textarea, select, a, .cm-editor, .live-editor-overlay, .hover-pill, .edge-popover, .edge-inspector-pill, .minimap-card, .multi-select-pill, .group-inspector-pill, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu",
     ),
   );
 }
@@ -151,6 +154,7 @@ export function attachCanvasPointer(
 ): () => void {
   let gesture: ActiveGesture | null = null;
   let spaceHeld = false;
+  let hoveredGroupId: string | null = null;
 
   const toLocalCoords = (clientX: number, clientY: number): { x: number; y: number } => {
     const rect = shellEl.getBoundingClientRect();
@@ -171,6 +175,8 @@ export function attachCanvasPointer(
       shellEl.style.cursor = "grab";
     } else if (gesture?.kind === "edge_connect") {
       shellEl.style.cursor = "crosshair";
+    } else if (hoveredGroupId) {
+      shellEl.style.cursor = "grab";
     } else if (overlay.hoveredEdgeId) {
       shellEl.style.cursor = "pointer";
     } else {
@@ -357,6 +363,9 @@ export function attachCanvasPointer(
           selectedEdgeId.value = null;
         }
       }
+      if (selectedGroupId.value !== null) {
+        selectedGroupId.value = null;
+      }
 
       const dragIds = selectedIds.value.has(nodeId)
         ? Array.from(selectedIds.value)
@@ -373,7 +382,7 @@ export function attachCanvasPointer(
       return;
     }
 
-    // Empty canvas click / edge hit / marquee box-select
+    // Empty canvas click / group header / edge hit / marquee box-select
     edgePopover.value = null;
     if (modalState.value === "connect_edge") {
       modalState.value = "navigate";
@@ -383,7 +392,35 @@ export function attachCanvasPointer(
     const cam = camera.getCamera();
     const worldStart = screenToWorld(local.x, local.y, cam);
 
+    if (!e.shiftKey && groupsMap.value.size > 0) {
+      const sceneRects = buildSceneRects(nodesMap, dragOffsets, resizeSizes);
+      const hitGroup = hitTestGroupHeader(worldStart, groupsMap.value, sceneRects, cam.zoom);
+      if (hitGroup) {
+        e.preventDefault();
+        const memberIds = hitGroup.member_ids.filter((id) => nodesMap.has(id));
+        setSelection(memberIds, memberIds[0] ?? null);
+        selectedGroupId.value = hitGroup.id;
+        if (memberIds.length > 0) {
+          gesture = {
+            kind: "node_drag",
+            primaryId: memberIds[0],
+            dragIds: memberIds,
+            startClientX: e.clientX,
+            startClientY: e.clientY,
+            moved: false,
+            groupId: hitGroup.id,
+          };
+        }
+        camera.markDirty();
+        updateCursor();
+        return;
+      }
+    }
+
     if (!e.shiftKey) {
+      if (selectedGroupId.value !== null) {
+        selectedGroupId.value = null;
+      }
       const hitEdgeId = hitTestEdge(
         worldStart.x,
         worldStart.y,
@@ -422,8 +459,9 @@ export function attachCanvasPointer(
       }
       const moveTarget = e.target instanceof Element ? e.target : null;
       if (moveTarget?.closest("[data-node-id]") || isInteractiveTarget(e.target)) {
-        if ((overlay.hoveredEdgeId ?? null) !== null) {
+        if ((overlay.hoveredEdgeId ?? null) !== null || hoveredGroupId !== null) {
           overlay.hoveredEdgeId = null;
+          hoveredGroupId = null;
           updateCursor();
           camera.markDirty();
         }
@@ -432,8 +470,14 @@ export function attachCanvasPointer(
       const local = toLocalCoords(e.clientX, e.clientY);
       const cam = camera.getCamera();
       const worldPt = screenToWorld(local.x, local.y, cam);
+      const overBirdsEyeNode = cam.zoom < LOD_THRESHOLD && hitTestNodeAtWorld(worldPt) !== null;
+      let nextHoveredGroup: string | null = null;
+      if (!overBirdsEyeNode && groupsMap.value.size > 0) {
+        const sceneRects = buildSceneRects(nodesMap, dragOffsets, resizeSizes);
+        nextHoveredGroup = hitTestGroupHeader(worldPt, groupsMap.value, sceneRects, cam.zoom)?.id ?? null;
+      }
       const nextHoveredEdge =
-        cam.zoom < LOD_THRESHOLD && hitTestNodeAtWorld(worldPt) !== null
+        overBirdsEyeNode || nextHoveredGroup !== null
           ? null
           : hitTestEdge(
               worldPt.x,
@@ -444,8 +488,9 @@ export function attachCanvasPointer(
               resizeSizes,
               cam.zoom,
             );
-      if ((overlay.hoveredEdgeId ?? null) !== nextHoveredEdge) {
+      if ((overlay.hoveredEdgeId ?? null) !== nextHoveredEdge || hoveredGroupId !== nextHoveredGroup) {
         overlay.hoveredEdgeId = nextHoveredEdge;
+        hoveredGroupId = nextHoveredGroup;
         updateCursor();
         camera.markDirty();
       }
@@ -748,8 +793,9 @@ export function attachCanvasPointer(
               return;
             }
             const pushed = await resolveAndAnimateOverlaps(active.dragIds);
+            const dragLabel = active.groupId ? "Move group" : "Move node(s)";
             if (pushed.length === 0) {
-              graphHistory.push({ label: "Move node(s)", forward, inverse });
+              graphHistory.push({ label: dragLabel, forward, inverse });
               syncHistorySignals();
               return;
             }
@@ -764,7 +810,7 @@ export function attachCanvasPointer(
             }
             const merged = buildMoveNodesWithInverse(allPrev, allNext);
             graphHistory.push({
-              label: "Move node(s)",
+              label: dragLabel,
               forward: merged.forward,
               inverse: merged.inverse,
             });
@@ -798,6 +844,7 @@ export function attachCanvasPointer(
         setSelection(hits);
       } else if (!e.shiftKey) {
         clearSelection();
+        selectedGroupId.value = null;
       }
     }
   };

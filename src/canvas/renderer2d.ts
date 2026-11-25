@@ -1,7 +1,9 @@
 import type {
   CameraState,
+  CanvasGroupDto,
   CompiledXray,
   EdgeDto,
+  GroupColorKey,
   InclusionMode,
   NodeDto,
   Severity,
@@ -47,6 +49,8 @@ export interface RenderSceneInput {
   outOfSyncRefIds?: ReadonlySet<string>;
   marqueeWorld: MarqueeRect | null;
   edgePreviewWorld: EdgePreview | null;
+  groups?: ReadonlyMap<string, CanvasGroupDto> | ReadonlyArray<CanvasGroupDto>;
+  selectedGroupId?: string | null;
   themeKey: "dark" | "light";
   animTimeMs?: number;
   animateEdges?: boolean;
@@ -54,7 +58,7 @@ export interface RenderSceneInput {
 
 export type RenderFrameInput = RenderSceneInput;
 
-interface ThemePalette {
+export interface ThemePalette {
   bgCanvas: string;
   bgDot: string;
   bgCard: string;
@@ -83,6 +87,12 @@ interface ThemePalette {
   xraySummary: string;
   xrayLoophole: string;
   xrayReference: string;
+  groupCobalt: string;
+  groupEmerald: string;
+  groupAmber: string;
+  groupRose: string;
+  groupViolet: string;
+  groupSlate: string;
 }
 
 let cachedPaletteKey: string | null = null;
@@ -93,8 +103,14 @@ function readCssVar(style: CSSStyleDeclaration, name: string, fallback: string):
   return val.length > 0 ? val : fallback;
 }
 
-function getPalette(themeKey: "dark" | "light"): ThemePalette {
-  if (cachedPalette && cachedPaletteKey === themeKey) {
+export function getPalette(themeKey: "dark" | "light"): ThemePalette {
+  const domTheme =
+    typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") : null;
+  const themeMismatch = typeof document !== "undefined" && domTheme !== themeKey;
+  if (themeMismatch) {
+    document.documentElement.setAttribute("data-theme", themeKey);
+  }
+  if (cachedPalette && cachedPaletteKey === themeKey && !themeMismatch) {
     return cachedPalette;
   }
   const isLight = themeKey === "light";
@@ -128,6 +144,12 @@ function getPalette(themeKey: "dark" | "light"): ThemePalette {
     xraySummary: readCssVar(style, "--xray-summary", isLight ? "#2563eb" : "#60a5fa"),
     xrayLoophole: readCssVar(style, "--xray-loophole", isLight ? "#d97706" : "#f59e0b"),
     xrayReference: readCssVar(style, "--xray-reference", isLight ? "#475569" : "#94a3b8"),
+    groupCobalt: readCssVar(style, "--group-cobalt", isLight ? "#2563eb" : "#60a5fa"),
+    groupEmerald: readCssVar(style, "--group-emerald", isLight ? "#059669" : "#34d399"),
+    groupAmber: readCssVar(style, "--group-amber", isLight ? "#d97706" : "#fbbf24"),
+    groupRose: readCssVar(style, "--group-rose", isLight ? "#dc2626" : "#fb7185"),
+    groupViolet: readCssVar(style, "--group-violet", isLight ? "#7c3aed" : "#a78bfa"),
+    groupSlate: readCssVar(style, "--group-slate", isLight ? "#475569" : "#94a3b8"),
   };
   cachedPaletteKey = themeKey;
   cachedPalette = palette;
@@ -143,8 +165,8 @@ export interface NodeRect {
 
 function getNodeRect(
   node: NodeDto,
-  dragOffsets: Map<string, { x: number; y: number }>,
-  resizeSizes?: Map<string, { width: number; height: number }>,
+  dragOffsets: ReadonlyMap<string, { x: number; y: number }>,
+  resizeSizes?: ReadonlyMap<string, { width: number; height: number }>,
 ): NodeRect {
   const offset = dragOffsets.get(node.id);
   const resized = resizeSizes?.get(node.id);
@@ -160,6 +182,145 @@ function getNodeRect(
     w,
     h,
   };
+}
+
+export function buildSceneRects(
+  nodes: ReadonlyMap<string, NodeDto>,
+  dragOffsets: ReadonlyMap<string, { x: number; y: number }>,
+  resizeSizes?: ReadonlyMap<string, { width: number; height: number }>,
+): Map<string, NodeRect> {
+  const rects = new Map<string, NodeRect>();
+  for (const node of nodes.values()) {
+    rects.set(node.id, getNodeRect(node, dragOffsets, resizeSizes));
+  }
+  return rects;
+}
+
+export const GROUP_PADDING = 26;
+export const GROUP_TOP_HEADER = 38;
+
+export interface GroupBounds {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  headerX: number;
+  headerY: number;
+  headerW: number;
+  headerH: number;
+  memberCount: number;
+}
+
+export function computeGroupBounds(
+  group: CanvasGroupDto,
+  sceneRects: ReadonlyMap<string, NodeRect>,
+): GroupBounds | null {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let memberCount = 0;
+
+  for (const id of group.member_ids) {
+    const r = sceneRects.get(id);
+    if (!r) {
+      continue;
+    }
+    memberCount += 1;
+    minX = Math.min(minX, r.x);
+    minY = Math.min(minY, r.y);
+    maxX = Math.max(maxX, r.x + r.w);
+    maxY = Math.max(maxY, r.y + r.h);
+  }
+
+  if (memberCount === 0 || !Number.isFinite(minX)) {
+    return null;
+  }
+
+  const x = minX - GROUP_PADDING;
+  const y = minY - GROUP_PADDING - GROUP_TOP_HEADER;
+  const w = maxX - minX + GROUP_PADDING * 2;
+  const h = maxY - minY + GROUP_PADDING * 2 + GROUP_TOP_HEADER;
+  const headerH = 26;
+  const headerX = x + 10;
+  const headerY = y + 6;
+  const headerW = Math.min(Math.max(80, w - 20), Math.max(120, group.title.length * 7.2 + 52));
+
+  return { x, y, w, h, headerX, headerY, headerW, headerH, memberCount };
+}
+
+export function hitTestGroupHeader(
+  scenePoint: { x: number; y: number },
+  groups: ReadonlyMap<string, CanvasGroupDto> | ReadonlyArray<CanvasGroupDto>,
+  sceneRects: ReadonlyMap<string, NodeRect>,
+  zoom: number,
+): CanvasGroupDto | null {
+  const count = Array.isArray(groups) ? groups.length : groups.size;
+  if (count === 0) {
+    return null;
+  }
+  const list = Array.isArray(groups) ? groups : Array.from(groups.values());
+  const padY = Math.min(10, 4 / Math.max(0.25, zoom));
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const group = list[i];
+    if (!group) continue;
+    const bounds = computeGroupBounds(group, sceneRects);
+    if (!bounds) continue;
+    if (
+      scenePoint.x >= bounds.x &&
+      scenePoint.x <= bounds.x + bounds.w &&
+      scenePoint.y >= bounds.y - padY &&
+      scenePoint.y <= bounds.y + GROUP_TOP_HEADER + padY * 0.5
+    ) {
+      return group;
+    }
+  }
+  return null;
+}
+
+function resolveGroupAccent(colorKey: string, p: ThemePalette): string {
+  switch (colorKey as GroupColorKey) {
+    case "emerald":
+      return p.groupEmerald;
+    case "amber":
+      return p.groupAmber;
+    case "rose":
+      return p.groupRose;
+    case "violet":
+      return p.groupViolet;
+    case "slate":
+      return p.groupSlate;
+    case "cobalt":
+    default:
+      return p.groupCobalt;
+  }
+}
+
+function colorWithAlpha(color: string, alpha: number): string {
+  const trimmed = color.trim();
+  if (trimmed.startsWith("#")) {
+    const hex = trimmed.slice(1);
+    if (hex.length === 6) {
+      const r = Number.parseInt(hex.slice(0, 2), 16);
+      const g = Number.parseInt(hex.slice(2, 4), 16);
+      const b = Number.parseInt(hex.slice(4, 6), 16);
+      if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+    } else if (hex.length === 3) {
+      const r = Number.parseInt(hex[0] + hex[0], 16);
+      const g = Number.parseInt(hex[1] + hex[1], 16);
+      const b = Number.parseInt(hex[2] + hex[2], 16);
+      if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+    }
+  }
+  const rgbMatch = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(trimmed);
+  if (rgbMatch) {
+    return `rgba(${rgbMatch[1]}, ${rgbMatch[2]}, ${rgbMatch[3]}, ${alpha})`;
+  }
+  return trimmed;
 }
 
 export interface PortPoint {
@@ -582,6 +743,8 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     outOfSyncRefIds,
     marqueeWorld,
     edgePreviewWorld,
+    groups,
+    selectedGroupId = null,
     themeKey,
     animTimeMs = 0,
     animateEdges = false,
@@ -649,6 +812,82 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
       rect.y <= maxEdgeVy
     ) {
       visibleObstacles.push({ id: node.id, rect });
+    }
+  }
+
+  // 2.5 Spatial Canvas Groups (O(1) skip when empty)
+  const groupCount = groups ? (Array.isArray(groups) ? groups.length : groups.size) : 0;
+  if (groups && groupCount > 0) {
+    const groupIter = Array.isArray(groups) ? groups : groups.values();
+    const isLightTheme = themeKey === "light";
+    for (const group of groupIter) {
+      const bounds = computeGroupBounds(group, sceneRects);
+      if (!bounds) {
+        continue;
+      }
+      if (
+        bounds.x + bounds.w < minEdgeVx ||
+        bounds.x > maxEdgeVx ||
+        bounds.y + bounds.h < minEdgeVy ||
+        bounds.y > maxEdgeVy
+      ) {
+        continue;
+      }
+
+      const accent = resolveGroupAccent(group.color_key, p);
+      const isSelectedGroup = selectedGroupId === group.id;
+      const fillAlpha = isSelectedGroup ? (isLightTheme ? 0.14 : 0.13) : (isLightTheme ? 0.08 : 0.07);
+      const strokeAlpha = isSelectedGroup ? 0.92 : 0.48;
+
+      ctx.save();
+      drawRoundedRectPath(ctx, bounds.x, bounds.y, bounds.w, bounds.h, 12);
+      ctx.fillStyle = colorWithAlpha(accent, fillAlpha);
+      ctx.fill();
+
+      ctx.lineWidth = isSelectedGroup
+        ? isBirdsEyeLod
+          ? 2.2 / cam.zoom
+          : 2.0
+        : isBirdsEyeLod
+          ? 1.4 / cam.zoom
+          : 1.25;
+      ctx.strokeStyle = colorWithAlpha(accent, strokeAlpha);
+      ctx.setLineDash(isSelectedGroup ? [] : [6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (cam.zoom >= 0.2) {
+        const chipLabel = `${group.title} · ${bounds.memberCount}`;
+        ctx.font = "600 11.5px Inter, sans-serif";
+        const measuredW =
+          typeof ctx.measureText === "function"
+            ? ctx.measureText(chipLabel).width
+            : chipLabel.length * 6.5;
+        const chipPadX = 10;
+        const maxChipW = Math.max(60, bounds.w - 20);
+        const chipW = Math.min(maxChipW, measuredW + chipPadX * 2);
+        const chipH = bounds.headerH;
+        const chipX = bounds.headerX;
+        const chipY = bounds.headerY;
+
+        drawRoundedRectPath(ctx, chipX, chipY, chipW, chipH, 13);
+        ctx.fillStyle = isSelectedGroup
+          ? colorWithAlpha(accent, isLightTheme ? 0.22 : 0.24)
+          : p.bgCard;
+        ctx.fill();
+        ctx.lineWidth = isSelectedGroup ? 1.5 : 1;
+        ctx.strokeStyle = colorWithAlpha(accent, isSelectedGroup ? 0.95 : 0.6);
+        ctx.stroke();
+
+        ctx.save();
+        drawRoundedRectPath(ctx, chipX + 4, chipY, Math.max(10, chipW - 8), chipH, 10);
+        ctx.clip();
+        ctx.fillStyle = p.textPrimary;
+        ctx.textBaseline = "middle";
+        ctx.fillText(chipLabel, chipX + chipPadX, chipY + chipH * 0.5 + 0.5);
+        ctx.restore();
+      }
+      ctx.restore();
     }
   }
 

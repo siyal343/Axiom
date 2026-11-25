@@ -5,10 +5,14 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
-use crate::db::queries::{insert_edge_tx, insert_node_tx};
-use crate::db::{open_connection, row_to_edge_dto, row_to_node_dto};
+use crate::db::queries::{
+    insert_edge_tx, insert_group_tx, insert_node_tx, insert_study_card_tx, row_to_study_card_dto,
+};
+use crate::db::{open_connection, row_to_canvas_group_dto, row_to_edge_dto, row_to_node_dto};
 use crate::error::IpcError;
-use crate::graph::models::{CameraState, EdgeDto, NodeDto, WorkspaceSnapshot};
+use crate::graph::models::{
+    CameraState, CanvasGroupDto, EdgeDto, NodeDto, StudyCardDto, WorkspaceSnapshot,
+};
 
 const AXIOM_EXPORT_FORMAT: &str = "axiom-workspace";
 const AXIOM_EXPORT_VERSION: u32 = 1;
@@ -27,6 +31,10 @@ struct AxiomWorkspaceJson {
     meta: WorkspaceJsonMeta,
     nodes: Vec<NodeDto>,
     edges: Vec<EdgeDto>,
+    #[serde(default)]
+    pub groups: Vec<CanvasGroupDto>,
+    #[serde(default)]
+    pub study_cards: Vec<StudyCardDto>,
 }
 
 fn read_workspace_meta(conn: &Connection) -> Result<WorkspaceJsonMeta, IpcError> {
@@ -108,11 +116,42 @@ pub fn export_json(conn: &Connection, dest_path: &Path) -> Result<(), IpcError> 
         out
     };
 
+    let groups: Vec<CanvasGroupDto> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, title, color_key, member_ids, collapsed, created_at, updated_at
+             FROM canvas_groups
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], row_to_canvas_group_dto)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        out
+    };
+
+    let study_cards: Vec<StudyCardDto> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, node_id, prompt, answer, card_kind, repetitions, interval_days,
+                    ease_factor, lapses, due_at, last_reviewed_at, created_at, updated_at
+             FROM study_cards
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], row_to_study_card_dto)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        out
+    };
+
     let exported_at = nodes
         .iter()
         .map(|n| n.updated_at)
+        .chain(edges.iter().map(|e| e.created_at))
+        .chain(groups.iter().map(|g| g.updated_at))
+        .chain(study_cards.iter().map(|c| c.updated_at))
         .max()
-        .or_else(|| edges.iter().map(|e| e.created_at).max())
         .unwrap_or(0);
 
     let payload = AxiomWorkspaceJson {
@@ -122,6 +161,8 @@ pub fn export_json(conn: &Connection, dest_path: &Path) -> Result<(), IpcError> 
         meta,
         nodes,
         edges,
+        groups,
+        study_cards,
     };
 
     let json = serde_json::to_string_pretty(&payload)?;
@@ -232,6 +273,40 @@ fn validate_workspace_json(doc: &AxiomWorkspaceJson) -> Result<(), IpcError> {
         }
     }
 
+    let mut group_ids: HashSet<&str> = HashSet::with_capacity(doc.groups.len());
+    for group in &doc.groups {
+        if group.id.trim().is_empty() {
+            return Err(IpcError::validation("Group id cannot be empty"));
+        }
+        if !group_ids.insert(group.id.as_str()) {
+            return Err(IpcError::validation(format!(
+                "Duplicate group id '{}' in import payload",
+                group.id
+            )));
+        }
+    }
+
+    let mut card_ids: HashSet<&str> = HashSet::with_capacity(doc.study_cards.len());
+    for card in &doc.study_cards {
+        if card.id.trim().is_empty() {
+            return Err(IpcError::validation("Study card id cannot be empty"));
+        }
+        if !card_ids.insert(card.id.as_str()) {
+            return Err(IpcError::validation(format!(
+                "Duplicate study card id '{}' in import payload",
+                card.id
+            )));
+        }
+        if let Some(ref nid) = card.node_id {
+            if !node_ids.contains(nid.as_str()) {
+                return Err(IpcError::validation(format!(
+                    "Study card '{}' references missing node_id '{}'",
+                    card.id, nid
+                )));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -295,6 +370,7 @@ impl StagedImport {
                 path: String::new(),
                 nodes: Vec::new(),
                 edges: Vec::new(),
+                groups: Vec::new(),
                 camera: CameraState {
                     x: 0.0,
                     y: 0.0,
@@ -344,7 +420,7 @@ pub fn stage_import_json(
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         let meta_pairs = [
-            ("schema_version", "3".to_owned()),
+            ("schema_version", "4".to_owned()),
             ("camera_x", doc.meta.camera.x.to_string()),
             ("camera_y", doc.meta.camera.y.to_string()),
             ("camera_zoom", doc.meta.camera.zoom.to_string()),
@@ -367,6 +443,12 @@ pub fn stage_import_json(
         for edge in &doc.edges {
             insert_edge_tx(&tx, edge)?;
         }
+        for group in &doc.groups {
+            insert_group_tx(&tx, group)?;
+        }
+        for card in &doc.study_cards {
+            insert_study_card_tx(&tx, card)?;
+        }
 
         tx.commit()?;
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
@@ -385,6 +467,7 @@ pub fn stage_import_json(
             path: dest_sqlite_path.to_string_lossy().into_owned(),
             nodes: doc.nodes,
             edges: doc.edges,
+            groups: doc.groups,
             camera: doc.meta.camera,
             token_budget: doc.meta.token_budget,
             system_prompt: String::new(),

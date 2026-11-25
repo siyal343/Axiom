@@ -10,9 +10,9 @@ use rusqlite::{params, Connection, Row, TransactionBehavior};
 
 use crate::error::IpcError;
 use crate::graph::models::{
-    compute_content_hash, estimate_tokens, now_epoch_ms, CameraState, ContextControls, CreatedBy,
-    EdgeDto, EdgeType, EdgeWeight, NodeDto, NodeLayout, NodeLensOrigin, NodeMetadata, NodeStatus,
-    NodeType, Severity, WorkspaceSnapshot,
+    compute_content_hash, estimate_tokens, now_epoch_ms, CameraState, CanvasGroupDto,
+    ContextControls, CreatedBy, EdgeDto, EdgeType, EdgeWeight, NodeDto, NodeLayout, NodeLensOrigin,
+    NodeMetadata, NodeStatus, NodeType, Severity, WorkspaceSnapshot,
 };
 
 pub fn default_workspace_path() -> Result<PathBuf, IpcError> {
@@ -109,6 +109,23 @@ pub(crate) fn row_to_edge_dto(row: &Row<'_>) -> rusqlite::Result<EdgeDto> {
     })
 }
 
+pub(crate) fn row_to_canvas_group_dto(row: &Row<'_>) -> rusqlite::Result<CanvasGroupDto> {
+    let member_ids_json: String = row.get(3)?;
+    let member_ids: Vec<String> = serde_json::from_str(&member_ids_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    let collapsed_raw: i64 = row.get(4)?;
+    Ok(CanvasGroupDto {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        color_key: row.get(2)?,
+        member_ids,
+        collapsed: collapsed_raw != 0,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
 pub fn hydrate_or_seed_workspace(
     conn: &mut Connection,
     path_str: &str,
@@ -137,6 +154,20 @@ pub fn hydrate_or_seed_workspace(
              ORDER BY created_at ASC, id ASC",
         )?;
         let rows = stmt.query_map([], row_to_edge_dto)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        out
+    };
+
+    let groups: Vec<CanvasGroupDto> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, title, color_key, member_ids, collapsed, created_at, updated_at
+             FROM canvas_groups
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], row_to_canvas_group_dto)?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
@@ -264,6 +295,7 @@ pub fn hydrate_or_seed_workspace(
         path: path_str.to_owned(),
         nodes,
         edges,
+        groups,
         camera: CameraState {
             x: camera_x,
             y: camera_y,

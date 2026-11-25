@@ -16,10 +16,12 @@ import {
 import type {
   ApplyResult,
   CameraState,
+  CanvasGroupDto,
   EdgeDto,
   EdgeType,
   ExternalRefInfo,
   GraphOp,
+  GroupColorKey,
   NodeDto,
   NodePositionUpdate,
   NodeSizeUpdate,
@@ -30,13 +32,18 @@ import type {
   WorkspaceSnapshot,
 } from "../ipc/types";
 import {
+  buildCreateGroupWithInverse,
   buildCreateNodeWithInverse,
+  buildDeleteGroupWithInverse,
+  buildUpdateGroupWithInverse,
   graphHistory,
   syncHistorySignals,
+  type GroupPatch,
 } from "./history";
 import {
   externalRefsMap,
   focusId,
+  selectedIds,
   selectSingle,
   spotlightRootId,
   staleNodesMap,
@@ -75,6 +82,15 @@ export const dragOffsets = new Map<string, { x: number; y: number }>();
 export const resizeSizes = new Map<string, { width: number; height: number }>();
 export const viewportSpatialIndex = new ViewportSpatialIndex();
 
+export const GROUP_COLOR_KEYS: readonly GroupColorKey[] = [
+  "cobalt",
+  "emerald",
+  "amber",
+  "rose",
+  "violet",
+  "slate",
+];
+
 export const graphVersion = signal<number>(0);
 export const visibleNodeIds = signal<string[]>([]);
 export const isBirdsEye = signal<boolean>(false);
@@ -84,6 +100,16 @@ export const flowSystemPrompt = signal<string>("");
 export const theme = signal<"dark" | "light">("dark");
 export const edgeFlowEnabled = signal<boolean>(true);
 export const unresolvedLoopholes = signal<Map<string, LoopholeSummary>>(new Map());
+export const groupsMap = signal<Map<string, CanvasGroupDto>>(new Map());
+export const selectedGroupId = signal<string | null>(null);
+
+export function setTheme(nextTheme: "dark" | "light"): void {
+  theme.value = nextTheme;
+  if (typeof document !== "undefined") {
+    document.documentElement.setAttribute("data-theme", nextTheme);
+  }
+  cameraControllerRef.current?.markDirty();
+}
 
 export const cameraControllerRef: { current: CameraControllerHandle | null } = {
   current: null,
@@ -126,6 +152,39 @@ export function recomputeUnresolvedLoopholes(): void {
 
 function estimateTokensLocal(text: string): number {
   return text.length === 0 ? 0 : Math.ceil(text.length / 4);
+}
+
+function dedupMemberIds(ids: ReadonlyArray<string>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of ids) {
+    const trimmed = raw.trim();
+    if (trimmed.length > 0 && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  }
+  return out;
+}
+
+function pruneDeletedNodesFromGroups(deleteSet: ReadonlySet<string>, now: number): void {
+  if (deleteSet.size === 0 || groupsMap.value.size === 0) {
+    return;
+  }
+  let changed = false;
+  const next = new Map<string, CanvasGroupDto>();
+  for (const [gid, grp] of groupsMap.value.entries()) {
+    const filtered = grp.member_ids.filter((mid) => !deleteSet.has(mid));
+    if (filtered.length !== grp.member_ids.length) {
+      changed = true;
+      next.set(gid, { ...grp, member_ids: filtered, updated_at: now });
+    } else {
+      next.set(gid, grp);
+    }
+  }
+  if (changed) {
+    groupsMap.value = next;
+  }
 }
 
 function applyOpsLocally(ops: GraphOp[]): ApplyResult {
@@ -244,6 +303,7 @@ function applyOpsLocally(ops: GraphOp[]): ApplyResult {
             deletedNodeIds.push(id);
           }
         }
+        pruneDeletedNodesFromGroups(deleteSet, now);
         break;
       }
       case "create_edge": {
@@ -271,6 +331,66 @@ function applyOpsLocally(ops: GraphOp[]): ApplyResult {
         }
         break;
       }
+      case "create_group": {
+        const trimmedId = op.id.trim();
+        if (!trimmedId || groupsMap.value.has(trimmedId)) {
+          break;
+        }
+        const group: CanvasGroupDto = {
+          id: trimmedId,
+          title: op.title.trim() || "Group",
+          color_key: op.color_key.trim() || "cobalt",
+          member_ids: dedupMemberIds(op.member_ids),
+          collapsed: false,
+          created_at: now,
+          updated_at: now,
+        };
+        const nextGroups = new Map(groupsMap.value);
+        nextGroups.set(group.id, group);
+        groupsMap.value = nextGroups;
+        break;
+      }
+      case "update_group": {
+        const existing = groupsMap.value.get(op.id);
+        if (!existing) {
+          break;
+        }
+        const updated: CanvasGroupDto = {
+          ...existing,
+          title:
+            op.title !== undefined && op.title !== null
+              ? op.title.trim() || "Group"
+              : existing.title,
+          color_key:
+            op.color_key !== undefined && op.color_key !== null
+              ? op.color_key.trim() || "cobalt"
+              : existing.color_key,
+          member_ids:
+            op.member_ids !== undefined && op.member_ids !== null
+              ? dedupMemberIds(op.member_ids)
+              : existing.member_ids,
+          collapsed:
+            op.collapsed !== undefined && op.collapsed !== null
+              ? op.collapsed
+              : existing.collapsed,
+          updated_at: now,
+        };
+        const nextGroups = new Map(groupsMap.value);
+        nextGroups.set(updated.id, updated);
+        groupsMap.value = nextGroups;
+        break;
+      }
+      case "delete_group": {
+        if (groupsMap.value.has(op.id)) {
+          const nextGroups = new Map(groupsMap.value);
+          nextGroups.delete(op.id);
+          groupsMap.value = nextGroups;
+          if (selectedGroupId.value === op.id) {
+            selectedGroupId.value = null;
+          }
+        }
+        break;
+      }
     }
   }
 
@@ -282,6 +402,7 @@ function applyOpsLocally(ops: GraphOp[]): ApplyResult {
 }
 
 function syncStoreAfterIpc(ops: GraphOp[], result: ApplyResult): void {
+  const now = Date.now();
   for (const op of ops) {
     switch (op.op) {
       case "move_nodes":
@@ -325,6 +446,62 @@ function syncStoreAfterIpc(ops: GraphOp[], result: ApplyResult): void {
       case "delete_edge":
         edgesMap.delete(op.id);
         break;
+      case "create_group": {
+        const trimmedId = op.id.trim();
+        if (trimmedId) {
+          const nextGroups = new Map(groupsMap.value);
+          nextGroups.set(trimmedId, {
+            id: trimmedId,
+            title: op.title.trim() || "Group",
+            color_key: op.color_key.trim() || "cobalt",
+            member_ids: dedupMemberIds(op.member_ids),
+            collapsed: false,
+            created_at: now,
+            updated_at: now,
+          });
+          groupsMap.value = nextGroups;
+        }
+        break;
+      }
+      case "update_group": {
+        const existing = groupsMap.value.get(op.id);
+        if (existing) {
+          const nextGroups = new Map(groupsMap.value);
+          nextGroups.set(op.id, {
+            ...existing,
+            title:
+              op.title !== undefined && op.title !== null
+                ? op.title.trim() || "Group"
+                : existing.title,
+            color_key:
+              op.color_key !== undefined && op.color_key !== null
+                ? op.color_key.trim() || "cobalt"
+                : existing.color_key,
+            member_ids:
+              op.member_ids !== undefined && op.member_ids !== null
+                ? dedupMemberIds(op.member_ids)
+                : existing.member_ids,
+            collapsed:
+              op.collapsed !== undefined && op.collapsed !== null
+                ? op.collapsed
+                : existing.collapsed,
+            updated_at: now,
+          });
+          groupsMap.value = nextGroups;
+        }
+        break;
+      }
+      case "delete_group": {
+        if (groupsMap.value.has(op.id)) {
+          const nextGroups = new Map(groupsMap.value);
+          nextGroups.delete(op.id);
+          groupsMap.value = nextGroups;
+          if (selectedGroupId.value === op.id) {
+            selectedGroupId.value = null;
+          }
+        }
+        break;
+      }
       default:
         break;
     }
@@ -338,6 +515,9 @@ function syncStoreAfterIpc(ops: GraphOp[], result: ApplyResult): void {
     nodesMap.delete(id);
     viewportSpatialIndex.remove(id);
     cardDomRefs.delete(id);
+  }
+  if (result.deleted_node_ids.length > 0) {
+    pruneDeletedNodesFromGroups(new Set(result.deleted_node_ids), now);
   }
   for (const eid of result.deleted_edge_ids) {
     edgesMap.delete(eid);
@@ -358,6 +538,13 @@ export function loadSnapshot(snapshot: WorkspaceSnapshot): void {
   for (const edge of snapshot.edges) {
     edgesMap.set(edge.id, edge);
   }
+
+  const nextGroups = new Map<string, CanvasGroupDto>();
+  for (const grp of snapshot.groups ?? []) {
+    nextGroups.set(grp.id, { ...grp, member_ids: [...grp.member_ids] });
+  }
+  groupsMap.value = nextGroups;
+  selectedGroupId.value = null;
 
   viewportSpatialIndex.bulkLoad(snapshot.nodes);
   workspacePath.value = snapshot.path;
@@ -526,11 +713,73 @@ export async function mutateGraph(ops: GraphOp[]): Promise<ApplyResult> {
   if (focusId.value !== null && !nodesMap.has(focusId.value)) {
     selectSingle(null);
   }
+  if (selectedGroupId.value !== null && !groupsMap.value.has(selectedGroupId.value)) {
+    selectedGroupId.value = null;
+  }
 
   graphVersion.value += 1;
   cameraControllerRef.current?.refreshCull();
   cameraControllerRef.current?.markDirty();
   return result;
+}
+
+export async function createCanvasGroup(
+  memberIds?: string[],
+  title?: string,
+  colorKey?: string,
+): Promise<CanvasGroupDto | null> {
+  const sourceIds =
+    memberIds !== undefined
+      ? memberIds
+      : selectedIds.value.size > 0
+        ? Array.from(selectedIds.value)
+        : focusId.value !== null
+          ? [focusId.value]
+          : [];
+  const validMembers = dedupMemberIds(sourceIds).filter((id) => nodesMap.has(id));
+  if (validMembers.length === 0) {
+    return null;
+  }
+  const id = `grp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const finalTitle = title && title.trim().length > 0 ? title.trim() : `Group ${groupsMap.value.size + 1}`;
+  const finalColor =
+    colorKey && colorKey.trim().length > 0
+      ? colorKey.trim()
+      : (GROUP_COLOR_KEYS[groupsMap.value.size % GROUP_COLOR_KEYS.length] ?? "cobalt");
+  const { forward, inverse } = buildCreateGroupWithInverse({
+    id,
+    title: finalTitle,
+    color_key: finalColor,
+    member_ids: validMembers,
+  });
+  await mutateGraphUndoable("Create group", forward, inverse);
+  selectedGroupId.value = id;
+  return groupsMap.value.get(id) ?? null;
+}
+
+export async function updateCanvasGroup(
+  id: string,
+  patch: GroupPatch,
+): Promise<CanvasGroupDto | null> {
+  const prev = groupsMap.value.get(id);
+  if (!prev) {
+    return null;
+  }
+  const { forward, inverse } = buildUpdateGroupWithInverse(prev, patch);
+  await mutateGraphUndoable("Update group", forward, inverse);
+  return groupsMap.value.get(id) ?? null;
+}
+
+export async function deleteCanvasGroup(id: string): Promise<void> {
+  const prev = groupsMap.value.get(id);
+  if (!prev) {
+    return;
+  }
+  const { forward, inverse } = buildDeleteGroupWithInverse(prev);
+  if (selectedGroupId.value === id) {
+    selectedGroupId.value = null;
+  }
+  await mutateGraphUndoable("Delete group", forward, inverse);
 }
 
 export async function connectNodesWithEdge(

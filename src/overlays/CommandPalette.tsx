@@ -27,10 +27,12 @@ import {
 import { executeActionTag, openSettingsModal, shouldRunTagInPlace } from "../store/aiRunner";
 import {
   cameraControllerRef,
+  createCanvasGroup,
   nodesMap,
   pullExternalRefIntoCanvas,
   tokenBudget,
 } from "../store/graphStore";
+import { openStudyModal } from "../store/studyStore";
 import {
   closeCommandPalette,
   commandPaletteOpen,
@@ -332,6 +334,30 @@ function buildPaletteCommands(onFilterStale: () => void): PaletteCommand[] {
           return;
         }
         toggleSpotlight(focusId.value);
+      },
+    },
+    {
+      id: "study-recall-drill",
+      label: "> Study & Recall Drill (Shift+Q)",
+      description: "Open spaced-repetition flashcard drill for due cards in this flow",
+      keywords: "study recall drill flashcard sm2 spaced repetition review quiz",
+      badge: "Study",
+      run: () => {
+        void openStudyModal().catch(notifyIpcError);
+      },
+    },
+    {
+      id: "group-selected-nodes",
+      label: "> Group Selected Nodes (G)",
+      description: "Wrap 2+ selected nodes into a named color-coded spatial group",
+      keywords: "group frame cluster region wrap organize selected nodes",
+      badge: "Canvas",
+      run: () => {
+        if (selectedIds.value.size < 2) {
+          pushToast("Select 2 or more nodes to group (G)", "warning");
+          return;
+        }
+        void createCanvasGroup().catch(notifyIpcError);
       },
     },
   ];

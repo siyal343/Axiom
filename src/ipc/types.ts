@@ -79,6 +79,18 @@ export interface EdgeDto {
   created_at: number;
 }
 
+export type GroupColorKey = "cobalt" | "emerald" | "amber" | "rose" | "violet" | "slate";
+
+export interface CanvasGroupDto {
+  id: string;
+  title: string;
+  color_key: string;
+  member_ids: string[];
+  collapsed: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface CameraState {
   x: number;
   y: number;
@@ -90,6 +102,7 @@ export interface WorkspaceSnapshot {
   path: string;
   nodes: NodeDto[];
   edges: EdgeDto[];
+  groups?: CanvasGroupDto[];
   camera: CameraState;
   token_budget: number;
   system_prompt?: string;
@@ -125,7 +138,23 @@ export type GraphOp =
   | { op: "delete_nodes"; ids: string[] }
   | { op: "create_edge"; edge: EdgeDto }
   | { op: "update_edge_weight"; id: string; weight: EdgeWeight }
-  | { op: "delete_edge"; id: string };
+  | { op: "delete_edge"; id: string }
+  | {
+      op: "create_group";
+      id: string;
+      title: string;
+      color_key: string;
+      member_ids: string[];
+    }
+  | {
+      op: "update_group";
+      id: string;
+      title?: string | null;
+      color_key?: string | null;
+      member_ids?: string[] | null;
+      collapsed?: boolean | null;
+    }
+  | { op: "delete_group"; id: string };
 
 export interface ApplyResult {
   updated_nodes: NodeDto[];
@@ -381,4 +410,28 @@ export interface CheckpointDiff {
   modified_nodes: CheckpointNodeChange[];
   added_edges_count: number;
   removed_edges_count: number;
+}
+
+export type StudyRating = "again" | "hard" | "good" | "easy";
+export type StudyCardKind = "qa" | "feynman" | "loophole" | "manual";
+
+export interface StudyCardDto {
+  id: string;
+  node_id: string | null;
+  prompt: string;
+  answer: string;
+  card_kind: StudyCardKind;
+  repetitions: number;
+  interval_days: number;
+  ease_factor: number;
+  lapses: number;
+  due_at: number;
+  last_reviewed_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface StudySyncResult {
+  cards: StudyCardDto[];
+  added_count: number;
 }

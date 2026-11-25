@@ -43,6 +43,7 @@ import { RelatedNodesPopover } from "./overlays/RelatedNodesPopover";
 import { SettingsModal } from "./overlays/SettingsModal";
 import { ShortcutsModal } from "./overlays/ShortcutsModal";
 import { SpineBreadcrumb } from "./overlays/SpineBreadcrumb";
+import { StudyDeckModal } from "./overlays/StudyDeckModal";
 import { notifyIpcError, pushToast, ToastStack } from "./overlays/ToastStack";
 import { WorkspaceSidebar } from "./overlays/WorkspaceSidebar";
 import { XrayHud } from "./overlays/XrayHud";
@@ -62,21 +63,28 @@ import {
   acknowledgeAndRefreshStaleNode,
   cameraControllerRef,
   connectNodesWithEdge,
+  createCanvasGroup,
+  deleteCanvasGroup,
   detachExternalRefNode,
   dragOffsets,
   edgeFlowEnabled,
   edgesMap,
+  GROUP_COLOR_KEYS,
   graphVersion,
+  groupsMap,
   isBirdsEye,
   mutateGraphUndoable,
   nodesMap,
   refreshExternalRefs,
   refreshStaleNodes,
   resizeSizes,
+  selectedGroupId,
+  setTheme,
   syncExternalRefNode,
   theme,
   tokenBudget,
   unresolvedLoopholes,
+  updateCanvasGroup,
   viewportSpatialIndex,
   visibleNodeIds,
 } from "./store/graphStore";
@@ -115,6 +123,12 @@ import {
   openFlowAndFocusNode,
   sidebarOpen,
 } from "./store/workspaceCatalogStore";
+import {
+  dueStudyCount,
+  openStudyModal,
+  studyModalOpen,
+  syncStudyDeckAction,
+} from "./store/studyStore";
 
 const EDGE_POPOVER_OPTIONS: ReadonlyArray<{
   keyHint: string;
@@ -207,6 +221,12 @@ export function App() {
   const isMinimapOpen = minimapOpen.value;
   const isDiagnosticsOpen = diagnosticsModalOpen.value;
   const isCheckpointsOpen = checkpointsModalOpen.value;
+  const isStudyOpen = studyModalOpen.value;
+  const dueStudy = dueStudyCount.value;
+  const currentGroups = groupsMap.value;
+  const activeGroupId = selectedGroupId.value;
+  const activeGroup = activeGroupId ? (currentGroups.get(activeGroupId) ?? null) : null;
+  const [groupTitleDraft, setGroupTitleDraft] = useState("");
   const activeSpotlightRoot = spotlightRootId.value;
   const externalRefs = externalRefsMap.value;
   const hasXray = xrayState.value !== null;
@@ -231,6 +251,10 @@ export function App() {
       mq.removeEventListener("change", onChange);
     };
   }, []);
+
+  useEffect(() => {
+    setGroupTitleDraft(activeGroup?.title ?? "");
+  }, [activeGroup?.id, activeGroup?.title]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme.value);
@@ -319,6 +343,8 @@ export function App() {
           outOfSyncRefIds,
           marqueeWorld: overlay.marqueeWorld,
           edgePreviewWorld: overlay.edgePreviewWorld,
+          groups: groupsMap.value,
+          selectedGroupId: selectedGroupId.value,
           themeKey: theme.value,
           animTimeMs: typeof performance !== "undefined" ? performance.now() : 0,
           animateEdges: shouldAnimateEdgesRef.current,
@@ -381,7 +407,7 @@ export function App() {
       void getSettings()
         .then((s) => {
           if (!active) return;
-          theme.value = s.theme;
+          setTheme(s.theme);
           tokenBudget.value = s.default_token_budget;
           setCustomLenses(s.custom_lenses ?? []);
         })
@@ -444,17 +470,30 @@ export function App() {
     staleNodes,
     activeSpotlightRoot,
     externalRefs,
+    currentGroups,
+    activeGroupId,
   ]);
 
   useEffect(() => {
-    if (!workspaceReady || !isTauriRuntime()) {
+    if (!workspaceReady) {
       return;
+    }
+    const studyTimer = setTimeout(() => {
+      void syncStudyDeckAction().catch(() => {
+        // Non-fatal background sync for due counter
+      });
+    }, 180);
+    if (!isTauriRuntime()) {
+      return () => {
+        clearTimeout(studyTimer);
+      };
     }
     const timer = setTimeout(() => {
       void refreshStaleNodes();
       void refreshExternalRefs();
     }, 250);
     return () => {
+      clearTimeout(studyTimer);
       clearTimeout(timer);
     };
   }, [workspaceReady, version]);
@@ -711,7 +750,12 @@ export function App() {
     if (ids.length === 0) {
       return;
     }
-    const { forward, inverse } = buildDeleteWithInverse(ids, nodesMap, edgesMap);
+    const { forward, inverse } = buildDeleteWithInverse(
+      ids,
+      nodesMap,
+      edgesMap,
+      groupsMap.value,
+    );
     if (forward.length > 0) {
       void mutateGraphUndoable(`Delete ${ids.length} nodes`, forward, inverse).catch(
         notifyIpcError,
@@ -849,6 +893,15 @@ export function App() {
           <button
             type="button"
             class="multi-select-pill__btn"
+            onClick={() => {
+              void createCanvasGroup().catch(notifyIpcError);
+            }}
+          >
+            Group (G)
+          </button>
+          <button
+            type="button"
+            class="multi-select-pill__btn"
             onClick={() => handleBulkMetaToggle("pin")}
           >
             Pin (P)
@@ -923,6 +976,91 @@ export function App() {
           </button>
         </div>
       )}
+
+      {activeGroup && !interacting && currentModal === "navigate" && !birdsEye && (() => {
+        const memberSet = new Set(activeGroup.member_ids);
+        const selectionDiffers =
+          currentSelected.size > 0 &&
+          (currentSelected.size !== memberSet.size ||
+            Array.from(currentSelected).some((id) => !memberSet.has(id)));
+        const commitGroupTitle = (): void => {
+          const nextTitle = groupTitleDraft.trim() || "Group";
+          if (nextTitle !== activeGroup.title) {
+            void updateCanvasGroup(activeGroup.id, { title: nextTitle }).catch(notifyIpcError);
+          } else {
+            setGroupTitleDraft(activeGroup.title);
+          }
+        };
+        return (
+          <div
+            class="group-inspector-pill"
+            role="region"
+            aria-label="Group inspector"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <input
+              type="text"
+              class="group-inspector-pill__input"
+              aria-label="Group title"
+              value={groupTitleDraft}
+              onInput={(e) => setGroupTitleDraft((e.target as HTMLInputElement).value)}
+              onBlur={commitGroupTitle}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitGroupTitle();
+                  (e.currentTarget as HTMLInputElement).blur();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setGroupTitleDraft(activeGroup.title);
+                  (e.currentTarget as HTMLInputElement).blur();
+                }
+              }}
+            />
+            <div class="group-inspector-pill__swatches" role="group" aria-label="Group color">
+              {GROUP_COLOR_KEYS.map((colorKey) => (
+                <button
+                  key={colorKey}
+                  type="button"
+                  class={`group-inspector-pill__swatch group-inspector-pill__swatch--${colorKey} ${
+                    activeGroup.color_key === colorKey ? "group-inspector-pill__swatch--active" : ""
+                  }`}
+                  aria-label={`Group color ${colorKey}`}
+                  aria-pressed={activeGroup.color_key === colorKey}
+                  title={colorKey}
+                  onClick={() => {
+                    void updateCanvasGroup(activeGroup.id, { color_key: colorKey }).catch(
+                      notifyIpcError,
+                    );
+                  }}
+                />
+              ))}
+            </div>
+            {selectionDiffers && (
+              <button
+                type="button"
+                class="multi-select-pill__btn"
+                onClick={() => {
+                  void updateCanvasGroup(activeGroup.id, {
+                    member_ids: Array.from(currentSelected),
+                  }).catch(notifyIpcError);
+                }}
+              >
+                Add / Sync Selection
+              </button>
+            )}
+            <button
+              type="button"
+              class="multi-select-pill__btn multi-select-pill__btn--danger"
+              onClick={() => {
+                void deleteCanvasGroup(activeGroup.id).catch(notifyIpcError);
+              }}
+            >
+              Ungroup
+            </button>
+          </div>
+        );
+      })()}
 
       {activePopover && clampedPopoverPos && (
         <div
@@ -1153,6 +1291,19 @@ export function App() {
         </button>
         <button
           type="button"
+          class={`canvas-controls__btn ${isStudyOpen ? "canvas-controls__btn--active" : ""}`}
+          title="Study & Recall Studio (Shift+Q)"
+          aria-label="Study & Recall Studio"
+          aria-pressed={isStudyOpen}
+          onClick={() => {
+            void openStudyModal().catch(notifyIpcError);
+          }}
+        >
+          <span>Study</span>
+          {dueStudy > 0 && <span class="study-due-pill">{dueStudy}</span>}
+        </button>
+        <button
+          type="button"
           class="canvas-controls__btn"
           title="Keyboard shortcuts (?)"
           aria-label="Keyboard shortcuts"
@@ -1176,6 +1327,7 @@ export function App() {
       <ArtifactExportModal />
       <DiagnosticsModal />
       <CheckpointsModal />
+      <StudyDeckModal />
       <OutlineImportModal />
       <SettingsModal />
       <ShortcutsModal />

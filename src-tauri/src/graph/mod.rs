@@ -7,10 +7,11 @@ pub mod importer;
 pub mod models;
 pub mod provenance;
 pub mod spatial;
+pub mod study;
 
 use std::collections::HashMap;
 
-use models::{EdgeDto, EdgeWeight, NodeDto};
+use models::{CanvasGroupDto, EdgeDto, EdgeWeight, NodeDto};
 use spatial::SpatialIndex;
 
 #[derive(Debug, Default)]
@@ -18,15 +19,25 @@ pub struct GraphEngine {
     pub nodes: HashMap<String, NodeDto>,
     pub incoming: HashMap<String, Vec<EdgeDto>>,
     pub outgoing: HashMap<String, Vec<EdgeDto>>,
+    pub groups: HashMap<String, CanvasGroupDto>,
     pub spatial: SpatialIndex,
 }
 
 impl GraphEngine {
     pub fn from_snapshot(nodes: &[NodeDto], edges: &[EdgeDto]) -> Self {
+        Self::from_snapshot_with_groups(nodes, edges, &[])
+    }
+
+    pub fn from_snapshot_with_groups(
+        nodes: &[NodeDto],
+        edges: &[EdgeDto],
+        groups: &[CanvasGroupDto],
+    ) -> Self {
         let mut engine = Self {
             nodes: HashMap::with_capacity(nodes.len()),
             incoming: HashMap::new(),
             outgoing: HashMap::new(),
+            groups: HashMap::with_capacity(groups.len()),
             spatial: SpatialIndex::from_nodes(nodes),
         };
         for node in nodes {
@@ -34,6 +45,9 @@ impl GraphEngine {
         }
         for edge in edges {
             engine.add_edge(edge.clone());
+        }
+        for group in groups {
+            engine.groups.insert(group.id.clone(), group.clone());
         }
         engine
     }
@@ -61,8 +75,35 @@ impl GraphEngine {
                 }
             }
         }
+        for group in self.groups.values_mut() {
+            group.member_ids.retain(|mid| mid != id);
+        }
 
         removed
+    }
+
+    pub fn upsert_group(&mut self, group: CanvasGroupDto) {
+        self.groups.insert(group.id.clone(), group);
+    }
+
+    pub fn remove_group(&mut self, id: &str) -> Option<CanvasGroupDto> {
+        self.groups.remove(id)
+    }
+
+    pub fn all_groups_sorted(&self) -> Vec<CanvasGroupDto> {
+        let mut out: Vec<CanvasGroupDto> = self.groups.values().cloned().collect();
+        out.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+        out
+    }
+
+    pub fn groups_for_node(&self, node_id: &str) -> Vec<&CanvasGroupDto> {
+        let mut out: Vec<&CanvasGroupDto> = self
+            .groups
+            .values()
+            .filter(|g| g.member_ids.iter().any(|mid| mid == node_id))
+            .collect();
+        out.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));
+        out
     }
 
     pub fn add_edge(&mut self, edge: EdgeDto) {

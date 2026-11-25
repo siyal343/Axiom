@@ -10,6 +10,7 @@ import { compileXray as compileXrayIpc, isTauriRuntime, tidySubtree as tidySubtr
 import type {
   ApplyResult,
   CameraState,
+  CanvasGroupDto,
   CompiledXray,
   EdgeDto,
   EdgeType,
@@ -35,7 +36,9 @@ import {
   applyTidyPositions,
   cameraControllerRef,
   connectNodesWithEdge,
+  createCanvasGroup,
   edgesMap,
+  groupsMap,
   mutateGraphUndoable,
   nodesMap,
   performRedo,
@@ -86,6 +89,7 @@ import {
   type ModalState,
 } from "../store/selection";
 import { closeSidebar, toggleSidebar } from "../store/workspaceCatalogStore";
+import { closeStudyModal, openStudyModal, studyModalOpen } from "../store/studyStore";
 import {
   collectSubtreeIds,
   findFirstChildTarget,
@@ -100,6 +104,7 @@ export interface KeymapDeps {
   getSelectedIds: () => ReadonlySet<string>;
   getNodes: () => Map<string, NodeDto>;
   getEdges: () => Map<string, EdgeDto>;
+  getGroups?: () => Map<string, CanvasGroupDto>;
   selectSingle: (id: string | null) => void;
   setSelection: (ids: Iterable<string>, primaryId?: string | null) => void;
   enterEditMode: (node: NodeDto) => boolean;
@@ -127,6 +132,8 @@ export interface KeymapDeps {
   toggleDiagnosticsModal?: () => void;
   toggleCheckpointsModal?: () => void;
   toggleFocusSpotlight?: () => void;
+  toggleStudyModal?: () => void;
+  createGroup?: () => void;
   closeOverlays: () => void;
   setConnectSourceId?: (id: string | null) => void;
   openEdgePopoverFor: (sourceId: string, targetId: string) => void;
@@ -173,7 +180,7 @@ function isInteractiveButtonTarget(target: EventTarget | null): boolean {
     target instanceof HTMLElement &&
     (target.tagName === "BUTTON" ||
       target.closest(
-        ".hover-pill, .edge-popover, .multi-select-pill, .canvas-controls, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu",
+        ".hover-pill, .edge-popover, .multi-select-pill, .group-inspector-pill, .canvas-controls, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu",
       ) !== null)
   );
 }
@@ -598,6 +605,24 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
         deps.pushToast("Select a focus node first", "warning");
       } else {
         toggleSpotlight(deps.getFocusId());
+      }
+      return;
+    }
+
+    if (lower === "q" && e.shiftKey) {
+      e.preventDefault();
+      deps.toggleStudyModal?.();
+      return;
+    }
+
+    if (e.target instanceof Element && e.target.closest("dialog")) {
+      return;
+    }
+
+    if (lower === "g" && !e.shiftKey) {
+      if (deps.getSelectedIds().size >= 2) {
+        e.preventDefault();
+        deps.createGroup?.();
       }
       return;
     }
@@ -1027,7 +1052,7 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
         }
       }
 
-      const { forward, inverse } = buildDeleteWithInverse(targets, nodes, edges);
+      const { forward, inverse } = buildDeleteWithInverse(targets, nodes, edges, deps.getGroups?.());
       if (forward.length > 0) {
         void deps.mutateUndoable("Delete node(s)", forward, inverse).catch(notifyIpcError);
       }
@@ -1090,6 +1115,7 @@ export function attachKeymap(
     getSelectedIds: () => selectedIds.value,
     getNodes: () => nodesMap,
     getEdges: () => edgesMap,
+    getGroups: () => groupsMap.value,
     selectSingle,
     setSelection,
     enterEditMode,
@@ -1157,6 +1183,16 @@ export function attachKeymap(
       }
       toggleSpotlight(focusId.value);
     },
+    toggleStudyModal: () => {
+      if (studyModalOpen.value) {
+        closeStudyModal();
+      } else {
+        void openStudyModal().catch(notifyIpcError);
+      }
+    },
+    createGroup: () => {
+      void createCanvasGroup().catch(notifyIpcError);
+    },
     closeOverlays: () => {
       edgePopover.value = null;
       closeNodeContextMenu();
@@ -1165,6 +1201,7 @@ export function attachKeymap(
       closeDiagnosticsModal();
       closeOutlineImportModal();
       closeCheckpointsModal();
+      closeStudyModal();
       clearSpotlight();
       closeCommandPalette();
       closeCustomPromptBar();

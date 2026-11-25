@@ -12,12 +12,13 @@ use crate::db;
 use crate::error::IpcError;
 use crate::graph::compiler::compile_context;
 use crate::graph::models::{
-    AppSettingsDto, ApplyResult, ArtifactFormat, ArtifactScope, CameraState, CheckpointDiff,
-    CheckpointSummary, CompiledArtifact, CompiledXray, EdgeType, ExternalRefInfo, GraphDiagnostics,
-    GraphOp, ImportOutlineResult, LensKind, LensStreamEvent, NodeDto, NodePositionUpdate,
-    NodeType, OpenFlowResult, PullExternalRefResult, RelatedNodeHit, SaveSettingsInput, SearchHit,
-    SpawnConnectedResult, SpawnDirection, StaleNodeInfo, TestConnectionResult, WorkspaceCatalogDto,
-    WorkspaceEntryDto, WorkspaceSearchHit, WorkspaceSnapshot,
+    now_epoch_ms, AppSettingsDto, ApplyResult, ArtifactFormat, ArtifactScope, CameraState,
+    CheckpointDiff, CheckpointSummary, CompiledArtifact, CompiledXray, EdgeType, ExternalRefInfo,
+    GraphDiagnostics, GraphOp, ImportOutlineResult, LensKind, LensStreamEvent, NodeDto,
+    NodePositionUpdate, NodeType, OpenFlowResult, PullExternalRefResult, RelatedNodeHit,
+    SaveSettingsInput, SearchHit, SpawnConnectedResult, SpawnDirection, StaleNodeInfo,
+    StudyCardDto, StudyCardKind, StudyRating, StudySyncResult, TestConnectionResult,
+    WorkspaceCatalogDto, WorkspaceEntryDto, WorkspaceSearchHit, WorkspaceSnapshot,
 };
 use crate::graph::provenance::{acknowledge_stale_node as ack_stale_node_db, compute_stale_nodes};
 use crate::graph::spatial::{
@@ -55,7 +56,8 @@ fn open_workspace_internal(
             }
         }
     }
-    let mut engine = GraphEngine::from_snapshot(&snapshot.nodes, &snapshot.edges);
+    let mut engine =
+        GraphEngine::from_snapshot_with_groups(&snapshot.nodes, &snapshot.edges, &snapshot.groups);
 
     if (cfg!(debug_assertions) || cfg!(test))
         && state.seed_stress_on_open.swap(false, Ordering::SeqCst)
@@ -790,7 +792,8 @@ pub fn import_json(
 
     let snapshot = staged.commit(&dest_path)?;
     let conn = db::open_connection(&dest_path)?;
-    let engine = GraphEngine::from_snapshot(&snapshot.nodes, &snapshot.edges);
+    let engine =
+        GraphEngine::from_snapshot_with_groups(&snapshot.nodes, &snapshot.edges, &snapshot.groups);
 
     *workspace_guard = Some(ActiveWorkspace {
         path: snapshot.path.clone(),
@@ -1359,4 +1362,100 @@ pub fn delete_checkpoint(
         .ok_or_else(IpcError::workspace_not_open)?;
 
     crate::graph::checkpoints::delete_checkpoint(conn, &checkpoint_id)
+}
+
+#[tauri::command]
+pub fn sync_study_deck(state: tauri::State<'_, AppState>) -> Result<StudySyncResult, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let workspace_guard = state
+        .workspace
+        .read()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::study::sync_study_deck(conn, &active.engine)
+}
+
+#[tauri::command]
+pub fn list_study_cards(
+    due_only: Option<bool>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<StudyCardDto>, IpcError> {
+    let db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::study::list_study_cards(conn, due_only.unwrap_or(false))
+}
+
+#[tauri::command]
+pub fn create_study_card(
+    node_id: Option<String>,
+    prompt: String,
+    answer: String,
+    card_kind: Option<StudyCardKind>,
+    state: tauri::State<'_, AppState>,
+) -> Result<StudyCardDto, IpcError> {
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::study::create_study_card(
+        conn,
+        node_id.as_deref(),
+        &prompt,
+        &answer,
+        card_kind.unwrap_or(StudyCardKind::Manual),
+    )
+}
+
+#[tauri::command]
+pub fn review_study_card(
+    card_id: String,
+    rating: StudyRating,
+    state: tauri::State<'_, AppState>,
+) -> Result<StudyCardDto, IpcError> {
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::study::review_study_card(conn, &card_id, rating, now_epoch_ms())
+}
+
+#[tauri::command]
+pub fn delete_study_card(
+    card_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), IpcError> {
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::study::delete_study_card(conn, &card_id)
 }

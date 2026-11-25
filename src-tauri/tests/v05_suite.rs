@@ -172,9 +172,9 @@ fn v2_to_v3_migration_preserves_rows_fts_and_creates_external_refs_and_checkpoin
             |r| r.get(0),
         )
         .expect("schema_version");
-    assert_eq!(schema_version, "3");
+    assert_eq!(schema_version, "4");
 
-    for table in ["external_refs", "checkpoints"] {
+    for table in ["external_refs", "checkpoints", "study_cards", "canvas_groups"] {
         let exists: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",

@@ -30,6 +30,10 @@ import type {
   SearchHit,
   SpawnDirection,
   StaleNodeInfo,
+  StudyCardDto,
+  StudyCardKind,
+  StudyRating,
+  StudySyncResult,
   SummaryUpdatedEvent,
   TestConnectionResult,
   WorkspaceCatalogDto,
@@ -347,4 +351,37 @@ export async function restoreCheckpoint(checkpointId: string): Promise<Workspace
 
 export async function deleteCheckpoint(checkpointId: string): Promise<void> {
   return invoke<void>("delete_checkpoint", { checkpointId });
+}
+
+export async function syncStudyDeck(): Promise<StudySyncResult> {
+  return invoke<StudySyncResult>("sync_study_deck", {});
+}
+
+export async function listStudyCards(dueOnly?: boolean): Promise<StudyCardDto[]> {
+  return invoke<StudyCardDto[]>("list_study_cards", { dueOnly: dueOnly ?? false });
+}
+
+export async function createStudyCard(params: {
+  nodeId?: string | null;
+  prompt: string;
+  answer: string;
+  cardKind?: StudyCardKind;
+}): Promise<StudyCardDto> {
+  return invoke<StudyCardDto>("create_study_card", {
+    nodeId: params.nodeId ?? null,
+    prompt: params.prompt,
+    answer: params.answer,
+    cardKind: params.cardKind ?? "manual",
+  });
+}
+
+export async function reviewStudyCard(
+  cardId: string,
+  rating: StudyRating,
+): Promise<StudyCardDto> {
+  return invoke<StudyCardDto>("review_study_card", { cardId, rating });
+}
+
+export async function deleteStudyCard(cardId: string): Promise<void> {
+  return invoke<void>("delete_study_card", { cardId });
 }
