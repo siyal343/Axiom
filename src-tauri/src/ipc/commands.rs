@@ -10,10 +10,10 @@ use crate::db;
 use crate::error::IpcError;
 use crate::graph::compiler::compile_context;
 use crate::graph::models::{
-    AppSettingsDto, ApplyResult, CameraState, CompiledXray, EdgeType, GraphOp, LensKind,
-    LensStreamEvent, NodePositionUpdate, NodeType, OpenFlowResult, SaveSettingsInput, SearchHit,
-    SpawnConnectedResult, SpawnDirection, TestConnectionResult, WorkspaceCatalogDto,
-    WorkspaceEntryDto, WorkspaceSnapshot,
+    AppSettingsDto, ApplyResult, ArtifactFormat, ArtifactScope, CameraState, CompiledArtifact,
+    CompiledXray, EdgeType, GraphOp, LensKind, LensStreamEvent, NodePositionUpdate, NodeType,
+    OpenFlowResult, SaveSettingsInput, SearchHit, SpawnConnectedResult, SpawnDirection,
+    TestConnectionResult, WorkspaceCatalogDto, WorkspaceEntryDto, WorkspaceSnapshot,
 };
 use crate::graph::spatial::{
     compute_tidy_subtree, resolve_overlaps as compute_resolve_overlaps,
@@ -26,13 +26,30 @@ fn open_workspace_internal(
     template_opt: Option<&str>,
     state: &AppState,
 ) -> Result<WorkspaceSnapshot, IpcError> {
+    state.bump_generation_and_cancel_runs();
+
     let path_str = resolved_path.to_string_lossy().into_owned();
 
     let mut conn = db::open_connection(&resolved_path)?;
+    let is_fresh_seed = template_opt.is_some()
+        && conn
+            .query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            == 0;
     let mut snapshot = match template_opt {
         Some(tpl) => db::seed_flow_template(&mut conn, &path_str, tpl)?,
         None => db::hydrate_or_seed_workspace(&mut conn, &path_str)?,
     };
+    if template_opt.is_some() {
+        if let Ok(settings) = state.settings.load_dto() {
+            if (is_fresh_seed || snapshot.token_budget == 6000)
+                && snapshot.token_budget != settings.default_token_budget
+            {
+                db::queries::save_token_budget(&mut conn, settings.default_token_budget)?;
+                snapshot.token_budget = settings.default_token_budget;
+            }
+        }
+    }
     let mut engine = GraphEngine::from_snapshot(&snapshot.nodes, &snapshot.edges);
 
     if (cfg!(debug_assertions) || cfg!(test))
@@ -41,22 +58,30 @@ fn open_workspace_internal(
         snapshot = db::stress::seed_stress_500_into_workspace(&mut conn, &mut engine, &path_str)?;
     }
 
-    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
-    let mut workspace_guard = state
-        .workspace
-        .write()
-        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
-    let mut db_guard = state
-        .db
-        .lock()
-        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let stale_ids = db::queries::list_stale_summary_node_ids(&conn, 64)?;
 
-    *workspace_guard = Some(ActiveWorkspace {
-        path: path_str,
-        engine,
-        token_budget: snapshot.token_budget,
-    });
-    *db_guard = Some(conn);
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    {
+        let mut workspace_guard = state
+            .workspace
+            .write()
+            .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+        let mut db_guard = state
+            .db
+            .lock()
+            .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+        *workspace_guard = Some(ActiveWorkspace {
+            path: path_str,
+            engine,
+            token_budget: snapshot.token_budget,
+        });
+        *db_guard = Some(conn);
+    }
+
+    for id in stale_ids {
+        let _ = state.summary_tx.send(id);
+    }
 
     Ok(snapshot)
 }
@@ -125,6 +150,7 @@ pub fn delete_workspace(
                     .is_some_and(|p| w.flows.iter().any(|f| f.db_path == p))
             });
         if matches_deleted {
+            state.bump_generation_and_cancel_runs();
             // Release SQLite handle before deleting files on Windows.
             *db_guard = None;
             *workspace_guard = None;
@@ -195,6 +221,7 @@ pub fn delete_flow(
             .and_then(|w| w.flows.iter().find(|f| f.id == flow_id))
             .is_some_and(|f| active_path.as_deref() == Some(f.db_path.as_str()));
         if matches_deleted {
+            state.bump_generation_and_cancel_runs();
             *db_guard = None;
             *workspace_guard = None;
         }
@@ -421,6 +448,7 @@ pub fn import_json(
     state: tauri::State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, IpcError> {
     let dest_path = PathBuf::from(dest_sqlite_path.trim());
+    let staged = db::json_io::stage_import_json(Path::new(src_path.trim()), &dest_path)?;
 
     let mut workspace_guard = state
         .workspace
@@ -431,11 +459,13 @@ pub fn import_json(
         .lock()
         .map_err(|_| IpcError::db("Database lock poisoned"))?;
 
+    state.bump_generation_and_cancel_runs();
+
     // Release any existing connection before overwriting destination SQLite/WAL files.
     *db_guard = None;
     *workspace_guard = None;
 
-    let snapshot = db::json_io::import_json(Path::new(src_path.trim()), &dest_path)?;
+    let snapshot = staged.commit(&dest_path)?;
     let conn = db::open_connection(&dest_path)?;
     let engine = GraphEngine::from_snapshot(&snapshot.nodes, &snapshot.edges);
 
@@ -450,6 +480,43 @@ pub fn import_json(
 }
 
 #[tauri::command]
+pub fn export_markdown_artifact(
+    focus_ids: Vec<String>,
+    scope: ArtifactScope,
+    format: ArtifactFormat,
+    dest_path: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<CompiledArtifact, IpcError> {
+    let artifact = {
+        let workspace_guard = state
+            .workspace
+            .read()
+            .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+        let active = workspace_guard
+            .as_ref()
+            .ok_or_else(IpcError::workspace_not_open)?;
+        crate::graph::exporter::compile_markdown_artifact(
+            &active.engine,
+            &focus_ids,
+            scope,
+            format,
+        )
+    };
+
+    if let Some(raw_dest) = dest_path {
+        let trimmed = raw_dest.trim();
+        if !trimmed.is_empty() {
+            crate::graph::exporter::write_artifact_atomic(
+                Path::new(trimmed),
+                &artifact.markdown,
+            )?;
+        }
+    }
+
+    Ok(artifact)
+}
+
+#[tauri::command]
 pub fn run_lens(
     lens: LensKind,
     focus_ids: Vec<String>,
@@ -459,6 +526,7 @@ pub fn run_lens(
     state: tauri::State<'_, AppState>,
 ) -> Result<String, IpcError> {
     let in_place = in_place.unwrap_or(false);
+    let expected_generation = state.workspace_generation.load(Ordering::SeqCst);
     let token_budget = {
         let ws_guard = state
             .workspace
@@ -470,7 +538,7 @@ pub fn run_lens(
         active.token_budget
     };
 
-    prepare_lens_context(
+    let prepared = prepare_lens_context(
         &state.workspace,
         lens,
         &focus_ids,
@@ -493,6 +561,7 @@ pub fn run_lens(
 
     let workspace = state.workspace.clone();
     let db = state.db.clone();
+    let workspace_generation = state.workspace_generation.clone();
     let active_runs = state.active_runs.clone();
     let summary_tx = state.summary_tx.clone();
     let http_client = state.http_client.clone();
@@ -509,9 +578,12 @@ pub fn run_lens(
                 config,
                 api_key,
                 token_budget,
+                expected_generation,
+                prepared: Some(prepared),
             },
             workspace,
             db,
+            workspace_generation,
             active_runs,
             summary_tx,
             http_client,
@@ -551,12 +623,20 @@ pub fn save_settings(
 ) -> Result<AppSettingsDto, IpcError> {
     let saved = state.settings.save(input)?;
 
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
     let mut ws_guard = state
         .workspace
         .write()
         .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
     if let Some(active) = ws_guard.as_mut() {
         active.token_budget = saved.default_token_budget;
+    }
+    if let Some(conn) = db_guard.as_mut() {
+        db::queries::save_token_budget(conn, saved.default_token_budget)?;
     }
 
     Ok(saved)

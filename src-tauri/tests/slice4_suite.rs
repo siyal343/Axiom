@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -260,6 +260,7 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let events_ref = events.clone();
 
+    let ws_gen = Arc::new(AtomicU64::new(1));
     let spawned = execute_lens_run(
         LensRunParams {
             run_id: "run_diverge".to_owned(),
@@ -277,9 +278,12 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
             },
             api_key: Some("sk-test-key".to_owned()),
             token_budget: 6000,
+            expected_generation: 1,
+            prepared: None,
         },
         fx.ws.clone(),
         fx.db,
+        ws_gen,
         active_runs,
         summary_tx,
         reqwest::Client::new(),
@@ -357,6 +361,7 @@ async fn anthropic_sse_red_team_checks_headers_and_challenges_direction() {
     let active_runs = Arc::new(Mutex::new(HashMap::new()));
     let (summary_tx, _rx) = mpsc::unbounded_channel();
 
+    let ws_gen = Arc::new(AtomicU64::new(1));
     let spawned = execute_lens_run(
         LensRunParams {
             run_id: "run_rt".to_owned(),
@@ -374,9 +379,12 @@ async fn anthropic_sse_red_team_checks_headers_and_challenges_direction() {
             },
             api_key: Some("ant-key-999".to_owned()),
             token_budget: 6000,
+            expected_generation: 1,
+            prepared: None,
         },
         fx.ws.clone(),
         fx.db,
+        ws_gen,
         active_runs,
         summary_tx,
         reqwest::Client::new(),
@@ -436,6 +444,7 @@ async fn ollama_ndjson_feynman_places_probe_above_and_derives_from_focus() {
     let active_runs = Arc::new(Mutex::new(HashMap::new()));
     let (summary_tx, _rx) = mpsc::unbounded_channel();
 
+    let ws_gen = Arc::new(AtomicU64::new(1));
     let spawned = execute_lens_run(
         LensRunParams {
             run_id: "run_feynman".to_owned(),
@@ -453,9 +462,12 @@ async fn ollama_ndjson_feynman_places_probe_above_and_derives_from_focus() {
             },
             api_key: None,
             token_budget: 6000,
+            expected_generation: 1,
+            prepared: None,
         },
         fx.ws.clone(),
         fx.db,
+        ws_gen,
         active_runs,
         summary_tx,
         reqwest::Client::new(),
@@ -516,6 +528,7 @@ async fn mid_stream_cancellation_persists_partial_text_and_emits_cancelled() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let events_ref = events.clone();
 
+    let ws_gen = Arc::new(AtomicU64::new(1));
     let spawned = execute_lens_run(
         LensRunParams {
             run_id: "run_cancel".to_owned(),
@@ -533,9 +546,12 @@ async fn mid_stream_cancellation_persists_partial_text_and_emits_cancelled() {
             },
             api_key: None,
             token_budget: 6000,
+            expected_generation: 1,
+            prepared: None,
         },
         fx.ws.clone(),
         fx.db,
+        ws_gen,
         active_runs,
         summary_tx,
         reqwest::Client::new(),
@@ -686,10 +702,12 @@ async fn summarizer_fast_path_llm_path_and_stale_hash_abort() {
 
     let (summary_tx, summary_rx) = mpsc::unbounded_channel();
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel::<SummaryUpdatedEvent>();
+    let ws_gen = Arc::new(AtomicU64::new(1));
     let worker = spawn_summarizer_worker(
         summary_rx,
         fx.ws.clone(),
         fx.db.clone(),
+        ws_gen,
         reqwest::Client::new(),
         settings,
         Duration::from_millis(60),
@@ -803,10 +821,12 @@ fn spawn_summarizer_worker_works_outside_tokio_runtime() {
 
     let (summary_tx, summary_rx) = mpsc::unbounded_channel();
     let (evt_tx, evt_rx) = std::sync::mpsc::channel::<SummaryUpdatedEvent>();
+    let ws_gen = Arc::new(AtomicU64::new(1));
     let _worker = spawn_summarizer_worker(
         summary_rx,
         fx.ws.clone(),
         fx.db.clone(),
+        ws_gen,
         reqwest::Client::new(),
         settings,
         Duration::from_millis(30),

@@ -4,6 +4,7 @@ import { notifyIpcError, pushToast } from "../overlays/ToastStack";
 import { loadSnapshot, theme } from "../store/graphStore";
 import {
   exportJson,
+  exportMarkdownArtifact,
   getSettings,
   importJson,
   isTauriRuntime,
@@ -12,6 +13,9 @@ import {
   seedStress500,
 } from "./client";
 import type {
+  ArtifactFormat,
+  ArtifactScope,
+  CompiledArtifact,
   EdgeDto,
   EdgeType,
   EdgeWeight,
@@ -25,6 +29,7 @@ import type {
 
 const JSON_FILTERS = [{ name: "Axiom JSON", extensions: ["json"] }];
 const SQLITE_FILTERS = [{ name: "Axiom SQLite", extensions: ["sqlite", "db"] }];
+const MARKDOWN_FILTERS = [{ name: "Markdown", extensions: ["md"] }];
 
 function buildLocalStress500Snapshot(): WorkspaceSnapshot {
   const nodeCount = 500;
@@ -201,6 +206,34 @@ export async function runExportJsonAction(): Promise<void> {
     pushToast("Exported workspace JSON", "info");
   } catch (err) {
     notifyIpcError(err);
+  }
+}
+
+export async function saveMarkdownArtifactToDisk(
+  focusIds: string[],
+  scope: ArtifactScope,
+  format: ArtifactFormat,
+  suggestedName = "axiom-artifact.md",
+): Promise<CompiledArtifact | null> {
+  if (!isTauriRuntime()) {
+    pushToast("Desktop runtime required to save Markdown artifact", "warning");
+    return null;
+  }
+  try {
+    const destPath = await save({
+      title: "Save Markdown Artifact",
+      defaultPath: suggestedName,
+      filters: MARKDOWN_FILTERS,
+    });
+    if (destPath === null) {
+      return null;
+    }
+    const compiled = await exportMarkdownArtifact(focusIds, scope, format, destPath);
+    pushToast("Saved Markdown artifact", "info");
+    return compiled;
+  } catch (err) {
+    notifyIpcError(err);
+    return null;
   }
 }
 

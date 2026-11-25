@@ -1,4 +1,5 @@
 pub mod compiler;
+pub mod exporter;
 pub mod models;
 pub mod spatial;
 

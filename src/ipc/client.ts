@@ -3,7 +3,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppSettingsDto,
   ApplyResult,
+  ArtifactFormat,
+  ArtifactScope,
   CameraState,
+  CompiledArtifact,
   CompiledXray,
   EdgeDto,
   EdgeType,
@@ -119,6 +122,20 @@ export async function saveCamera(camera: CameraState): Promise<void> {
 
 export async function exportJson(destPath: string): Promise<void> {
   return invoke<void>("export_json", { destPath });
+}
+
+export async function exportMarkdownArtifact(
+  focusIds: string[],
+  scope: ArtifactScope,
+  format: ArtifactFormat,
+  destPath?: string | null,
+): Promise<CompiledArtifact> {
+  return invoke<CompiledArtifact>("export_markdown_artifact", {
+    focusIds,
+    scope,
+    format,
+    destPath: destPath ?? null,
+  });
 }
 
 export async function importJson(

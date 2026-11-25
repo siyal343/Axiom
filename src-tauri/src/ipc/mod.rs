@@ -2,7 +2,7 @@ pub mod commands;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -23,6 +23,7 @@ pub struct ActiveWorkspace {
 pub struct AppState {
     pub workspace: Arc<RwLock<Option<ActiveWorkspace>>>,
     pub db: Arc<Mutex<Option<Connection>>>,
+    pub workspace_generation: Arc<AtomicU64>,
     pub active_runs: Arc<Mutex<HashMap<String, CancellationToken>>>,
     pub summary_tx: mpsc::UnboundedSender<String>,
     pub http_client: reqwest::Client,
@@ -35,7 +36,8 @@ impl AppState {
     pub fn new() -> (Self, mpsc::UnboundedReceiver<String>) {
         let (summary_tx, summary_rx) = mpsc::unbounded_channel();
         let http_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(120))
+            .connect_timeout(Duration::from_secs(15))
+            .read_timeout(Duration::from_secs(90))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         let settings = Arc::new(SettingsStore::new().unwrap_or_else(|_| {
@@ -48,6 +50,7 @@ impl AppState {
             Self {
                 workspace: Arc::new(RwLock::new(None)),
                 db: Arc::new(Mutex::new(None)),
+                workspace_generation: Arc::new(AtomicU64::new(1)),
                 active_runs: Arc::new(Mutex::new(HashMap::new())),
                 summary_tx,
                 http_client,
@@ -57,5 +60,16 @@ impl AppState {
             },
             summary_rx,
         )
+    }
+
+    pub fn bump_generation_and_cancel_runs(&self) -> u64 {
+        let next = self.workspace_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Ok(mut runs) = self.active_runs.lock() {
+            for token in runs.values() {
+                token.cancel();
+            }
+            runs.clear();
+        }
+        next
     }
 }

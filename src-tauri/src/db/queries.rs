@@ -213,6 +213,11 @@ pub fn apply_ops(
             } => {
                 let mut node = staged_node(engine, &node_overrides, id)
                     .ok_or_else(|| IpcError::validation(format!("Node {id} not found")))?;
+                if node.status == NodeStatus::Locked
+                    && !matches!(status, Some(s) if *s != NodeStatus::Locked)
+                {
+                    return Err(IpcError::node_locked(id));
+                }
 
                 if let Some(t) = node_type {
                     node.node_type = *t;
@@ -286,6 +291,11 @@ pub fn apply_ops(
             }
             GraphOp::DeleteNodes { ids } => {
                 for id in ids {
+                    if let Some(node) = staged_node(engine, &node_overrides, id) {
+                        if node.status == NodeStatus::Locked {
+                            return Err(IpcError::node_locked(id));
+                        }
+                    }
                     let incident_ids: Vec<String> = {
                         let mut stmt = tx.prepare(
                             "SELECT id FROM edges WHERE source_id = ?1 OR target_id = ?1 ORDER BY id ASC",
@@ -804,6 +814,35 @@ pub fn save_camera(conn: &mut Connection, camera: &CameraState) -> Result<(), Ip
     }
     tx.commit()?;
     Ok(())
+}
+
+pub fn save_token_budget(conn: &mut Connection, budget: u32) -> Result<(), IpcError> {
+    conn.execute(
+        "INSERT OR REPLACE INTO workspace_meta (key, value) VALUES ('token_budget', ?1)",
+        params![budget.to_string()],
+    )?;
+    Ok(())
+}
+
+pub fn list_stale_summary_node_ids(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<String>, IpcError> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM nodes
+         WHERE content_hash != summary_hash
+           AND exclude_from_ai = 0
+           AND status != 'draft'
+         ORDER BY updated_at ASC
+         LIMIT ?1",
+    )?;
+    let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
+    let rows = stmt.query_map(params![limit_i64], |r| r.get::<_, String>(0))?;
+    let mut ids = Vec::new();
+    for row in rows {
+        ids.push(row?);
+    }
+    Ok(ids)
 }
 
 pub fn update_node_summary(

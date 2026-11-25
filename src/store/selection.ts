@@ -1,5 +1,5 @@
 import { signal } from "@preact/signals";
-import type { CompiledXray, NodeDto } from "../ipc/types";
+import type { ArtifactFormat, ArtifactScope, CompiledXray, NodeDto } from "../ipc/types";
 
 export type ModalState = "navigate" | "edit" | "command" | "chord_a" | "connect_edge";
 
@@ -19,8 +19,14 @@ export interface NodeContextMenuState {
 export const modalState = signal<ModalState>("navigate");
 export const focusId = signal<string | null>(null);
 export const selectedIds = signal<ReadonlySet<string>>(new Set());
+export const selectedEdgeId = signal<string | null>(null);
 export const hoveredId = signal<string | null>(null);
 export const xrayState = signal<CompiledXray | null>(null);
+export const xrayPinned = signal<boolean>(false);
+export const minimapOpen = signal<boolean>(false);
+export const artifactExportOpen = signal<boolean>(false);
+export const artifactExportScope = signal<ArtifactScope>("subgraph");
+export const artifactExportFormat = signal<ArtifactFormat>("adr");
 export const lockedShakeId = signal<string | null>(null);
 export const edgePopover = signal<EdgePopoverState | null>(null);
 export const nodeContextMenu = signal<NodeContextMenuState | null>(null);
@@ -33,11 +39,30 @@ export function closeNodeContextMenu(): void {
   nodeContextMenu.value = null;
 }
 
+export function openArtifactExport(
+  format: ArtifactFormat = "adr",
+  scope: ArtifactScope = "subgraph",
+): void {
+  edgePopover.value = null;
+  nodeContextMenu.value = null;
+  hoveredId.value = null;
+  shortcutsHelpOpen.value = false;
+  artifactExportFormat.value = format;
+  artifactExportScope.value = scope;
+  artifactExportOpen.value = true;
+}
+
+export function closeArtifactExport(): void {
+  artifactExportOpen.value = false;
+}
+
 export function openCommandPalette(): void {
   edgePopover.value = null;
   nodeContextMenu.value = null;
   hoveredId.value = null;
   shortcutsHelpOpen.value = false;
+  artifactExportOpen.value = false;
+  selectedEdgeId.value = null;
   commandPaletteOpen.value = true;
   modalState.value = "command";
 }
@@ -51,7 +76,18 @@ export function closeCommandPalette(): void {
 
 let shakeTimer: ReturnType<typeof setTimeout> | null = null;
 
+export function selectEdge(edgeId: string | null): void {
+  selectedEdgeId.value = edgeId;
+  if (edgeId !== null) {
+    focusId.value = null;
+    selectedIds.value = new Set();
+    edgePopover.value = null;
+    nodeContextMenu.value = null;
+  }
+}
+
 export function selectSingle(id: string | null): void {
+  selectedEdgeId.value = null;
   if (id === null) {
     focusId.value = null;
     selectedIds.value = new Set();
@@ -62,6 +98,7 @@ export function selectSingle(id: string | null): void {
 }
 
 export function toggleSelect(id: string): void {
+  selectedEdgeId.value = null;
   const next = new Set(selectedIds.value);
   if (next.has(id)) {
     next.delete(id);
@@ -78,6 +115,7 @@ export function toggleSelect(id: string): void {
 }
 
 export function setSelection(ids: Iterable<string>, primaryId?: string | null): void {
+  selectedEdgeId.value = null;
   const next = new Set(ids);
   selectedIds.value = next;
   if (primaryId !== undefined) {
@@ -89,6 +127,7 @@ export function setSelection(ids: Iterable<string>, primaryId?: string | null): 
 }
 
 export function clearSelection(): void {
+  selectedEdgeId.value = null;
   selectedIds.value = new Set();
   focusId.value = null;
 }
@@ -116,6 +155,7 @@ export function enterEditMode(node: NodeDto): boolean {
     triggerLockedShake(node.id);
     return false;
   }
+  selectedEdgeId.value = null;
   focusId.value = node.id;
   selectedIds.value = new Set([node.id]);
   hoveredId.value = null;

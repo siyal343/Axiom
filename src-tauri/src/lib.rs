@@ -22,6 +22,7 @@ pub fn run() {
     }
     let workspace = app_state.workspace.clone();
     let db = app_state.db.clone();
+    let workspace_generation = app_state.workspace_generation.clone();
     let http_client = app_state.http_client.clone();
     let settings = app_state.settings.clone();
 
@@ -34,6 +35,7 @@ pub fn run() {
                 summary_rx,
                 workspace,
                 db,
+                workspace_generation,
                 http_client,
                 settings,
                 Duration::from_millis(1500),
@@ -62,6 +64,7 @@ pub fn run() {
             ipc::commands::save_camera,
             ipc::commands::export_json,
             ipc::commands::import_json,
+            ipc::commands::export_markdown_artifact,
             ipc::commands::run_lens,
             ipc::commands::cancel_run,
             ipc::commands::get_settings,

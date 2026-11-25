@@ -14,7 +14,6 @@ import { executeActionTag } from "../store/aiRunner";
 import { cameraControllerRef, mutateGraphUndoable, nodesMap } from "../store/graphStore";
 import { buildUpdateTextWithInverse } from "../store/history";
 import { exitEditMode, focusId, modalState, selectSingle } from "../store/selection";
-import { getRenderedMarkdown } from "./markdownCache";
 import { deriveTitleFromTagPrompt, isPlaceholderTitle } from "./nodeAccent";
 
 const monochromeEditorTheme = EditorView.theme({
@@ -169,10 +168,9 @@ function LiveEditorInstance({
 
     let savePromise: Promise<unknown> = Promise.resolve();
     if (nextTitle !== initialTitle || nextContent !== initialContent) {
-      // Pre-warm static markdown cache and persist atomically.
+      // Persist atomically (markdown cache keys on the updated content_hash).
       const current = nodesMap.get(nodeId);
       if (current) {
-        getRenderedMarkdown(current.content_hash, nextContent);
         const { forward, inverse } = buildUpdateTextWithInverse(current, nextTitle, nextContent);
         savePromise = mutateGraphUndoable("Edit node text", forward, inverse);
       }

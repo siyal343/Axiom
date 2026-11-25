@@ -22,6 +22,7 @@ import {
   syncHistorySignals,
 } from "./history";
 import { focusId, selectSingle } from "./selection";
+import { scheduleSaveCurrentLocalFlowSnapshot } from "./workspaceCatalogStore";
 
 export interface LoopholeSummary {
   count: number;
@@ -369,6 +370,7 @@ export async function mutateGraph(ops: GraphOp[]): Promise<ApplyResult> {
     syncStoreAfterIpc(ops, result);
   } else {
     result = applyOpsLocally(ops);
+    scheduleSaveCurrentLocalFlowSnapshot();
   }
 
   recomputeUnresolvedLoopholes();
@@ -380,6 +382,29 @@ export async function mutateGraph(ops: GraphOp[]): Promise<ApplyResult> {
   cameraControllerRef.current?.refreshCull();
   cameraControllerRef.current?.markDirty();
   return result;
+}
+
+export async function connectNodesWithEdge(
+  sourceId: string,
+  targetId: string,
+  edgeType: EdgeType,
+): Promise<ApplyResult> {
+  const edge: EdgeDto = {
+    id: `edge_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    source_id: sourceId,
+    target_id: targetId,
+    type: edgeType,
+    weight: "summary",
+    created_at: Date.now(),
+  };
+  const inverse: GraphOp[] = [{ op: "delete_edge", id: edge.id }];
+  if (edgeType === "resolves") {
+    const target = nodesMap.get(targetId);
+    if (target && target.type === "loophole" && target.status !== "resolved") {
+      inverse.push({ op: "update_node_meta", id: target.id, status: target.status });
+    }
+  }
+  return mutateGraphUndoable("Create edge", [{ op: "create_edge", edge }], inverse);
 }
 
 export async function mutateGraphUndoable(
@@ -684,6 +709,9 @@ export async function spawnChild(
   }
 
   recomputeUnresolvedLoopholes();
+  if (!isTauriRuntime()) {
+    scheduleSaveCurrentLocalFlowSnapshot();
+  }
   graphVersion.value += 1;
   cameraControllerRef.current?.refreshCull();
   cameraControllerRef.current?.markDirty();
@@ -828,9 +856,11 @@ export function resolveOverlapsLocally(pinnedIds: string[]): NodePositionUpdate[
   return updates;
 }
 
-export async function resolveAndAnimateOverlaps(pinnedIds: string[]): Promise<void> {
+export async function resolveAndAnimateOverlaps(
+  pinnedIds: string[],
+): Promise<NodePositionUpdate[]> {
   if (resolvingOverlaps || nodesMap.size < 2) {
-    return;
+    return [];
   }
   resolvingOverlaps = true;
   try {
@@ -839,9 +869,14 @@ export async function resolveAndAnimateOverlaps(pinnedIds: string[]): Promise<vo
       : resolveOverlapsLocally(pinnedIds);
     if (updates.length > 0) {
       applyTidyPositions(updates);
+      if (!isTauriRuntime()) {
+        scheduleSaveCurrentLocalFlowSnapshot();
+      }
     }
+    return updates;
   } catch {
     // Non-fatal: layout remains usable if overlap resolution is skipped
+    return [];
   } finally {
     resolvingOverlaps = false;
   }

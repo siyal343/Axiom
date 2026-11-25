@@ -155,11 +155,13 @@ pub async fn stream_completion(
             b
         }
         ProviderKind::Anthropic => {
+            let key = key_trimmed
+                .ok_or_else(|| IpcError::provider_auth("Anthropic API key is missing"))?;
             let url = format!("{base}/messages");
             client
                 .post(url)
                 .header("Content-Type", "application/json")
-                .header("x-api-key", key_trimmed.unwrap_or(""))
+                .header("x-api-key", key)
                 .header("anthropic-version", "2023-06-01")
                 .json(&json!({
                     "model": req.config.model,

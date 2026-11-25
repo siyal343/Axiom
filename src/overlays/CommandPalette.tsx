@@ -7,7 +7,7 @@ import {
   parseActionTagInvocation,
   type ActionTagDef,
 } from "../input/actionTags";
-import { isTauriRuntime, searchNodes } from "../ipc/client";
+import { compileXray, isTauriRuntime, searchNodes } from "../ipc/client";
 import type { NodeStatus, NodeType, SearchHit, Severity } from "../ipc/types";
 import {
   runExportJsonAction,
@@ -18,15 +18,22 @@ import {
   runToggleThemeAction,
 } from "../ipc/workspaceActions";
 import { executeActionTag, openSettingsModal, shouldRunTagInPlace } from "../store/aiRunner";
-import { cameraControllerRef, nodesMap } from "../store/graphStore";
+import { cameraControllerRef, nodesMap, tokenBudget } from "../store/graphStore";
 import {
   closeCommandPalette,
   commandPaletteOpen,
   focusId,
+  minimapOpen,
   modalState,
+  openArtifactExport,
+  selectedIds,
   selectSingle,
+  xrayPinned,
+  xrayState,
 } from "../store/selection";
 import { toggleSidebar } from "../store/workspaceCatalogStore";
+import { notifyIpcError } from "./ToastStack";
+import { buildBrowserFallbackXray } from "./XrayHud";
 
 const FILTER_CHIPS = [
   "status:active",
@@ -62,6 +69,78 @@ interface PaletteCommand {
 
 function buildPaletteCommands(): PaletteCommand[] {
   const base: PaletteCommand[] = [
+    {
+      id: "export-adr",
+      label: "> Export ADR / RFC Markdown",
+      description: "Compile focused subgraph or flow into an ADR / RFC Markdown spec",
+      keywords: "export adr rfc markdown artifact spec",
+      badge: "Artifact",
+      run: () => {
+        openArtifactExport("adr", "subgraph");
+      },
+    },
+    {
+      id: "export-brief",
+      label: "> Export Research / Study Brief",
+      description: "Compile focused subgraph or flow into a Research / Study Brief",
+      keywords: "export research study brief markdown artifact",
+      badge: "Artifact",
+      run: () => {
+        openArtifactExport("brief", "subgraph");
+      },
+    },
+    {
+      id: "export-mermaid",
+      label: "> Export Mermaid Diagram",
+      description: "Generate a Mermaid flowchart from the current flow or subgraph",
+      keywords: "export mermaid diagram flowchart graph markdown",
+      badge: "Artifact",
+      run: () => {
+        openArtifactExport("mermaid", "workspace");
+      },
+    },
+    {
+      id: "toggle-minimap",
+      label: "> Toggle Minimap (M)",
+      description: "Show or hide the bird's-eye canvas minimap",
+      keywords: "minimap overview map navigation canvas",
+      badge: "Canvas",
+      run: () => {
+        minimapOpen.value = !minimapOpen.value;
+      },
+    },
+    {
+      id: "toggle-xray",
+      label: "> Toggle Context X-Ray (Shift+V)",
+      description: "Pin or unpin the interactive Context X-Ray inspector",
+      keywords: "xray context tokens prompt inspect pin",
+      badge: "Context",
+      run: () => {
+        const nextPinned = !xrayPinned.value;
+        xrayPinned.value = nextPinned;
+        if (!nextPinned) {
+          xrayState.value = null;
+          return;
+        }
+        const targets =
+          selectedIds.value.size > 0
+            ? Array.from(selectedIds.value)
+            : focusId.value !== null
+              ? [focusId.value]
+              : [];
+        if (isTauriRuntime()) {
+          void compileXray(targets, tokenBudget.value)
+            .then((xray) => {
+              if (xrayPinned.value) {
+                xrayState.value = xray;
+              }
+            })
+            .catch(notifyIpcError);
+        } else {
+          xrayState.value = buildBrowserFallbackXray(targets, tokenBudget.value);
+        }
+      },
+    },
     {
       id: "export-json",
       label: "> Export JSON",

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::queries::{insert_edge_tx, insert_node_tx};
 use crate::db::{open_connection, row_to_edge_dto, row_to_node_dto};
 use crate::error::IpcError;
-use crate::graph::models::{now_epoch_ms, CameraState, EdgeDto, NodeDto, WorkspaceSnapshot};
+use crate::graph::models::{CameraState, EdgeDto, NodeDto, WorkspaceSnapshot};
 
 const AXIOM_EXPORT_FORMAT: &str = "axiom-workspace";
 const AXIOM_EXPORT_VERSION: u32 = 1;
@@ -108,10 +108,17 @@ pub fn export_json(conn: &Connection, dest_path: &Path) -> Result<(), IpcError> 
         out
     };
 
+    let exported_at = nodes
+        .iter()
+        .map(|n| n.updated_at)
+        .max()
+        .or_else(|| edges.iter().map(|e| e.created_at).max())
+        .unwrap_or(0);
+
     let payload = AxiomWorkspaceJson {
         format: AXIOM_EXPORT_FORMAT.to_owned(),
         version: AXIOM_EXPORT_VERSION,
-        exported_at: now_epoch_ms(),
+        exported_at,
         meta,
         nodes,
         edges,
@@ -228,56 +235,165 @@ fn validate_workspace_json(doc: &AxiomWorkspaceJson) -> Result<(), IpcError> {
     Ok(())
 }
 
-pub fn import_json(
+fn sqlite_sidecar_paths(db_path: &Path) -> (PathBuf, PathBuf) {
+    let base = db_path.to_string_lossy();
+    (
+        PathBuf::from(format!("{base}-wal")),
+        PathBuf::from(format!("{base}-shm")),
+    )
+}
+
+fn cleanup_sqlite_and_sidecars(db_path: &Path) {
+    let (wal, shm) = sqlite_sidecar_paths(db_path);
+    let _ = remove_if_exists(&wal);
+    let _ = remove_if_exists(&shm);
+    let _ = remove_if_exists(db_path);
+}
+
+struct StagingCleanupGuard {
+    path: Option<PathBuf>,
+}
+
+impl StagingCleanupGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn take(&mut self) -> Option<PathBuf> {
+        self.path.take()
+    }
+}
+
+impl Drop for StagingCleanupGuard {
+    fn drop(&mut self) {
+        if let Some(ref p) = self.path {
+            cleanup_sqlite_and_sidecars(p);
+        }
+    }
+}
+
+pub struct StagedImport {
+    staging_path: PathBuf,
+    snapshot: WorkspaceSnapshot,
+}
+
+impl StagedImport {
+    pub fn commit(mut self, dest_sqlite_path: &Path) -> Result<WorkspaceSnapshot, IpcError> {
+        let (dest_wal, dest_shm) = sqlite_sidecar_paths(dest_sqlite_path);
+        remove_if_exists(&dest_wal)?;
+        remove_if_exists(&dest_shm)?;
+        remove_if_exists(dest_sqlite_path)?;
+
+        std::fs::rename(&self.staging_path, dest_sqlite_path)?;
+        let (staged_wal, staged_shm) = sqlite_sidecar_paths(&self.staging_path);
+        let _ = remove_if_exists(&staged_wal);
+        let _ = remove_if_exists(&staged_shm);
+
+        let snapshot = std::mem::replace(
+            &mut self.snapshot,
+            WorkspaceSnapshot {
+                path: String::new(),
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                camera: CameraState {
+                    x: 0.0,
+                    y: 0.0,
+                    zoom: 1.0,
+                    last_focus_id: None,
+                },
+                token_budget: 6000,
+            },
+        );
+        std::mem::forget(self);
+        Ok(snapshot)
+    }
+}
+
+impl Drop for StagedImport {
+    fn drop(&mut self) {
+        cleanup_sqlite_and_sidecars(&self.staging_path);
+    }
+}
+
+pub fn stage_import_json(
     src_path: &Path,
     dest_sqlite_path: &Path,
-) -> Result<WorkspaceSnapshot, IpcError> {
+) -> Result<StagedImport, IpcError> {
     let raw = std::fs::read_to_string(src_path)?;
     let doc: AxiomWorkspaceJson = serde_json::from_str(&raw)?;
 
     validate_workspace_json(&doc)?;
 
-    let wal_path = PathBuf::from(format!("{}-wal", dest_sqlite_path.to_string_lossy()));
-    let shm_path = PathBuf::from(format!("{}-shm", dest_sqlite_path.to_string_lossy()));
-    remove_if_exists(dest_sqlite_path)?;
-    remove_if_exists(&wal_path)?;
-    remove_if_exists(&shm_path)?;
-
-    let mut conn = open_connection(dest_sqlite_path)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-
-    let meta_pairs = [
-        ("schema_version", "1".to_owned()),
-        ("camera_x", doc.meta.camera.x.to_string()),
-        ("camera_y", doc.meta.camera.y.to_string()),
-        ("camera_zoom", doc.meta.camera.zoom.to_string()),
-        (
-            "last_focus_id",
-            doc.meta.camera.last_focus_id.clone().unwrap_or_default(),
-        ),
-        ("token_budget", doc.meta.token_budget.to_string()),
-    ];
-    for (key, value) in meta_pairs {
-        tx.execute(
-            "INSERT OR REPLACE INTO workspace_meta (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        )?;
+    if let Some(parent) = dest_sqlite_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
     }
 
-    for node in &doc.nodes {
-        insert_node_tx(&tx, node)?;
-    }
-    for edge in &doc.edges {
-        insert_edge_tx(&tx, edge)?;
+    let file_name = dest_sqlite_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace.sqlite");
+    let staging_path = dest_sqlite_path
+        .with_file_name(format!(".{file_name}.importing-{}.sqlite", ulid::Ulid::new()));
+    let mut guard = StagingCleanupGuard::new(staging_path);
+
+    if let Some(ref sp) = guard.path {
+        let mut conn = open_connection(sp)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let meta_pairs = [
+            ("schema_version", "1".to_owned()),
+            ("camera_x", doc.meta.camera.x.to_string()),
+            ("camera_y", doc.meta.camera.y.to_string()),
+            ("camera_zoom", doc.meta.camera.zoom.to_string()),
+            (
+                "last_focus_id",
+                doc.meta.camera.last_focus_id.clone().unwrap_or_default(),
+            ),
+            ("token_budget", doc.meta.token_budget.to_string()),
+        ];
+        for (key, value) in meta_pairs {
+            tx.execute(
+                "INSERT OR REPLACE INTO workspace_meta (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )?;
+        }
+
+        for node in &doc.nodes {
+            insert_node_tx(&tx, node)?;
+        }
+        for edge in &doc.edges {
+            insert_edge_tx(&tx, edge)?;
+        }
+
+        tx.commit()?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     }
 
-    tx.commit()?;
+    let staging_path = guard
+        .take()
+        .ok_or_else(|| IpcError::db("Missing staged import path"))?;
+    let (staged_wal, staged_shm) = sqlite_sidecar_paths(&staging_path);
+    let _ = remove_if_exists(&staged_wal);
+    let _ = remove_if_exists(&staged_shm);
 
-    Ok(WorkspaceSnapshot {
-        path: dest_sqlite_path.to_string_lossy().into_owned(),
-        nodes: doc.nodes,
-        edges: doc.edges,
-        camera: doc.meta.camera,
-        token_budget: doc.meta.token_budget,
+    Ok(StagedImport {
+        staging_path,
+        snapshot: WorkspaceSnapshot {
+            path: dest_sqlite_path.to_string_lossy().into_owned(),
+            nodes: doc.nodes,
+            edges: doc.edges,
+            camera: doc.meta.camera,
+            token_budget: doc.meta.token_budget,
+        },
     })
+}
+
+pub fn import_json(
+    src_path: &Path,
+    dest_sqlite_path: &Path,
+) -> Result<WorkspaceSnapshot, IpcError> {
+    let staged = stage_import_json(src_path, dest_sqlite_path)?;
+    staged.commit(dest_sqlite_path)
 }

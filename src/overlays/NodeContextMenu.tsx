@@ -5,7 +5,7 @@ import {
   type ActionTagDef,
 } from "../input/actionTags";
 import { isTauriRuntime, tidySubtree as tidySubtreeIpc } from "../ipc/client";
-import type { NodeDto, NodePositionUpdate } from "../ipc/types";
+import type { GraphOp, NodeDto, NodePositionUpdate, NodeType, Severity } from "../ipc/types";
 import { executeActionTag, shouldRunTagInPlace } from "../store/aiRunner";
 import {
   applyTidyPositions,
@@ -28,12 +28,28 @@ import {
   closeNodeContextMenu,
   enterEditMode,
   nodeContextMenu,
+  openArtifactExport,
   selectedIds,
   selectSingle,
 } from "../store/selection";
 import { notifyIpcError, pushToast } from "./ToastStack";
 
 const VIEWPORT_PADDING_PX = 8;
+
+const TYPE_OPTIONS: ReadonlyArray<{ value: NodeType; label: string }> = [
+  { value: "core", label: "Core" },
+  { value: "branch", label: "Branch" },
+  { value: "loophole", label: "Loophole" },
+  { value: "probe", label: "Probe" },
+  { value: "synthesis", label: "Synthesis" },
+];
+
+const SEVERITY_OPTIONS: ReadonlyArray<{ value: Severity; label: string }> = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "critical", label: "Critical" },
+];
 
 function getMenuButtons(container: HTMLElement | null): HTMLButtonElement[] {
   if (!container) {
@@ -162,10 +178,31 @@ export function NodeContextMenu() {
     }
   };
 
-  const applyMeta = (label: string, patch: NodeMetaPatch): void => {
+  const selectedSet = selectedIds.value;
+  const isBulk = selectedSet.size >= 2 && selectedSet.has(node.id);
+  const targetNodes: NodeDto[] = isBulk
+    ? Array.from(selectedSet)
+        .map((id) => nodesMap.get(id))
+        .filter((n): n is NodeDto => n !== undefined)
+    : [node];
+  const bulkCount = targetNodes.length;
+  const isBulkActive = isBulk && bulkCount >= 2;
+  const allPinned = targetNodes.every((n) => n.context_controls.pin_global);
+  const allExcluded = targetNodes.every((n) => n.context_controls.exclude_from_ai);
+  const allCollapsed = targetNodes.every((n) => n.layout.collapsed);
+
+  const applyMeta = (label: string, patch: NodeMetaPatch, targets: NodeDto[] = [node]): void => {
     closeNodeContextMenu();
-    const { forward, inverse } = buildUpdateMetaWithInverse(node, patch);
-    void mutateGraphUndoable(label, forward, inverse).catch(notifyIpcError);
+    const forward: GraphOp[] = [];
+    const inverse: GraphOp[] = [];
+    for (const target of targets) {
+      const entry = buildUpdateMetaWithInverse(target, patch);
+      forward.push(...entry.forward);
+      inverse.push(...entry.inverse);
+    }
+    if (forward.length > 0) {
+      void mutateGraphUndoable(label, forward, inverse).catch(notifyIpcError);
+    }
   };
 
   const handleEdit = (): void => {
@@ -255,10 +292,20 @@ export function NodeContextMenu() {
 
   const handleDelete = (): void => {
     closeNodeContextMenu();
-    const { forward, inverse } = buildDeleteWithInverse([node.id], nodesMap, edgesMap);
+    const deleteIds = targetNodes.map((n) => n.id);
+    const { forward, inverse } = buildDeleteWithInverse(deleteIds, nodesMap, edgesMap);
     if (forward.length > 0) {
-      void mutateGraphUndoable("Delete node", forward, inverse).catch(notifyIpcError);
+      void mutateGraphUndoable(
+        isBulkActive ? `Delete ${bulkCount} nodes` : "Delete node",
+        forward,
+        inverse,
+      ).catch(notifyIpcError);
     }
+  };
+
+  const handleExportSubgraph = (): void => {
+    closeNodeContextMenu();
+    openArtifactExport("adr", "subgraph");
   };
 
   return (
@@ -300,6 +347,66 @@ export function NodeContextMenu() {
           <span>Add Child</span>
           <kbd>Tab</kbd>
         </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="node-context-menu__item"
+          onClick={handleExportSubgraph}
+        >
+          <span>Export Subgraph…</span>
+        </button>
+      </div>
+
+      <div class="node-context-menu__divider" role="separator" />
+
+      <div class="node-context-menu__section">
+        <span class="node-context-menu__section-label">Type</span>
+        <div class="node-context-menu__chips" role="group" aria-label="Node type">
+          {TYPE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              role="menuitem"
+              class={`node-context-menu__chip ${
+                node.type === opt.value ? "node-context-menu__chip--active" : ""
+              }`}
+              onClick={() =>
+                applyMeta(
+                  "Change node type",
+                  opt.value === "loophole" && node.metadata.severity === null
+                    ? { node_type: opt.value, severity: "medium" }
+                    : { node_type: opt.value },
+                  targetNodes,
+                )
+              }
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {node.type === "loophole" && (
+          <>
+            <span class="node-context-menu__section-label">Severity</span>
+            <div class="node-context-menu__chips" role="group" aria-label="Loophole severity">
+              {SEVERITY_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="menuitem"
+                  class={`node-context-menu__chip ${
+                    node.metadata.severity === opt.value ? "node-context-menu__chip--active" : ""
+                  }`}
+                  onClick={() =>
+                    applyMeta("Change loophole severity", { severity: opt.value }, targetNodes)
+                  }
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       <div class="node-context-menu__divider" role="separator" />
@@ -310,10 +417,18 @@ export function NodeContextMenu() {
           role="menuitem"
           class="node-context-menu__item"
           onClick={() =>
-            applyMeta("Toggle pin", { pin_global: !node.context_controls.pin_global })
+            applyMeta("Toggle pin", { pin_global: !allPinned }, targetNodes)
           }
         >
-          <span>{node.context_controls.pin_global ? "Unpin Global" : "Pin Global"}</span>
+          <span>
+            {isBulkActive
+              ? allPinned
+                ? `Unpin ${bulkCount} nodes`
+                : `Pin ${bulkCount} nodes`
+              : node.context_controls.pin_global
+                ? "Unpin Global"
+                : "Pin Global"}
+          </span>
           <kbd>P</kbd>
         </button>
         <button
@@ -321,21 +436,37 @@ export function NodeContextMenu() {
           role="menuitem"
           class="node-context-menu__item"
           onClick={() =>
-            applyMeta("Toggle AI exclusion", {
-              exclude_from_ai: !node.context_controls.exclude_from_ai,
-            })
+            applyMeta("Toggle AI exclusion", { exclude_from_ai: !allExcluded }, targetNodes)
           }
         >
-          <span>{node.context_controls.exclude_from_ai ? "Include in AI" : "Exclude from AI"}</span>
+          <span>
+            {isBulkActive
+              ? allExcluded
+                ? `Include ${bulkCount} nodes`
+                : `Exclude ${bulkCount} nodes`
+              : node.context_controls.exclude_from_ai
+                ? "Include in AI"
+                : "Exclude from AI"}
+          </span>
           <kbd>X</kbd>
         </button>
         <button
           type="button"
           role="menuitem"
           class="node-context-menu__item"
-          onClick={() => applyMeta("Collapse node", { collapsed: !node.layout.collapsed })}
+          onClick={() =>
+            applyMeta("Collapse node", { collapsed: !allCollapsed }, targetNodes)
+          }
         >
-          <span>{node.layout.collapsed ? "Unfold" : "Fold"}</span>
+          <span>
+            {isBulkActive
+              ? allCollapsed
+                ? `Unfold ${bulkCount} nodes`
+                : `Fold ${bulkCount} nodes`
+              : node.layout.collapsed
+                ? "Unfold"
+                : "Fold"}
+          </span>
           <kbd>C</kbd>
         </button>
         <button
@@ -343,9 +474,11 @@ export function NodeContextMenu() {
           role="menuitem"
           class="node-context-menu__item"
           onClick={() =>
-            applyMeta("Toggle lock", {
-              status: node.status === "locked" ? "active" : "locked",
-            })
+            applyMeta(
+              "Toggle lock",
+              { status: node.status === "locked" ? "active" : "locked" },
+              targetNodes,
+            )
           }
         >
           <span>{node.status === "locked" ? "Unlock" : "Lock"}</span>
@@ -417,7 +550,7 @@ export function NodeContextMenu() {
           class="node-context-menu__item node-context-menu__item--danger"
           onClick={handleDelete}
         >
-          <span>Delete</span>
+          <span>{isBulkActive ? `Delete ${bulkCount} nodes` : "Delete"}</span>
           <kbd>Del</kbd>
         </button>
       </div>

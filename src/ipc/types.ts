@@ -135,6 +135,22 @@ export interface CompiledXray {
   budget_tokens: number;
   node_modes: Record<string, InclusionMode>;
   active_edges: string[];
+  overflow?: boolean;
+  mode_tokens?: Partial<Record<InclusionMode, number>>;
+  prompt_preview?: string;
+}
+
+export type ArtifactScope = "subgraph" | "workspace";
+export type ArtifactFormat = "adr" | "brief" | "mermaid";
+
+export interface CompiledArtifact {
+  format: ArtifactFormat;
+  scope: ArtifactScope;
+  title: string;
+  markdown: string;
+  node_count: number;
+  edge_count: number;
+  unresolved_loophole_count: number;
 }
 
 export interface SearchHit {

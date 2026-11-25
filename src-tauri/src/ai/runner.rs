@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use rusqlite::Connection;
@@ -19,6 +20,11 @@ use crate::graph::models::{
 use crate::graph::spatial::{find_free_position, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH};
 use crate::ipc::ActiveWorkspace;
 
+#[derive(Debug, Clone)]
+pub struct PreparedLensRun {
+    pub compiled_prompt: String,
+}
+
 pub struct LensRunParams {
     pub run_id: String,
     pub lens: LensKind,
@@ -28,6 +34,8 @@ pub struct LensRunParams {
     pub config: ModelTierConfig,
     pub api_key: Option<String>,
     pub token_budget: u32,
+    pub expected_generation: u64,
+    pub prepared: Option<PreparedLensRun>,
 }
 
 pub fn is_generic_lens_title(title: &str) -> bool {
@@ -117,7 +125,7 @@ pub fn prepare_lens_context(
     token_budget: u32,
     custom_prompt: Option<&str>,
     in_place: bool,
-) -> Result<String, IpcError> {
+) -> Result<PreparedLensRun, IpcError> {
     if focus_ids.is_empty() {
         return Err(IpcError::validation(
             "Select at least one focus node before running an AI lens",
@@ -161,14 +169,17 @@ pub fn prepare_lens_context(
     }
 
     let compiled = compile_context(&active.engine, focus_ids, token_budget);
-    Ok(compiled.prompt_text)
+    Ok(PreparedLensRun {
+        compiled_prompt: compiled.prompt_text,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_lens_run(
-    params: LensRunParams,
+    mut params: LensRunParams,
     workspace: Arc<RwLock<Option<ActiveWorkspace>>>,
     db: Arc<Mutex<Option<Connection>>>,
+    workspace_generation: Arc<AtomicU64>,
     active_runs: Arc<Mutex<HashMap<String, CancellationToken>>>,
     summary_tx: mpsc::UnboundedSender<String>,
     http_client: reqwest::Client,
@@ -176,17 +187,20 @@ pub async fn execute_lens_run(
     mut emit_event: impl FnMut(LensStreamEvent) + Send,
 ) -> Result<Vec<String>, IpcError> {
     let in_place = params.in_place;
-    let context_result = prepare_lens_context(
-        &workspace,
-        params.lens,
-        &params.focus_ids,
-        params.token_budget,
-        params.custom_prompt.as_deref(),
-        in_place,
-    );
+    let context_result = match params.prepared.take() {
+        Some(prepared) => Ok(prepared),
+        None => prepare_lens_context(
+            &workspace,
+            params.lens,
+            &params.focus_ids,
+            params.token_budget,
+            params.custom_prompt.as_deref(),
+            in_place,
+        ),
+    };
 
     let compiled_prompt = match context_result {
-        Ok(prompt) => prompt,
+        Ok(prepared) => prepared.compiled_prompt,
         Err(err) => {
             if let Ok(mut runs) = active_runs.lock() {
                 runs.remove(&params.run_id);
@@ -199,6 +213,18 @@ pub async fn execute_lens_run(
             return Err(err);
         }
     };
+
+    if workspace_generation.load(Ordering::SeqCst) != params.expected_generation {
+        if let Ok(mut runs) = active_runs.lock() {
+            runs.remove(&params.run_id);
+        }
+        emit_event(LensStreamEvent::RunCompleted {
+            run_id: params.run_id,
+            spawned_ids: Vec::new(),
+            cancelled: true,
+        });
+        return Ok(Vec::new());
+    }
 
     let mut system_prompt = format!("{BASE_SYSTEM_PROMPT}\n\n{}", lens_prompt(params.lens));
     if in_place {
@@ -234,6 +260,11 @@ pub async fn execute_lens_run(
         let mut db_guard = db
             .lock()
             .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+        if workspace_generation.load(Ordering::SeqCst) != params.expected_generation {
+            cancel.cancel();
+            return Ok(());
+        }
 
         let active = ws_guard
             .as_mut()
@@ -455,6 +486,11 @@ pub async fn execute_lens_run(
                 .lock()
                 .map_err(|_| IpcError::db("Database lock poisoned"))?;
 
+            if workspace_generation.load(Ordering::SeqCst) != params.expected_generation {
+                cancel.cancel();
+                return Ok(());
+            }
+
             let active = ws_guard
                 .as_mut()
                 .ok_or_else(IpcError::workspace_not_open)?;
@@ -501,6 +537,10 @@ pub async fn execute_lens_run(
                              emit: &mut dyn FnMut(LensStreamEvent)|
      -> Result<(), IpcError> {
         for ev in events {
+            if workspace_generation.load(Ordering::SeqCst) != params.expected_generation {
+                cancel.cancel();
+                return Ok(());
+            }
             match ev {
                 ParsedEvent::SpawnNode { meta } => {
                     spawn_skeleton(
@@ -553,19 +593,32 @@ pub async fn execute_lens_run(
     })
     .await;
 
-    let tail_events = parser.finish();
-    let tail_res = handle_events(
-        tail_events,
-        &mut batch_index,
-        &mut active_node_id,
-        &mut active_title,
-        &mut active_content,
-        &mut spawned_ids,
-        &mut emit_event,
-    );
+    let tail_res = if workspace_generation.load(Ordering::SeqCst) == params.expected_generation {
+        let tail_events = parser.finish();
+        handle_events(
+            tail_events,
+            &mut batch_index,
+            &mut active_node_id,
+            &mut active_title,
+            &mut active_content,
+            &mut spawned_ids,
+            &mut emit_event,
+        )
+    } else {
+        Ok(())
+    };
 
     if let Ok(mut runs) = active_runs.lock() {
         runs.remove(&params.run_id);
+    }
+
+    if workspace_generation.load(Ordering::SeqCst) != params.expected_generation {
+        emit_event(LensStreamEvent::RunCompleted {
+            run_id: params.run_id,
+            spawned_ids: spawned_ids.clone(),
+            cancelled: true,
+        });
+        return Ok(spawned_ids);
     }
 
     if cancel.is_cancelled() {

@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { CanvasCameraController, screenToWorld, worldToScreen } from "./canvas/camera";
+import type { BBox } from "rbush";
+import {
+  CanvasCameraController,
+  computeFitTransform,
+  screenToWorld,
+  worldToScreen,
+  type CameraTransform,
+} from "./canvas/camera";
 import { globalFrameTracker } from "./canvas/perfMetrics";
 import { attachCanvasPointer, type PointerOverlayState } from "./canvas/pointer";
 import { renderCanvas2d } from "./canvas/renderer2d";
@@ -13,9 +20,12 @@ import {
   listenSummaryUpdated,
   saveCamera,
 } from "./ipc/client";
-import type { EdgeDto, EdgeType, GraphOp, NodeDto } from "./ipc/types";
+import type { EdgeType, GraphOp, NodeDto } from "./ipc/types";
+import { ArtifactExportModal } from "./overlays/ArtifactExportModal";
 import { CommandPalette } from "./overlays/CommandPalette";
 import { CustomPromptBar } from "./overlays/CustomPromptBar";
+import { EdgeInspectorPill } from "./overlays/EdgeInspectorPill";
+import { MinimapOverlay } from "./overlays/MinimapOverlay";
 import { NodeContextMenu } from "./overlays/NodeContextMenu";
 import { PerfHud } from "./overlays/PerfHud";
 import { SettingsModal } from "./overlays/SettingsModal";
@@ -30,11 +40,13 @@ import {
   applySummaryUpdate,
   cancelActiveRun,
   LENS_LABELS,
+  startLoopholeTriage,
   triageBanner,
   triggerLens,
 } from "./store/aiRunner";
 import {
   cameraControllerRef,
+  connectNodesWithEdge,
   dragOffsets,
   edgeFlowEnabled,
   edgesMap,
@@ -49,25 +61,95 @@ import {
   viewportSpatialIndex,
   visibleNodeIds,
 } from "./store/graphStore";
-import { buildCreateNodeWithInverse } from "./store/history";
 import {
+  buildCreateNodeWithInverse,
+  buildDeleteWithInverse,
+  buildUpdateMetaWithInverse,
+} from "./store/history";
+import {
+  connectSourceId,
   edgePopover,
   enterEditMode,
   focusId,
   hoveredId,
   isInteracting,
+  minimapOpen,
   modalState,
+  selectedEdgeId,
   selectedIds,
   selectSingle,
   shortcutsHelpOpen,
   xrayState,
 } from "./store/selection";
-import { initWorkspaceCatalog } from "./store/workspaceCatalogStore";
+import { initWorkspaceCatalog, sidebarOpen } from "./store/workspaceCatalogStore";
+
+const EDGE_POPOVER_OPTIONS: ReadonlyArray<{
+  keyHint: string;
+  type: EdgeType;
+  label: string;
+  colorVar: string;
+}> = [
+  { keyHint: "1", type: "derives", label: "Derives", colorVar: "var(--edge-default)" },
+  { keyHint: "2", type: "branches", label: "Branches", colorVar: "var(--edge-branch)" },
+  { keyHint: "3", type: "challenges", label: "Challenges", colorVar: "var(--edge-challenge)" },
+  { keyHint: "4", type: "resolves", label: "Resolves", colorVar: "var(--edge-resolve)" },
+  { keyHint: "5", type: "synthesizes", label: "Synthesizes", colorVar: "var(--edge-synthesis)" },
+  { keyHint: "6", type: "references", label: "References", colorVar: "var(--edge-reference)" },
+];
+
+function clampOverlayPoint(
+  rawX: number,
+  rawY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): { x: number; y: number } {
+  const maxX = Math.max(64, viewportWidth - 64);
+  const maxY = Math.max(48, viewportHeight - 64);
+  return {
+    x: Math.max(64, Math.min(maxX, rawX)),
+    y: Math.max(48, Math.min(maxY, rawY)),
+  };
+}
+
+function computeMultiPillWorldAnchor(selected: ReadonlySet<string>): { x: number; y: number } | null {
+  if (selected.size < 2) {
+    return null;
+  }
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  for (const id of selected) {
+    const node = nodesMap.get(id);
+    if (!node) continue;
+    const offset = dragOffsets.get(id);
+    const resized = resizeSizes.get(id);
+    const nx = node.layout.x + (offset?.x ?? 0);
+    const ny = node.layout.y + (offset?.y ?? 0);
+    const nw = resized ? resized.width : node.layout.width;
+    minX = Math.min(minX, nx);
+    minY = Math.min(minY, ny);
+    maxX = Math.max(maxX, nx + nw);
+    void getEffectiveNodeHeight(node);
+  }
+  if (!Number.isFinite(minX)) {
+    return null;
+  }
+  return { x: (minX + maxX) / 2, y: minY };
+}
 
 export function App() {
   const shellRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const zoomLabelRef = useRef<HTMLButtonElement | null>(null);
+  const multiPillRef = useRef<HTMLDivElement | null>(null);
+  const edgePopoverRef = useRef<HTMLDivElement | null>(null);
+  const edgePopoverWorldRef = useRef<{ x: number; y: number } | null>(null);
+  const overlayStateRef = useRef<PointerOverlayState>({
+    marqueeWorld: null,
+    edgePreviewWorld: null,
+    hoveredEdgeId: null,
+  });
+
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState<boolean>(() =>
@@ -87,6 +169,9 @@ export function App() {
   const runStatus = activeRunStatus.value;
   const runLens = activeRunLens.value;
   const runSpawnedCount = activeRunSpawnedCount.value;
+  const isSidebarOpen = sidebarOpen.value;
+  const isMinimapOpen = minimapOpen.value;
+  const hasXray = xrayState.value !== null;
 
   const shouldAnimateEdges =
     flowEnabled && !birdsEye && edgesMap.size > 0 && !prefersReducedMotion;
@@ -118,15 +203,46 @@ export function App() {
   }, [shouldAnimateEdges]);
 
   useEffect(() => {
+    if (!activePopover) {
+      edgePopoverWorldRef.current = null;
+      return;
+    }
+    const ctrl = cameraControllerRef.current;
+    const cam = ctrl?.getCamera() ?? { x: 0, y: 0, zoom: 1, last_focus_id: null };
+    edgePopoverWorldRef.current = screenToWorld(activePopover.x, activePopover.y, cam);
+  }, [activePopover]);
+
+  useEffect(() => {
     const shell = shellRef.current;
     const canvas = canvasRef.current;
     if (!shell || !canvas) {
       return;
     }
 
-    const overlay: PointerOverlayState = {
-      marqueeWorld: null,
-      edgePreviewWorld: null,
+    const overlay = overlayStateRef.current;
+    overlay.marqueeWorld = null;
+    overlay.edgePreviewWorld = null;
+    overlay.hoveredEdgeId = null;
+
+    const syncFloatingOverlayTransforms = (cam: CameraTransform, vw: number, vh: number): void => {
+      const multiEl = multiPillRef.current;
+      if (multiEl) {
+        const anchor = computeMultiPillWorldAnchor(selectedIds.value);
+        if (anchor) {
+          const pt = worldToScreen(anchor.x, anchor.y, cam);
+          const clamped = clampOverlayPoint(pt.x, pt.y - 12, vw, vh);
+          multiEl.style.transform = `translate3d(${clamped.x}px, ${clamped.y}px, 0) translate(-50%, -100%)`;
+        }
+      }
+
+      const popEl = edgePopoverRef.current;
+      const pop = edgePopover.value;
+      if (popEl && pop) {
+        const worldAnchor = edgePopoverWorldRef.current ?? screenToWorld(pop.x, pop.y, cam);
+        const pt = worldToScreen(worldAnchor.x, worldAnchor.y, cam);
+        const clamped = clampOverlayPoint(pt.x, pt.y, vw, vh);
+        popEl.style.transform = `translate3d(${clamped.x}px, ${clamped.y}px, 0) translate(-50%, -100%)`;
+      }
     };
 
     const controller = new CanvasCameraController({
@@ -144,6 +260,9 @@ export function App() {
           selectedIds: selectedIds.value,
           focusId: focusId.value,
           hoveredId: hoveredId.value,
+          selectedEdgeId: selectedEdgeId.value,
+          hoveredEdgeId: overlay.hoveredEdgeId ?? null,
+          connectSourceId: connectSourceId.value,
           xrayState: xrayState.value,
           unresolvedLoopholes: unresolvedLoopholes.value,
           marqueeWorld: overlay.marqueeWorld,
@@ -181,6 +300,8 @@ export function App() {
     syncZoomLabel(controller.getCamera().zoom);
     const unsubscribeZoom = controller.subscribeFrame((cam) => {
       syncZoomLabel(cam.zoom);
+      const vp = controller.getViewportSize();
+      syncFloatingOverlayTransforms(cam, vp.width, vp.height);
     });
 
     const rect = shell.getBoundingClientRect();
@@ -259,19 +380,19 @@ export function App() {
 
   useEffect(() => {
     cameraControllerRef.current?.markDirty();
-  }, [version, currentSelected, focusId.value, hoveredId.value, xrayState.value]);
+  }, [
+    version,
+    currentSelected,
+    focusId.value,
+    hoveredId.value,
+    selectedEdgeId.value,
+    connectSourceId.value,
+    xrayState.value,
+  ]);
 
   const viewportSize = cameraControllerRef.current?.getViewportSize() ?? {
     width: typeof window !== "undefined" ? window.innerWidth : 1280,
     height: typeof window !== "undefined" ? window.innerHeight : 800,
-  };
-  const clampOverlayPoint = (rawX: number, rawY: number): { x: number; y: number } => {
-    const maxX = Math.max(64, viewportSize.width - 64);
-    const maxY = Math.max(48, viewportSize.height - 64);
-    return {
-      x: Math.max(64, Math.min(maxX, rawX)),
-      y: Math.max(48, Math.min(maxY, rawY)),
-    };
   };
 
   let multiPillPos: { x: number; y: number } | null = null;
@@ -282,30 +403,125 @@ export function App() {
     currentModal === "navigate" &&
     cameraControllerRef.current
   ) {
+    const anchor = computeMultiPillWorldAnchor(currentSelected);
+    if (anchor) {
+      const screenPt = worldToScreen(
+        anchor.x,
+        anchor.y,
+        cameraControllerRef.current.getCamera(),
+      );
+      multiPillPos = clampOverlayPoint(
+        screenPt.x,
+        screenPt.y - 12,
+        viewportSize.width,
+        viewportSize.height,
+      );
+    }
+  }
+
+  const clampedPopoverPos = activePopover
+    ? clampOverlayPoint(
+        activePopover.x,
+        activePopover.y,
+        viewportSize.width,
+        viewportSize.height,
+      )
+    : null;
+
+  let activeLoopholeCount = 0;
+  for (const node of nodesMap.values()) {
+    if (node.type === "loophole" && node.status === "active") {
+      activeLoopholeCount += 1;
+    }
+  }
+
+  const fitNodeIds = (ids: Iterable<string>): void => {
+    const ctrl = cameraControllerRef.current;
+    if (!ctrl) {
+      return;
+    }
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
-    for (const id of currentSelected) {
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const id of ids) {
       const node = nodesMap.get(id);
       if (!node) continue;
       minX = Math.min(minX, node.layout.x);
       minY = Math.min(minY, node.layout.y);
       maxX = Math.max(maxX, node.layout.x + node.layout.width);
-      void getEffectiveNodeHeight(node);
+      maxY = Math.max(maxY, node.layout.y + getEffectiveNodeHeight(node));
     }
-    if (Number.isFinite(minX)) {
-      const screenPt = worldToScreen(
-        (minX + maxX) / 2,
-        minY,
-        cameraControllerRef.current.getCamera(),
-      );
-      multiPillPos = clampOverlayPoint(screenPt.x, screenPt.y - 12);
+    if (!Number.isFinite(minX)) {
+      return;
     }
-  }
+    const vp = ctrl.getViewportSize();
+    const bounds: BBox = { minX, minY, maxX, maxY };
+    ctrl.animateTo(computeFitTransform(bounds, vp.width, vp.height, 80), 220);
+  };
 
-  const clampedPopoverPos = activePopover
-    ? clampOverlayPoint(activePopover.x, activePopover.y)
-    : null;
+  const handleBulkMetaToggle = (kind: "pin" | "exclude" | "fold"): void => {
+    const selectedNodes = Array.from(currentSelected)
+      .map((id) => nodesMap.get(id))
+      .filter((n): n is NodeDto => n !== undefined);
+    if (selectedNodes.length === 0) {
+      return;
+    }
+    const forward: GraphOp[] = [];
+    const inverse: GraphOp[] = [];
+
+    if (kind === "pin") {
+      const targetVal = !selectedNodes.every((n) => n.context_controls.pin_global);
+      for (const n of selectedNodes) {
+        if (n.context_controls.pin_global === targetVal) continue;
+        const entry = buildUpdateMetaWithInverse(n, { pin_global: targetVal });
+        forward.push(...entry.forward);
+        inverse.push(...entry.inverse);
+      }
+      if (forward.length > 0) {
+        void mutateGraphUndoable("Toggle pin selection", forward, inverse).catch(notifyIpcError);
+      }
+      return;
+    }
+
+    if (kind === "exclude") {
+      const targetVal = !selectedNodes.every((n) => n.context_controls.exclude_from_ai);
+      for (const n of selectedNodes) {
+        if (n.context_controls.exclude_from_ai === targetVal) continue;
+        const entry = buildUpdateMetaWithInverse(n, { exclude_from_ai: targetVal });
+        forward.push(...entry.forward);
+        inverse.push(...entry.inverse);
+      }
+      if (forward.length > 0) {
+        void mutateGraphUndoable("Toggle AI exclusion", forward, inverse).catch(notifyIpcError);
+      }
+      return;
+    }
+
+    const targetVal = selectedNodes.some((n) => !n.layout.collapsed);
+    for (const n of selectedNodes) {
+      if (n.layout.collapsed === targetVal) continue;
+      const entry = buildUpdateMetaWithInverse(n, { collapsed: targetVal });
+      forward.push(...entry.forward);
+      inverse.push(...entry.inverse);
+    }
+    if (forward.length > 0) {
+      void mutateGraphUndoable("Collapse selection", forward, inverse).catch(notifyIpcError);
+    }
+  };
+
+  const handleBulkDelete = (): void => {
+    const ids = Array.from(currentSelected);
+    if (ids.length === 0) {
+      return;
+    }
+    const { forward, inverse } = buildDeleteWithInverse(ids, nodesMap, edgesMap);
+    if (forward.length > 0) {
+      void mutateGraphUndoable(`Delete ${ids.length} nodes`, forward, inverse).catch(
+        notifyIpcError,
+      );
+    }
+  };
 
   const handleCreateFirstNode = (): void => {
     const ctrl = cameraControllerRef.current;
@@ -353,26 +569,10 @@ export function App() {
     if (!activePopover) {
       return;
     }
-    const edge: EdgeDto = {
-      id: `edge_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      source_id: activePopover.sourceId,
-      target_id: activePopover.targetId,
-      type: edgeType,
-      weight: "summary",
-      created_at: Date.now(),
-    };
-    const inverse: GraphOp[] = [{ op: "delete_edge", id: edge.id }];
-    if (edgeType === "resolves") {
-      const target = nodesMap.get(activePopover.targetId);
-      if (target && target.type === "loophole" && target.status !== "resolved") {
-        inverse.push({ op: "update_node_meta", id: target.id, status: target.status });
-      }
-    }
+    const { sourceId, targetId } = activePopover;
     edgePopover.value = null;
     modalState.value = "navigate";
-    void mutateGraphUndoable("Create edge", [{ op: "create_edge", edge }], inverse).catch(
-      notifyIpcError,
-    );
+    void connectNodesWithEdge(sourceId, targetId, edgeType).catch(notifyIpcError);
   };
 
   return (
@@ -390,10 +590,14 @@ export function App() {
 
       {multiPillPos && (
         <div
+          ref={multiPillRef}
           class="multi-select-pill"
-          style={{ left: `${multiPillPos.x}px`, top: `${multiPillPos.y}px` }}
+          style={{
+            transform: `translate3d(${multiPillPos.x}px, ${multiPillPos.y}px, 0) translate(-50%, -100%)`,
+          }}
           onPointerDown={(e) => e.stopPropagation()}
         >
+          <span class="multi-select-pill__count">{currentSelected.size} selected</span>
           <button
             type="button"
             class="multi-select-pill__btn"
@@ -403,36 +607,69 @@ export function App() {
           >
             Synthesize (A S)
           </button>
+          <button
+            type="button"
+            class="multi-select-pill__btn"
+            onClick={() => handleBulkMetaToggle("pin")}
+          >
+            Pin (P)
+          </button>
+          <button
+            type="button"
+            class="multi-select-pill__btn"
+            onClick={() => handleBulkMetaToggle("exclude")}
+          >
+            Exclude (X)
+          </button>
+          <button
+            type="button"
+            class="multi-select-pill__btn"
+            onClick={() => handleBulkMetaToggle("fold")}
+          >
+            Fold (C)
+          </button>
+          <button
+            type="button"
+            class="multi-select-pill__btn"
+            onClick={() => fitNodeIds(currentSelected)}
+          >
+            Fit (F)
+          </button>
+          <button
+            type="button"
+            class="multi-select-pill__btn multi-select-pill__btn--danger"
+            onClick={handleBulkDelete}
+          >
+            Delete
+          </button>
         </div>
       )}
 
       {activePopover && clampedPopoverPos && (
         <div
+          ref={edgePopoverRef}
           class="edge-popover"
-          style={{ left: `${clampedPopoverPos.x}px`, top: `${clampedPopoverPos.y}px` }}
+          style={{
+            transform: `translate3d(${clampedPopoverPos.x}px, ${clampedPopoverPos.y}px, 0) translate(-50%, -100%)`,
+          }}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <button
-            type="button"
-            class="edge-popover__btn"
-            onClick={() => handleConnectEdge("references")}
-          >
-            References
-          </button>
-          <button
-            type="button"
-            class="edge-popover__btn"
-            onClick={() => handleConnectEdge("resolves")}
-          >
-            Resolves
-          </button>
-          <button
-            type="button"
-            class="edge-popover__btn"
-            onClick={() => handleConnectEdge("derives")}
-          >
-            Derives
-          </button>
+          {EDGE_POPOVER_OPTIONS.map((opt) => (
+            <button
+              key={opt.type}
+              type="button"
+              class="edge-popover__btn"
+              onClick={() => handleConnectEdge(opt.type)}
+            >
+              <span class="edge-popover__kbd">{opt.keyHint}</span>
+              <span
+                class="edge-popover__dot"
+                style={{ backgroundColor: opt.colorVar }}
+                aria-hidden="true"
+              />
+              <span>{opt.label}</span>
+            </button>
+          ))}
         </div>
       )}
 
@@ -454,34 +691,37 @@ export function App() {
         </div>
       )}
 
-      {runStatus !== "idle" && (
-        <div
-          class="ai-thinking-pill"
-          role="status"
-          aria-live="polite"
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <span class="ai-thinking-pill__spinner" aria-hidden="true">
-            <span class="ai-thinking-pill__dot" />
-            <span class="ai-thinking-pill__dot" />
-            <span class="ai-thinking-pill__dot" />
-          </span>
-          <span class="ai-thinking-pill__text">
-            {runStatus === "thinking"
-              ? `Thinking — ${runLens ? LENS_LABELS[runLens] : "AI"}…`
-              : `Streaming — ${runSpawnedCount} card${runSpawnedCount === 1 ? "" : "s"}…`}
-          </span>
-          <button
-            type="button"
-            class="ai-thinking-pill__cancel"
-            onClick={() => {
-              cancelActiveRun();
-            }}
+      <div class="top-hud-stack">
+        <XrayHud />
+        {runStatus !== "idle" && (
+          <div
+            class={`ai-thinking-pill ${hasXray ? "ai-thinking-pill--below-xray" : ""}`}
+            role="status"
+            aria-live="polite"
+            onPointerDown={(e) => e.stopPropagation()}
           >
-            Cancel (Esc)
-          </button>
-        </div>
-      )}
+            <span class="ai-thinking-pill__spinner" aria-hidden="true">
+              <span class="ai-thinking-pill__dot" />
+              <span class="ai-thinking-pill__dot" />
+              <span class="ai-thinking-pill__dot" />
+            </span>
+            <span class="ai-thinking-pill__text">
+              {runStatus === "thinking"
+                ? `Thinking — ${runLens ? LENS_LABELS[runLens] : "AI"}…`
+                : `Streaming — ${runSpawnedCount} card${runSpawnedCount === 1 ? "" : "s"}…`}
+            </span>
+            <button
+              type="button"
+              class="ai-thinking-pill__cancel"
+              onClick={() => {
+                cancelActiveRun();
+              }}
+            >
+              Cancel (Esc)
+            </button>
+          </div>
+        )}
+      </div>
 
       {nodesMap.size === 0 && currentModal === "navigate" && (
         <div class="empty-canvas-prompt" onPointerDown={(e) => e.stopPropagation()}>
@@ -500,7 +740,10 @@ export function App() {
         </div>
       )}
 
-      <div class="canvas-controls" onPointerDown={(e) => e.stopPropagation()}>
+      <div
+        class={`canvas-controls ${isSidebarOpen ? "canvas-controls--shifted" : ""}`}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
         <button
           type="button"
           class="canvas-controls__btn"
@@ -533,6 +776,27 @@ export function App() {
         <button
           type="button"
           class="canvas-controls__btn"
+          title="Fit entire graph (F F)"
+          aria-label="Fit graph"
+          onClick={() => fitNodeIds(nodesMap.keys())}
+        >
+          Fit
+        </button>
+        <button
+          type="button"
+          class={`canvas-controls__btn ${isMinimapOpen ? "canvas-controls__btn--active" : ""}`}
+          title="Toggle Minimap (M)"
+          aria-label="Toggle Minimap"
+          aria-pressed={isMinimapOpen}
+          onClick={() => {
+            minimapOpen.value = !minimapOpen.value;
+          }}
+        >
+          Map
+        </button>
+        <button
+          type="button"
+          class="canvas-controls__btn"
           title={flowEnabled ? "Pause connection flow" : "Play connection flow"}
           aria-label={flowEnabled ? "Pause connection flow" : "Play connection flow"}
           onClick={() => {
@@ -541,6 +805,21 @@ export function App() {
         >
           {flowEnabled ? "⏸" : "▶"}
         </button>
+        {activeLoopholeCount > 0 && (
+          <>
+            <span class="canvas-controls__sep" aria-hidden="true" />
+            <button
+              type="button"
+              class="loophole-alert-pill"
+              title="Jump to highest-severity active loophole (A T / [ ])"
+              onClick={() => {
+                startLoopholeTriage();
+              }}
+            >
+              ⚠ {activeLoopholeCount}
+            </button>
+          </>
+        )}
         <span class="canvas-controls__sep" aria-hidden="true" />
         <button
           type="button"
@@ -556,11 +835,13 @@ export function App() {
       </div>
 
       <WorkspaceSidebar />
+      <EdgeInspectorPill />
+      <MinimapOverlay />
       <NodeContextMenu />
-      <XrayHud />
       <PerfHud />
       <CommandPalette />
       <CustomPromptBar />
+      <ArtifactExportModal />
       <SettingsModal />
       <ShortcutsModal />
       <ToastStack />

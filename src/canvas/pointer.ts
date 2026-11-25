@@ -1,42 +1,55 @@
 import type { BBox } from "rbush";
-import type { NodePositionUpdate, NodeSizeUpdate } from "../ipc/types";
+import type { NodePositionUpdate, NodeSizeUpdate, SpawnDirection } from "../ipc/types";
 import {
   cardDomRefs,
   dragOffsets,
+  edgesMap,
+  isBirdsEye,
   MAX_NODE_HEIGHT,
   MAX_NODE_WIDTH,
   MIN_NODE_HEIGHT,
   MIN_NODE_WIDTH,
+  mutateGraph,
   mutateGraphUndoable,
   nodesMap,
   resizeSizes,
   resolveAndAnimateOverlaps,
   viewportSpatialIndex,
 } from "../store/graphStore";
-import { buildMoveNodesWithInverse, buildResizeNodesWithInverse } from "../store/history";
+import {
+  buildMoveNodesWithInverse,
+  buildResizeNodesWithInverse,
+  graphHistory,
+  syncHistorySignals,
+} from "../store/history";
 import {
   clearSelection,
+  connectSourceId,
   edgePopover,
   enterEditMode,
   focusId,
   isInteracting,
   modalState,
   nodeContextMenu,
+  selectedEdgeId,
   selectedIds,
+  selectEdge,
   selectSingle,
   setSelection,
   toggleSelect,
 } from "../store/selection";
-import { clampZoom, screenToWorld, type CanvasCameraController } from "./camera";
-import type { EdgePreview, MarqueeRect } from "./renderer2d";
+import { clampZoom, LOD_THRESHOLD, screenToWorld, type CanvasCameraController } from "./camera";
+import { hitTestEdge, type EdgePreview, type MarqueeRect } from "./renderer2d";
 import { getEffectiveNodeHeight } from "./spatialIndex";
 
 const GRID_SNAP_PX = 12;
 const DRAG_THRESHOLD_PX = 4;
+const PORT_DRAG_THRESHOLD_PX = 6;
 
 export interface PointerOverlayState {
   marqueeWorld: MarqueeRect | null;
   edgePreviewWorld: EdgePreview | null;
+  hoveredEdgeId?: string | null;
 }
 
 type ActiveGesture =
@@ -72,9 +85,46 @@ type ActiveGesture =
       moved: boolean;
     }
   | {
+      kind: "port_pending";
+      sourceId: string;
+      portDir: SpawnDirection;
+      startClientX: number;
+      startClientY: number;
+    }
+  | {
       kind: "edge_connect";
       sourceId: string;
+      fromPort?: boolean;
     };
+
+function hitTestNodeAtWorld(worldPt: { x: number; y: number }): string | null {
+  const hits = viewportSpatialIndex.queryRect({
+    minX: worldPt.x,
+    minY: worldPt.y,
+    maxX: worldPt.x,
+    maxY: worldPt.y,
+  });
+  for (let i = hits.length - 1; i >= 0; i -= 1) {
+    const id = hits[i];
+    if (!id) continue;
+    const node = nodesMap.get(id);
+    if (!node) continue;
+    const offset = dragOffsets.get(id);
+    const resized = resizeSizes.get(id);
+    const x = node.layout.x + (offset?.x ?? 0);
+    const y = node.layout.y + (offset?.y ?? 0);
+    const w = resized ? resized.width : node.layout.width;
+    const h = node.layout.collapsed
+      ? getEffectiveNodeHeight(node)
+      : resized
+        ? resized.height
+        : node.layout.height;
+    if (worldPt.x >= x && worldPt.x <= x + w && worldPt.y >= y && worldPt.y <= y + h) {
+      return id;
+    }
+  }
+  return null;
+}
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {
@@ -85,7 +135,7 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   }
   return Boolean(
     target.closest(
-      "button, input, textarea, select, a, .cm-editor, .live-editor-overlay, .hover-pill, .edge-popover, .multi-select-pill, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu",
+      "button, input, textarea, select, a, .cm-editor, .live-editor-overlay, .hover-pill, .edge-popover, .edge-inspector-pill, .minimap-card, .multi-select-pill, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu",
     ),
   );
 }
@@ -121,6 +171,8 @@ export function attachCanvasPointer(
       shellEl.style.cursor = "grab";
     } else if (gesture?.kind === "edge_connect") {
       shellEl.style.cursor = "crosshair";
+    } else if (overlay.hoveredEdgeId) {
+      shellEl.style.cursor = "pointer";
     } else {
       shellEl.style.cursor = "default";
     }
@@ -144,14 +196,17 @@ export function attachCanvasPointer(
     if (modalState.value === "edit" || modalState.value === "command") {
       return;
     }
-    if (isInteractiveTarget(e.target)) {
-      return;
-    }
 
     // Middle-mouse drag OR Space + Left-Drag pans canvas
     if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+      if (isInteractiveTarget(e.target)) {
+        return;
+      }
       e.preventDefault();
       edgePopover.value = null;
+      if (overlay.hoveredEdgeId) {
+        overlay.hoveredEdgeId = null;
+      }
       isInteracting.value = true;
       gesture = {
         kind: "pan",
@@ -167,7 +222,35 @@ export function attachCanvasPointer(
       return;
     }
 
-    const targetEl = e.target instanceof Element ? e.target : null;
+    // Direct port-drag edge wiring (movement < 6px leaves click intact to spawn child)
+    const portEl = downTarget?.closest<HTMLElement>("[data-port-dir]");
+    if (portEl && modalState.value === "navigate") {
+      const portDir = portEl.dataset.portDir;
+      const portNodeId =
+        portEl.dataset.portNodeId ??
+        portEl.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId ??
+        null;
+      if (
+        portNodeId &&
+        nodesMap.has(portNodeId) &&
+        (portDir === "top" || portDir === "right" || portDir === "bottom" || portDir === "left")
+      ) {
+        gesture = {
+          kind: "port_pending",
+          sourceId: portNodeId,
+          portDir,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+        };
+        return;
+      }
+    }
+
+    if (isInteractiveTarget(e.target)) {
+      return;
+    }
+
+    const targetEl = downTarget;
     const resizeEl = targetEl?.closest<HTMLElement>("[data-resize-handle]");
     const resizeCardEl = resizeEl?.closest<HTMLElement>("[data-node-id]");
     const resizeNodeId = resizeCardEl?.dataset.nodeId ?? null;
@@ -200,33 +283,79 @@ export function attachCanvasPointer(
     }
 
     const cardEl = targetEl?.closest<HTMLElement>("[data-node-id]");
-    const nodeId = cardEl?.dataset.nodeId ?? null;
+    let nodeId = cardEl?.dataset.nodeId ?? null;
+    if (
+      !nodeId &&
+      (isBirdsEye.value || targetEl === shellEl || targetEl?.classList.contains("canvas-layer"))
+    ) {
+      const local = toLocalCoords(e.clientX, e.clientY);
+      const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
+      nodeId = hitTestNodeAtWorld(worldPt);
+    }
 
     if (nodeId !== null && nodesMap.has(nodeId)) {
-      edgePopover.value = null;
-      if (e.altKey) {
-        e.preventDefault();
-        const local = toLocalCoords(e.clientX, e.clientY);
-        const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
-        isInteracting.value = true;
-        gesture = { kind: "edge_connect", sourceId: nodeId };
-        overlay.edgePreviewWorld = {
-          sourceId: nodeId,
-          targetX: worldPt.x,
-          targetY: worldPt.y,
-        };
-        shellEl.setPointerCapture(e.pointerId);
-        camera.markDirty();
-        updateCursor();
+      if (overlay.hoveredEdgeId) {
+        overlay.hoveredEdgeId = null;
+      }
+      if (modalState.value === "connect_edge" && connectSourceId.value) {
+        const sourceId = connectSourceId.value;
+        if (sourceId !== nodeId) {
+          e.preventDefault();
+          connectSourceId.value = null;
+          edgePopover.value = {
+            sourceId,
+            targetId: nodeId,
+            x: e.clientX,
+            y: e.clientY,
+          };
+          camera.markDirty();
+          updateCursor();
+        }
         return;
       }
 
+      edgePopover.value = null;
       if (e.shiftKey) {
+        e.preventDefault();
+        const local = toLocalCoords(e.clientX, e.clientY);
+        const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
+        if (e.altKey) {
+          isInteracting.value = true;
+          gesture = { kind: "edge_connect", sourceId: nodeId };
+          overlay.edgePreviewWorld = {
+            sourceId: nodeId,
+            targetX: worldPt.x,
+            targetY: worldPt.y,
+          };
+          shellEl.setPointerCapture(e.pointerId);
+          camera.markDirty();
+          updateCursor();
+          return;
+        }
         toggleSelect(nodeId);
-      } else if (!selectedIds.value.has(nodeId)) {
-        selectSingle(nodeId);
       } else {
-        focusId.value = nodeId;
+        if (e.altKey) {
+          e.preventDefault();
+          const local = toLocalCoords(e.clientX, e.clientY);
+          const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
+          isInteracting.value = true;
+          gesture = { kind: "edge_connect", sourceId: nodeId };
+          overlay.edgePreviewWorld = {
+            sourceId: nodeId,
+            targetX: worldPt.x,
+            targetY: worldPt.y,
+          };
+          shellEl.setPointerCapture(e.pointerId);
+          camera.markDirty();
+          updateCursor();
+          return;
+        }
+        if (!selectedIds.value.has(nodeId)) {
+          selectSingle(nodeId);
+        } else {
+          focusId.value = nodeId;
+          selectedEdgeId.value = null;
+        }
       }
 
       const dragIds = selectedIds.value.has(nodeId)
@@ -244,13 +373,38 @@ export function attachCanvasPointer(
       return;
     }
 
-    // Empty canvas click / marquee box-select
+    // Empty canvas click / edge hit / marquee box-select
     edgePopover.value = null;
     if (modalState.value === "connect_edge") {
       modalState.value = "navigate";
+      connectSourceId.value = null;
     }
     const local = toLocalCoords(e.clientX, e.clientY);
-    const worldStart = screenToWorld(local.x, local.y, camera.getCamera());
+    const cam = camera.getCamera();
+    const worldStart = screenToWorld(local.x, local.y, cam);
+
+    if (!e.shiftKey) {
+      const hitEdgeId = hitTestEdge(
+        worldStart.x,
+        worldStart.y,
+        nodesMap,
+        edgesMap,
+        dragOffsets,
+        resizeSizes,
+        cam.zoom,
+      );
+      if (hitEdgeId) {
+        selectEdge(hitEdgeId);
+        camera.markDirty();
+        return;
+      }
+    }
+
+    if (selectedEdgeId.value !== null) {
+      selectedEdgeId.value = null;
+      camera.markDirty();
+    }
+
     gesture = {
       kind: "marquee",
       startWorldX: worldStart.x,
@@ -263,6 +417,65 @@ export function attachCanvasPointer(
 
   const onPointerMove = (e: PointerEvent): void => {
     if (!gesture) {
+      if (modalState.value !== "navigate") {
+        return;
+      }
+      const moveTarget = e.target instanceof Element ? e.target : null;
+      if (moveTarget?.closest("[data-node-id]") || isInteractiveTarget(e.target)) {
+        if ((overlay.hoveredEdgeId ?? null) !== null) {
+          overlay.hoveredEdgeId = null;
+          updateCursor();
+          camera.markDirty();
+        }
+        return;
+      }
+      const local = toLocalCoords(e.clientX, e.clientY);
+      const cam = camera.getCamera();
+      const worldPt = screenToWorld(local.x, local.y, cam);
+      const nextHoveredEdge =
+        cam.zoom < LOD_THRESHOLD && hitTestNodeAtWorld(worldPt) !== null
+          ? null
+          : hitTestEdge(
+              worldPt.x,
+              worldPt.y,
+              nodesMap,
+              edgesMap,
+              dragOffsets,
+              resizeSizes,
+              cam.zoom,
+            );
+      if ((overlay.hoveredEdgeId ?? null) !== nextHoveredEdge) {
+        overlay.hoveredEdgeId = nextHoveredEdge;
+        updateCursor();
+        camera.markDirty();
+      }
+      return;
+    }
+
+    if (gesture.kind === "port_pending") {
+      if (Math.hypot(e.clientX - gesture.startClientX, e.clientY - gesture.startClientY) < PORT_DRAG_THRESHOLD_PX) {
+        return;
+      }
+      const sourceId = gesture.sourceId;
+      const portDir = gesture.portDir;
+      const local = toLocalCoords(e.clientX, e.clientY);
+      const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
+      gesture = { kind: "edge_connect", sourceId, fromPort: true };
+      isInteracting.value = true;
+      overlay.hoveredEdgeId = null;
+      overlay.edgePreviewWorld = {
+        sourceId,
+        sourceDir: portDir,
+        targetX: worldPt.x,
+        targetY: worldPt.y,
+      };
+      try {
+        shellEl.setPointerCapture(e.pointerId);
+      } catch {
+        // Synthetic events may lack an active pointerId.
+      }
+      camera.markDirty();
+      updateCursor();
       return;
     }
 
@@ -280,6 +493,7 @@ export function attachCanvasPointer(
       const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
       overlay.edgePreviewWorld = {
         sourceId: gesture.sourceId,
+        sourceDir: overlay.edgePreviewWorld?.sourceDir,
         targetX: worldPt.x,
         targetY: worldPt.y,
       };
@@ -400,6 +614,10 @@ export function attachCanvasPointer(
       shellEl.releasePointerCapture(e.pointerId);
     }
 
+    if (active.kind === "port_pending") {
+      return;
+    }
+
     if (active.kind === "pan") {
       isInteracting.value = false;
       updateCursor();
@@ -414,14 +632,32 @@ export function attachCanvasPointer(
       camera.markDirty();
       updateCursor();
 
-      const hits = viewportSpatialIndex.queryRect({
-        minX: worldPt.x - 4,
-        minY: worldPt.y - 4,
-        maxX: worldPt.x + 4,
-        maxY: worldPt.y + 4,
-      });
-      const targetId = hits.find((id) => id !== active.sourceId);
-      if (targetId) {
+      if (active.fromPort) {
+        const suppressClick = (clickEvt: MouseEvent): void => {
+          clickEvt.preventDefault();
+          clickEvt.stopPropagation();
+          window.removeEventListener("click", suppressClick, true);
+        };
+        window.addEventListener("click", suppressClick, true);
+        setTimeout(() => {
+          window.removeEventListener("click", suppressClick, true);
+        }, 0);
+      }
+
+      const eventDomCard =
+        e.target instanceof Element ? e.target.closest<HTMLElement>("[data-node-id]") : null;
+      const pointDomCard =
+        typeof document.elementFromPoint === "function"
+          ? document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-node-id]") ??
+            null
+          : null;
+      let targetId = eventDomCard?.dataset.nodeId ?? pointDomCard?.dataset.nodeId ?? null;
+      if (!targetId || targetId === active.sourceId) {
+        const worldHit = hitTestNodeAtWorld(worldPt);
+        targetId = worldHit && worldHit !== active.sourceId ? worldHit : null;
+      }
+
+      if (targetId && targetId !== active.sourceId && nodesMap.has(targetId)) {
         edgePopover.value = {
           sourceId: active.sourceId,
           targetId,
@@ -488,15 +724,52 @@ export function attachCanvasPointer(
           }
         }
         if (nextMoves.length > 0) {
-          const { forward, inverse } = buildMoveNodesWithInverse(prevMoves, nextMoves);
-          void mutateGraphUndoable("Move node(s)", forward, inverse).finally(() => {
-            for (const id of active.dragIds) {
-              dragOffsets.delete(id);
+          const dragSet = new Set(active.dragIds);
+          const preNeighborMap = new Map<string, NodePositionUpdate>();
+          for (const [id, n] of nodesMap.entries()) {
+            if (!dragSet.has(id)) {
+              preNeighborMap.set(id, { id, x: n.layout.x, y: n.layout.y });
             }
-            isInteracting.value = false;
-            camera.markDirty();
-            void resolveAndAnimateOverlaps(active.dragIds);
-          });
+          }
+          const { forward, inverse } = buildMoveNodesWithInverse(prevMoves, nextMoves);
+          void (async () => {
+            let committed = false;
+            try {
+              await mutateGraph(forward);
+              committed = true;
+            } finally {
+              for (const id of active.dragIds) {
+                dragOffsets.delete(id);
+              }
+              isInteracting.value = false;
+              camera.markDirty();
+            }
+            if (!committed) {
+              return;
+            }
+            const pushed = await resolveAndAnimateOverlaps(active.dragIds);
+            if (pushed.length === 0) {
+              graphHistory.push({ label: "Move node(s)", forward, inverse });
+              syncHistorySignals();
+              return;
+            }
+            const allPrev = [...prevMoves];
+            const allNext = [...nextMoves];
+            for (const u of pushed) {
+              const prev = preNeighborMap.get(u.id);
+              if (prev) {
+                allPrev.push(prev);
+                allNext.push(u);
+              }
+            }
+            const merged = buildMoveNodesWithInverse(allPrev, allNext);
+            graphHistory.push({
+              label: "Move node(s)",
+              forward: merged.forward,
+              inverse: merged.inverse,
+            });
+            syncHistorySignals();
+          })();
         } else {
           for (const id of active.dragIds) {
             dragOffsets.delete(id);
@@ -536,16 +809,13 @@ export function attachCanvasPointer(
     const targetEl = e.target instanceof Element ? e.target : null;
     const cardEl = targetEl?.closest<HTMLElement>("[data-node-id]");
     let nodeId = cardEl?.dataset.nodeId ?? null;
-    if (!nodeId && targetEl === shellEl) {
+    if (
+      !nodeId &&
+      (isBirdsEye.value || targetEl === shellEl || targetEl?.classList.contains("canvas-layer"))
+    ) {
       const local = toLocalCoords(e.clientX, e.clientY);
       const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
-      const hits = viewportSpatialIndex.queryRect({
-        minX: worldPt.x,
-        minY: worldPt.y,
-        maxX: worldPt.x,
-        maxY: worldPt.y,
-      });
-      nodeId = hits[hits.length - 1] ?? null;
+      nodeId = hitTestNodeAtWorld(worldPt);
     }
     if (!nodeId) {
       return;
@@ -586,7 +856,15 @@ export function attachCanvasPointer(
       return;
     }
     const cardEl = targetEl?.closest<HTMLElement>("[data-node-id]");
-    const nodeId = cardEl?.dataset.nodeId;
+    let nodeId = cardEl?.dataset.nodeId ?? null;
+    if (
+      !nodeId &&
+      (isBirdsEye.value || targetEl === shellEl || targetEl?.classList.contains("canvas-layer"))
+    ) {
+      const local = toLocalCoords(e.clientX, e.clientY);
+      const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
+      nodeId = hitTestNodeAtWorld(worldPt);
+    }
     if (!nodeId || !nodesMap.has(nodeId)) {
       nodeContextMenu.value = null;
       return;

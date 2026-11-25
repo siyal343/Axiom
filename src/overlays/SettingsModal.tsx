@@ -44,21 +44,35 @@ interface TierEditorProps {
   title: string;
   tier: "reasoning" | "utility";
   config: ModelTierConfig;
+  maxTokensDraft: string;
   keyInput: string | null;
   testResult: TestConnectionResult | null;
   testing: boolean;
   onChangeConfig: (next: ModelTierConfig) => void;
+  onChangeMaxTokensDraft: (next: string) => void;
+  onCommitMaxTokens: () => void;
   onChangeKey: (next: string | null) => void;
   onTest: () => void;
+}
+
+function clampIntDraft(raw: string, min: number, fallback: number): number {
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed)) {
+    return Math.max(min, fallback);
+  }
+  return Math.max(min, parsed);
 }
 
 function TierEditor({
   title,
   config,
+  maxTokensDraft,
   keyInput,
   testResult,
   testing,
   onChangeConfig,
+  onChangeMaxTokensDraft,
+  onCommitMaxTokens,
   onChangeKey,
   onTest,
 }: TierEditorProps) {
@@ -198,13 +212,9 @@ function TierEditor({
             step="64"
             min="64"
             class="settings-input"
-            value={config.max_tokens}
-            onInput={(e) =>
-              onChangeConfig({
-                ...config,
-                max_tokens: Number.parseInt(e.currentTarget.value, 10) || 64,
-              })
-            }
+            value={maxTokensDraft}
+            onInput={(e) => onChangeMaxTokensDraft(e.currentTarget.value)}
+            onBlur={onCommitMaxTokens}
           />
         </label>
       </div>
@@ -232,6 +242,13 @@ export function SettingsModal() {
   const [reasoningKey, setReasoningKey] = useState<string | null>(null);
   const [utilityKey, setUtilityKey] = useState<string | null>(null);
   const [defaultBudget, setDefaultBudget] = useState<number>(6000);
+  const [tokenBudgetDraft, setTokenBudgetDraft] = useState<string>("6000");
+  const [reasoningMaxTokensDraft, setReasoningMaxTokensDraft] = useState<string>(
+    String(DEFAULT_SETTINGS.reasoning.max_tokens),
+  );
+  const [utilityMaxTokensDraft, setUtilityMaxTokensDraft] = useState<string>(
+    String(DEFAULT_SETTINGS.utility.max_tokens),
+  );
   const [autoSummarize, setAutoSummarize] = useState<boolean>(true);
   const [selectedTheme, setSelectedTheme] = useState<"dark" | "light">("dark");
   const [saving, setSaving] = useState(false);
@@ -251,6 +268,9 @@ export function SettingsModal() {
 
     if (!isTauriRuntime()) {
       setDefaultBudget(tokenBudget.value);
+      setTokenBudgetDraft(String(tokenBudget.value));
+      setReasoningMaxTokensDraft(String(reasoning.max_tokens));
+      setUtilityMaxTokensDraft(String(utility.max_tokens));
       setSelectedTheme(theme.value);
       return;
     }
@@ -260,6 +280,9 @@ export function SettingsModal() {
         setReasoning(dto.reasoning);
         setUtility(dto.utility);
         setDefaultBudget(dto.default_token_budget);
+        setTokenBudgetDraft(String(dto.default_token_budget));
+        setReasoningMaxTokensDraft(String(dto.reasoning.max_tokens));
+        setUtilityMaxTokensDraft(String(dto.utility.max_tokens));
         setAutoSummarize(dto.auto_summarize);
         setSelectedTheme(dto.theme);
       })
@@ -272,20 +295,49 @@ export function SettingsModal() {
     return null;
   }
 
-  const buildInput = (): SaveSettingsInput => ({
-    reasoning,
+  const commitTokenBudgetDraft = (): number => {
+    const next = clampIntDraft(tokenBudgetDraft, 512, defaultBudget);
+    setDefaultBudget(next);
+    setTokenBudgetDraft(String(next));
+    return next;
+  };
+
+  const commitReasoningMaxTokensDraft = (): number => {
+    const next = clampIntDraft(reasoningMaxTokensDraft, 64, reasoning.max_tokens);
+    setReasoning((prev) => ({ ...prev, max_tokens: next }));
+    setReasoningMaxTokensDraft(String(next));
+    return next;
+  };
+
+  const commitUtilityMaxTokensDraft = (): number => {
+    const next = clampIntDraft(utilityMaxTokensDraft, 64, utility.max_tokens);
+    setUtility((prev) => ({ ...prev, max_tokens: next }));
+    setUtilityMaxTokensDraft(String(next));
+    return next;
+  };
+
+  const buildInput = (
+    committedBudget: number,
+    committedReasoningMax: number,
+    committedUtilityMax: number,
+  ): SaveSettingsInput => ({
+    reasoning: { ...reasoning, max_tokens: committedReasoningMax },
     reasoning_api_key: reasoningKey,
-    utility,
+    utility: { ...utility, max_tokens: committedUtilityMax },
     utility_api_key: utilityKey,
-    default_token_budget: defaultBudget,
+    default_token_budget: committedBudget,
     auto_summarize: autoSummarize,
     theme: selectedTheme,
   });
 
   const handleSave = async (closeAfter: boolean): Promise<boolean> => {
+    const committedBudget = commitTokenBudgetDraft();
+    const committedReasoningMax = commitReasoningMaxTokensDraft();
+    const committedUtilityMax = commitUtilityMaxTokensDraft();
+
     if (!isTauriRuntime()) {
       theme.value = selectedTheme;
-      tokenBudget.value = defaultBudget;
+      tokenBudget.value = committedBudget;
       pushToast("Settings updated (local preview)", "info");
       if (closeAfter) {
         closeSettingsModal();
@@ -295,9 +347,15 @@ export function SettingsModal() {
 
     setSaving(true);
     try {
-      const saved = await saveSettings(buildInput());
+      const saved = await saveSettings(
+        buildInput(committedBudget, committedReasoningMax, committedUtilityMax),
+      );
       setReasoning(saved.reasoning);
       setUtility(saved.utility);
+      setReasoningMaxTokensDraft(String(saved.reasoning.max_tokens));
+      setUtilityMaxTokensDraft(String(saved.utility.max_tokens));
+      setDefaultBudget(saved.default_token_budget);
+      setTokenBudgetDraft(String(saved.default_token_budget));
       setReasoningKey(null);
       setUtilityKey(null);
       theme.value = saved.theme;
@@ -390,10 +448,15 @@ export function SettingsModal() {
             title="Reasoning Tier (AI Lenses)"
             tier="reasoning"
             config={reasoning}
+            maxTokensDraft={reasoningMaxTokensDraft}
             keyInput={reasoningKey}
             testResult={testResults.reasoning}
             testing={testingTier === "reasoning"}
             onChangeConfig={setReasoning}
+            onChangeMaxTokensDraft={setReasoningMaxTokensDraft}
+            onCommitMaxTokens={() => {
+              commitReasoningMaxTokensDraft();
+            }}
             onChangeKey={setReasoningKey}
             onTest={() => void handleTest("reasoning")}
           />
@@ -402,10 +465,15 @@ export function SettingsModal() {
             title="Utility Tier (Background Summaries)"
             tier="utility"
             config={utility}
+            maxTokensDraft={utilityMaxTokensDraft}
             keyInput={utilityKey}
             testResult={testResults.utility}
             testing={testingTier === "utility"}
             onChangeConfig={setUtility}
+            onChangeMaxTokensDraft={setUtilityMaxTokensDraft}
+            onCommitMaxTokens={() => {
+              commitUtilityMaxTokensDraft();
+            }}
             onChangeKey={setUtilityKey}
             onTest={() => void handleTest("utility")}
           />
@@ -420,10 +488,11 @@ export function SettingsModal() {
                   min="512"
                   step="256"
                   class="settings-input"
-                  value={defaultBudget}
-                  onInput={(e) =>
-                    setDefaultBudget(Number.parseInt(e.currentTarget.value, 10) || 6000)
-                  }
+                  value={tokenBudgetDraft}
+                  onInput={(e) => setTokenBudgetDraft(e.currentTarget.value)}
+                  onBlur={() => {
+                    commitTokenBudgetDraft();
+                  }}
                 />
               </label>
 

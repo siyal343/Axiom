@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use rusqlite::Connection;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -14,10 +15,12 @@ use crate::graph::models::{NodeStatus, SummaryUpdatedEvent};
 use crate::ipc::ActiveWorkspace;
 use crate::settings::SettingsStore;
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_summarizer_worker<F>(
     mut summary_rx: mpsc::UnboundedReceiver<String>,
     workspace: Arc<RwLock<Option<ActiveWorkspace>>>,
     db: Arc<Mutex<Option<Connection>>>,
+    workspace_generation: Arc<AtomicU64>,
     http_client: reqwest::Client,
     settings: Arc<SettingsStore>,
     debounce: Duration,
@@ -26,6 +29,9 @@ pub fn spawn_summarizer_worker<F>(
 where
     F: Fn(SummaryUpdatedEvent) + Send + Sync + 'static,
 {
+    let emit_event = Arc::new(emit_event);
+    let semaphore = Arc::new(Semaphore::new(2));
+
     tauri::async_runtime::spawn(async move {
         let mut pending: HashMap<String, Instant> = HashMap::new();
 
@@ -56,15 +62,29 @@ where
                     }
 
                     for node_id in due_ids {
-                        process_single_node(
-                            &node_id,
-                            &workspace,
-                            &db,
-                            &http_client,
-                            &settings,
-                            &emit_event,
-                        )
-                        .await;
+                        let sem = semaphore.clone();
+                        let ws = workspace.clone();
+                        let db_ref = db.clone();
+                        let gen_ref = workspace_generation.clone();
+                        let client = http_client.clone();
+                        let settings_ref = settings.clone();
+                        let emit = emit_event.clone();
+
+                        tokio::spawn(async move {
+                            let Ok(_permit) = sem.acquire_owned().await else {
+                                return;
+                            };
+                            process_single_node(
+                                &node_id,
+                                &ws,
+                                &db_ref,
+                                &gen_ref,
+                                &client,
+                                &settings_ref,
+                                &*emit,
+                            )
+                            .await;
+                        });
                     }
                 }
             }
@@ -76,6 +96,7 @@ async fn process_single_node<F>(
     node_id: &str,
     workspace: &Arc<RwLock<Option<ActiveWorkspace>>>,
     db: &Arc<Mutex<Option<Connection>>>,
+    workspace_generation: &Arc<AtomicU64>,
     http_client: &reqwest::Client,
     settings: &Arc<SettingsStore>,
     emit_event: &F,
@@ -89,10 +110,11 @@ async fn process_single_node<F>(
         return;
     }
 
-    let snapshot = {
+    let (expected_generation, snapshot) = {
         let Ok(ws_guard) = workspace.read() else {
             return;
         };
+        let gen = workspace_generation.load(Ordering::SeqCst);
         let Some(active) = ws_guard.as_ref() else {
             return;
         };
@@ -107,9 +129,12 @@ async fn process_single_node<F>(
             return;
         }
         (
-            node.title.clone(),
-            node.content.clone(),
-            node.content_hash.clone(),
+            gen,
+            (
+                node.title.clone(),
+                node.content.clone(),
+                node.content_hash.clone(),
+            ),
         )
     };
 
@@ -151,6 +176,10 @@ async fn process_single_node<F>(
         }
     };
 
+    if workspace_generation.load(Ordering::SeqCst) != expected_generation {
+        return;
+    }
+
     let updated = {
         let Ok(mut ws_guard) = workspace.write() else {
             return;
@@ -158,6 +187,9 @@ async fn process_single_node<F>(
         let Ok(mut db_guard) = db.lock() else {
             return;
         };
+        if workspace_generation.load(Ordering::SeqCst) != expected_generation {
+            return;
+        }
         let (Some(active), Some(conn)) = (ws_guard.as_mut(), db_guard.as_mut()) else {
             return;
         };

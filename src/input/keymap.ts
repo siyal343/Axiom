@@ -18,8 +18,10 @@ import type {
   NodeDto,
   NodePositionUpdate,
   NodeType,
+  Severity,
 } from "../ipc/types";
 import { notifyIpcError, pushToast, type ToastVariant } from "../overlays/ToastStack";
+import { buildBrowserFallbackXray } from "../overlays/XrayHud";
 import {
   cancelActiveRun,
   closeCustomPromptBar,
@@ -32,6 +34,7 @@ import {
 import {
   applyTidyPositions,
   cameraControllerRef,
+  connectNodesWithEdge,
   edgesMap,
   mutateGraphUndoable,
   nodesMap,
@@ -50,23 +53,28 @@ import {
   syncHistorySignals,
 } from "../store/history";
 import {
+  closeArtifactExport,
   closeCommandPalette,
   closeNodeContextMenu,
   connectSourceId,
   edgePopover,
   enterEditMode,
   focusId,
+  minimapOpen,
   modalState,
   openCommandPalette,
+  selectedEdgeId,
   selectedIds,
   selectSingle,
   setSelection,
   shortcutsHelpOpen,
   triggerLockedShake,
+  xrayPinned,
   xrayState,
+  type EdgePopoverState,
   type ModalState,
 } from "../store/selection";
-import { toggleSidebar } from "../store/workspaceCatalogStore";
+import { closeSidebar, toggleSidebar } from "../store/workspaceCatalogStore";
 import {
   collectSubtreeIds,
   findFirstChildTarget,
@@ -108,6 +116,14 @@ export interface KeymapDeps {
   closeOverlays: () => void;
   setConnectSourceId?: (id: string | null) => void;
   openEdgePopoverFor: (sourceId: string, targetId: string) => void;
+  getEdgePopover?: () => EdgePopoverState | null;
+  clearEdgePopover?: () => void;
+  onSelectEdgePopoverType?: (edgeType: EdgeType) => void;
+  isXrayPinned?: () => boolean;
+  setXrayPinned?: (pinned: boolean) => void;
+  toggleMinimap?: () => void;
+  getSelectedEdgeId?: () => string | null;
+  clearSelectedEdge?: () => void;
   onTriggerLens: (lens: LensKind) => void;
   onStartTriage?: () => boolean;
   onCancelActiveRun?: () => boolean;
@@ -208,6 +224,25 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
     }
   };
 
+  const centerNodeWithAnimation = (nodeId: string): void => {
+    const node = deps.getNodes().get(nodeId);
+    if (!node) {
+      return;
+    }
+    const cam = deps.getCamera();
+    const { width, height } = deps.getViewportSize();
+    const cx = node.layout.x + node.layout.width / 2;
+    const cy = node.layout.y + getEffectiveNodeHeight(node) / 2;
+    deps.animateTo(
+      {
+        x: width / 2 - cx * cam.zoom,
+        y: height / 2 - cy * cam.zoom,
+        zoom: cam.zoom,
+      },
+      200,
+    );
+  };
+
   const smartFitIds = (ids: string[]): void => {
     const nodes = deps.getNodes();
     let minX = Number.POSITIVE_INFINITY;
@@ -287,6 +322,54 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
         deps.closeOverlays();
       }
       return;
+    }
+
+    const activeEdgePop = deps.getEdgePopover?.() ?? null;
+    if (
+      activeEdgePop !== null &&
+      mode !== "chord_a" &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !isInputLikeElement(e.target)
+    ) {
+      const edgeTypeByKey: Record<string, EdgeType> = {
+        "1": "derives",
+        "2": "branches",
+        "3": "challenges",
+        "4": "resolves",
+        "5": "synthesizes",
+        "6": "references",
+      };
+      const chosenType = edgeTypeByKey[e.key];
+      if (chosenType) {
+        e.preventDefault();
+        if (deps.onSelectEdgePopoverType) {
+          deps.onSelectEdgePopoverType(chosenType);
+        } else {
+          const edge: EdgeDto = {
+            id: `edge_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            source_id: activeEdgePop.sourceId,
+            target_id: activeEdgePop.targetId,
+            type: chosenType,
+            weight: "summary",
+            created_at: Date.now(),
+          };
+          const inverse: GraphOp[] = [{ op: "delete_edge", id: edge.id }];
+          if (chosenType === "resolves") {
+            const target = deps.getNodes().get(activeEdgePop.targetId);
+            if (target && target.type === "loophole" && target.status !== "resolved") {
+              inverse.push({ op: "update_node_meta", id: target.id, status: target.status });
+            }
+          }
+          deps.clearEdgePopover?.();
+          deps.setModalState("navigate");
+          void deps
+            .mutateUndoable("Create edge", [{ op: "create_edge", edge }], inverse)
+            .catch(notifyIpcError);
+        }
+        return;
+      }
     }
 
     if (mode === "chord_a") {
@@ -386,6 +469,17 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
     if (mod && lower === "k") {
       e.preventDefault();
       deps.openCommandPalette();
+      return;
+    }
+    if (mod && !e.shiftKey && !e.altKey && lower === "a") {
+      e.preventDefault();
+      const allIds = Array.from(deps.getNodes().keys());
+      if (allIds.length > 0) {
+        const currentFocus = deps.getFocusId();
+        const primary =
+          currentFocus !== null && deps.getNodes().has(currentFocus) ? currentFocus : allIds[0];
+        deps.setSelection(allIds, primary);
+      }
       return;
     }
     if (mod && !e.shiftKey && !e.altKey && lower === "b") {
@@ -658,10 +752,84 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
       return;
     }
 
+    if (lower === "m" && !e.shiftKey) {
+      e.preventDefault();
+      deps.toggleMinimap?.();
+      return;
+    }
+
+    if ((e.key === "[" || e.key === "]") && !e.shiftKey) {
+      e.preventDefault();
+      const severityWeight = (sev: Severity | null): number => {
+        switch (sev) {
+          case "critical":
+            return 4;
+          case "high":
+            return 3;
+          case "medium":
+            return 2;
+          case "low":
+            return 1;
+          default:
+            return 0;
+        }
+      };
+      const loopholes = Array.from(deps.getNodes().values())
+        .filter((n) => n.type === "loophole" && n.status === "active")
+        .sort((a, b) => {
+          const diff = severityWeight(b.metadata.severity) - severityWeight(a.metadata.severity);
+          if (diff !== 0) {
+            return diff;
+          }
+          return a.id.localeCompare(b.id);
+        });
+      if (loopholes.length === 0) {
+        deps.pushToast("No active loopholes", "info");
+        return;
+      }
+      const curFocus = deps.getFocusId();
+      const curIdx = curFocus ? loopholes.findIndex((n) => n.id === curFocus) : -1;
+      const step = e.key === "]" ? 1 : -1;
+      const nextIdx =
+        curIdx === -1
+          ? e.key === "]"
+            ? 0
+            : loopholes.length - 1
+          : (curIdx + step + loopholes.length) % loopholes.length;
+      const target = loopholes[nextIdx];
+      if (target) {
+        deps.selectSingle(target.id);
+        centerNodeWithAnimation(target.id);
+      }
+      return;
+    }
+
     if (lower === "c") {
+      const nodes = deps.getNodes();
+      const selected = deps.getSelectedIds();
+      if (!e.shiftKey && selected.size >= 2) {
+        const selectedNodes = Array.from(selected)
+          .map((id) => nodes.get(id))
+          .filter((n): n is NodeDto => n !== undefined);
+        if (selectedNodes.length === 0) return;
+        e.preventDefault();
+        const targetCollapsed = selectedNodes.some((n) => !n.layout.collapsed);
+        const forward: GraphOp[] = [];
+        const inverse: GraphOp[] = [];
+        for (const n of selectedNodes) {
+          if (n.layout.collapsed === targetCollapsed) continue;
+          const entry = buildUpdateMetaWithInverse(n, { collapsed: targetCollapsed });
+          forward.push(...entry.forward);
+          inverse.push(...entry.inverse);
+        }
+        if (forward.length > 0) {
+          void deps.mutateUndoable("Collapse selection", forward, inverse).catch(notifyIpcError);
+        }
+        return;
+      }
+
       const fid = deps.getFocusId();
       if (!fid) return;
-      const nodes = deps.getNodes();
       const focused = nodes.get(fid);
       if (!focused) return;
       e.preventDefault();
@@ -722,17 +890,44 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
         lastFTimestamp = 0;
         smartFitIds(Array.from(deps.getNodes().keys()));
       } else {
-        const fid = deps.getFocusId();
-        if (fid) {
-          smartFitIds(collectSubtreeIds(fid, deps.getNodes(), deps.getEdges()));
+        const selected = deps.getSelectedIds();
+        if (selected.size >= 2) {
+          smartFitIds(Array.from(selected));
         } else {
-          smartFitIds(Array.from(deps.getNodes().keys()));
+          const fid = deps.getFocusId();
+          if (fid) {
+            smartFitIds(collectSubtreeIds(fid, deps.getNodes(), deps.getEdges()));
+          } else {
+            smartFitIds(Array.from(deps.getNodes().keys()));
+          }
         }
       }
       return;
     }
 
-    if (lower === "v" && !e.shiftKey) {
+    if (lower === "v") {
+      if (e.shiftKey) {
+        if (e.repeat) return;
+        e.preventDefault();
+        const nextPinned = !(deps.isXrayPinned?.() ?? false);
+        vHeld = false;
+        deps.setXrayPinned?.(nextPinned);
+        if (!nextPinned) {
+          deps.setXray(null);
+          return;
+        }
+        const targets = getTargetIds();
+        void deps
+          .compileXray(targets)
+          .then((xray) => {
+            if (deps.isXrayPinned?.() ?? true) {
+              deps.setXray(xray);
+            }
+          })
+          .catch(notifyIpcError);
+        return;
+      }
+
       if (e.repeat || vHeld) return;
       const targets = getTargetIds();
       if (targets.length === 0) return;
@@ -741,7 +936,7 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
       void deps
         .compileXray(targets)
         .then((xray) => {
-          if (vHeld) {
+          if (vHeld || (deps.isXrayPinned?.() ?? false)) {
             deps.setXray(xray);
           }
         })
@@ -750,6 +945,23 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
     }
 
     if (e.key === "Backspace" || e.key === "Delete") {
+      const selEdgeId = deps.getSelectedEdgeId?.() ?? null;
+      if (selEdgeId !== null) {
+        const edge = deps.getEdges().get(selEdgeId);
+        e.preventDefault();
+        deps.clearSelectedEdge?.();
+        if (edge) {
+          void deps
+            .mutateUndoable(
+              "Delete edge",
+              [{ op: "delete_edge", id: edge.id }],
+              [{ op: "create_edge", edge: { ...edge } }],
+            )
+            .catch(notifyIpcError);
+        }
+        return;
+      }
+
       const targets = getTargetIds();
       if (targets.length === 0) return;
       e.preventDefault();
@@ -788,14 +1000,18 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
   const handleKeyUp = (e: KeyboardEvent): void => {
     if (e.key.toLowerCase() === "v" && vHeld) {
       vHeld = false;
-      deps.setXray(null);
+      if (!(deps.isXrayPinned?.() ?? false)) {
+        deps.setXray(null);
+      }
     }
   };
 
   const handleBlur = (): void => {
     if (vHeld) {
       vHeld = false;
-      deps.setXray(null);
+      if (!(deps.isXrayPinned?.() ?? false)) {
+        deps.setXray(null);
+      }
     }
     if (deps.getModalState() === "chord_a") {
       resetToNavigate();
@@ -835,16 +1051,7 @@ export function attachKeymap(
       if (isTauriRuntime()) {
         return compileXrayIpc(targets, budget ?? tokenBudget.value);
       }
-      const nodeModes: CompiledXray["node_modes"] = {};
-      for (const id of targets) {
-        nodeModes[id] = "focus";
-      }
-      return {
-        total_tokens: 0,
-        budget_tokens: budget ?? tokenBudget.value,
-        node_modes: nodeModes,
-        active_edges: [],
-      };
+      return buildBrowserFallbackXray(targets, budget ?? tokenBudget.value);
     },
     mutateUndoable: mutateGraphUndoable,
     spawnChild: (parentId, edgeType, nodeType, title) =>
@@ -886,10 +1093,39 @@ export function attachKeymap(
       closeCommandPalette();
       closeCustomPromptBar();
       closeSettingsModal();
+      closeArtifactExport();
+      xrayPinned.value = false;
+      xrayState.value = null;
+      selectedEdgeId.value = null;
+      closeSidebar();
       dismissTriageBanner();
       if (modalState.value === "chord_a" || modalState.value === "connect_edge") {
         modalState.value = "navigate";
       }
+    },
+    isXrayPinned: () => xrayPinned.value,
+    setXrayPinned: (pinned) => {
+      xrayPinned.value = pinned;
+    },
+    toggleMinimap: () => {
+      minimapOpen.value = !minimapOpen.value;
+    },
+    getSelectedEdgeId: () => selectedEdgeId.value,
+    clearSelectedEdge: () => {
+      selectedEdgeId.value = null;
+    },
+    getEdgePopover: () => edgePopover.value,
+    clearEdgePopover: () => {
+      edgePopover.value = null;
+    },
+    onSelectEdgePopoverType: (edgeType) => {
+      const pop = edgePopover.value;
+      if (!pop) {
+        return;
+      }
+      edgePopover.value = null;
+      modalState.value = "navigate";
+      void connectNodesWithEdge(pop.sourceId, pop.targetId, edgeType).catch(notifyIpcError);
     },
     onStartTriage: startLoopholeTriage,
     onCancelActiveRun: cancelActiveRun,

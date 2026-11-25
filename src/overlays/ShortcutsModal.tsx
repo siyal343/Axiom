@@ -9,7 +9,9 @@ interface ShortcutRow {
 const NAV_EDIT_ROWS: ShortcutRow[] = [
   { keys: "H / J / K / L or Arrows", action: "Traverse parent, sibling, or child" },
   { keys: "Shift + J / K", action: "Multi-select siblings" },
+  { keys: "Ctrl/Cmd + A", action: "Select all nodes in flow" },
   { keys: "Enter", action: "Edit focused node" },
+  { keys: "Ctrl + Enter", action: "Save & run @tag or open A-chord in editor" },
   { keys: "Double-click", action: "Center zoom; edit user nodes" },
   { keys: "Right-click", action: "Open node context menu" },
   { keys: "Tab", action: "Create child node and edit" },
@@ -19,12 +21,14 @@ const NAV_EDIT_ROWS: ShortcutRow[] = [
 ];
 
 const GRAPH_CONTEXT_ROWS: ShortcutRow[] = [
-  { keys: "E", action: "Connect edge from focused node" },
-  { keys: "P / X / C", action: "Pin, exclude from AI, or fold/unfold" },
+  { keys: "E or Port-drag / Alt+Drag", action: "Connect nodes with typed edge" },
+  { keys: "1 – 6", action: "Pick edge type in connect popover" },
+  { keys: "P / X", action: "Pin globally or exclude from AI" },
+  { keys: "C / Shift + C", action: "Fold selection or fold entire subtree" },
   { keys: "T", action: "Tidy subtree layout" },
-  { keys: "Hold V", action: "Context X-Ray token breakdown" },
+  { keys: "Hold V / Shift + V", action: "Peek or pin interactive Context X-Ray" },
   { keys: "Ctrl/Cmd + Z / Shift+Z", action: "Undo / Redo" },
-  { keys: "Del / Backspace", action: "Delete selected nodes" },
+  { keys: "Del / Backspace", action: "Dismiss active loophole or delete selection/edge" },
 ];
 
 const AI_LENS_ROWS: ShortcutRow[] = [
@@ -33,7 +37,8 @@ const AI_LENS_ROWS: ShortcutRow[] = [
   { keys: "A → S", action: "Synthesize 2+ selected nodes" },
   { keys: "A → Space", action: "Custom AI prompt on focused node" },
   { keys: "@tag in Editor / Ctrl+K", action: "Run @Feynman, @Study, @Research, @RedTeam, @Triage" },
-  { keys: "Shift + R / D", action: "Mark loophole resolved or dismissed" },
+  { keys: "R / Shift + R", action: "Resolve loophole or lock/unlock node(s)" },
+  { keys: "[ / ]", action: "Cycle active loopholes by severity" },
 ];
 
 const WORKSPACE_ROWS: ShortcutRow[] = [
@@ -41,7 +46,8 @@ const WORKSPACE_ROWS: ShortcutRow[] = [
   { keys: "Ctrl/Cmd + B", action: "Toggle Workspaces & Flows sidebar" },
   { keys: "Ctrl/Cmd + ,", action: "Open AI & Workspace Settings" },
   { keys: "Ctrl/Cmd + = / - / 0", action: "Zoom in, zoom out, reset 100%" },
-  { keys: "F / F F", action: "Fit selection or fit entire graph" },
+  { keys: "F / F F", action: "Fit selection/subtree or fit entire graph" },
+  { keys: "M", action: "Toggle canvas minimap" },
   { keys: "?", action: "Toggle this shortcuts reference" },
 ];
 

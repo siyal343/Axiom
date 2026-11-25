@@ -273,7 +273,30 @@ function saveFlowSnapshotLocal(flowId: string, snapshot: WorkspaceSnapshot): voi
   writeStorage(`${FLOW_STORAGE_PREFIX}${flowId}`, JSON.stringify(snapshot));
 }
 
+let localSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let beforeUnloadRegistered = false;
+
+function ensureBeforeUnloadFlush(): void {
+  if (beforeUnloadRegistered || typeof window === "undefined" || isTauriRuntime()) {
+    return;
+  }
+  beforeUnloadRegistered = true;
+  window.addEventListener("beforeunload", () => {
+    if (localSaveTimer !== null) {
+      clearTimeout(localSaveTimer);
+      localSaveTimer = null;
+    }
+    if (!isTauriRuntime()) {
+      saveCurrentLocalFlowSnapshot();
+    }
+  });
+}
+
 function saveCurrentLocalFlowSnapshot(): void {
+  if (localSaveTimer !== null) {
+    clearTimeout(localSaveTimer);
+    localSaveTimer = null;
+  }
   const currentCatalog = workspaceCatalog.value;
   if (!currentCatalog) {
     return;
@@ -286,6 +309,22 @@ function saveCurrentLocalFlowSnapshot(): void {
     return;
   }
   saveFlowSnapshotLocal(activeFlow.id, buildCurrentSnapshot(activeFlow.db_path));
+}
+
+export function scheduleSaveCurrentLocalFlowSnapshot(): void {
+  if (isTauriRuntime()) {
+    return;
+  }
+  ensureBeforeUnloadFlush();
+  if (localSaveTimer !== null) {
+    clearTimeout(localSaveTimer);
+  }
+  localSaveTimer = setTimeout(() => {
+    localSaveTimer = null;
+    if (!isTauriRuntime()) {
+      saveCurrentLocalFlowSnapshot();
+    }
+  }, 400);
 }
 
 function loadFlowSnapshotLocal(flow: FlowEntryDto): WorkspaceSnapshot {
@@ -402,6 +441,7 @@ export async function initWorkspaceCatalog(): Promise<WorkspaceCatalogDto | null
       return catalog;
     }
 
+    ensureBeforeUnloadFlush();
     const catalog = loadOrInitLocalCatalog();
     const activePair =
       findFlowInCatalog(catalog, catalog.active_workspace_id, catalog.active_flow_id) ??

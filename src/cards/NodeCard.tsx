@@ -18,6 +18,7 @@ import {
   type NodeMetaPatch,
 } from "../store/history";
 import {
+  connectSourceId,
   enterEditMode,
   focusId,
   hoveredId,
@@ -140,6 +141,7 @@ export function NodeCard({ node }: NodeCardProps) {
   if (isThinkingTarget) classes.push("node-card--thinking");
   if (isShaking) classes.push("node-card--shaking");
   if (isXrayDimmed) classes.push("node-card--xray-dim");
+  if (connectSourceId.value === node.id) classes.push("node-card--connect-source");
 
   const renderedHtml = node.layout.collapsed
     ? ""
@@ -202,9 +204,10 @@ export function NodeCard({ node }: NodeCardProps) {
             key={dir}
             type="button"
             class={`node-port node-port--${dir}`}
+            data-port-dir={dir}
+            data-port-node-id={node.id}
             aria-label={`Spawn connected node to the ${dir}`}
-            title={`Add child (${dir})`}
-            onPointerDown={(e) => e.stopPropagation()}
+            title={`Click to add child (${dir}) · Drag to connect`}
             onClick={(e) => handleSpawnChild(e, dir)}
           >
             +

@@ -13,7 +13,7 @@ pub struct CompiledContext {
     pub xray: CompiledXray,
 }
 
-fn is_ancestor_edge(t: EdgeType) -> bool {
+pub(crate) fn is_ancestor_edge(t: EdgeType) -> bool {
     matches!(t, EdgeType::Derives | EdgeType::Branches | EdgeType::Synthesizes)
 }
 
@@ -103,6 +103,9 @@ pub fn compile_context(
     for anc in &topo_ancestors {
         relevant_targets.push(anc.id.clone());
     }
+    for pin in &global_pins {
+        relevant_targets.push(pin.id.clone());
+    }
 
     let mut loophole_targets: HashMap<String, Vec<String>> = HashMap::new();
     for target_id in &relevant_targets {
@@ -177,9 +180,12 @@ pub fn compile_context(
     // -------------------------------------------------------------------------
     let mut used_tokens: u32 = 0;
     let mut anc_full_mode: HashMap<&str, bool> = HashMap::new();
+    let mut mode_tokens: HashMap<InclusionMode, u32> = HashMap::new();
 
     for p in &global_pins {
         used_tokens = used_tokens.saturating_add(p.metadata.token_count);
+        let entry = mode_tokens.entry(InclusionMode::Pin).or_insert(0);
+        *entry = entry.saturating_add(p.metadata.token_count);
     }
 
     let mut seen_focus: HashSet<&str> = HashSet::new();
@@ -194,6 +200,8 @@ pub fn compile_context(
     for f in &focus_nodes {
         node_modes.insert(f.id.clone(), InclusionMode::Focus);
         used_tokens = used_tokens.saturating_add(f.metadata.token_count);
+        let entry = mode_tokens.entry(InclusionMode::Focus).or_insert(0);
+        *entry = entry.saturating_add(f.metadata.token_count);
     }
 
     let mut direct_parents: Vec<&NodeDto> = Vec::new();
@@ -205,6 +213,8 @@ pub fn compile_context(
             anc_full_mode.insert(anc.id.as_str(), true);
             node_modes.insert(anc.id.clone(), InclusionMode::Full);
             used_tokens = used_tokens.saturating_add(anc.metadata.token_count);
+            let entry = mode_tokens.entry(InclusionMode::Full).or_insert(0);
+            *entry = entry.saturating_add(anc.metadata.token_count);
         } else {
             older_ancestors.push(anc);
         }
@@ -213,15 +223,16 @@ pub fn compile_context(
     for (lh, _) in &active_loopholes {
         node_modes.insert(lh.id.clone(), InclusionMode::Loophole);
         used_tokens = used_tokens.saturating_add(lh.metadata.token_count);
+        let entry = mode_tokens.entry(InclusionMode::Loophole).or_insert(0);
+        *entry = entry.saturating_add(lh.metadata.token_count);
     }
 
     let summary_cost = |n: &NodeDto| -> u32 {
-        let basis = if !n.summary.is_empty() {
-            &n.summary
+        if !n.summary.is_empty() {
+            estimate_tokens(&n.summary)
         } else {
-            &n.title
-        };
-        estimate_tokens(basis)
+            n.metadata.token_count
+        }
     };
     for anc in &older_ancestors {
         anc_full_mode.insert(anc.id.as_str(), false);
@@ -245,6 +256,18 @@ pub fn compile_context(
         }
     }
 
+    for anc in &older_ancestors {
+        let base_cost = summary_cost(anc);
+        if *anc_full_mode.get(anc.id.as_str()).unwrap_or(&false) {
+            let final_cost = base_cost.max(anc.metadata.token_count);
+            let entry = mode_tokens.entry(InclusionMode::Full).or_insert(0);
+            *entry = entry.saturating_add(final_cost);
+        } else {
+            let entry = mode_tokens.entry(InclusionMode::Summary).or_insert(0);
+            *entry = entry.saturating_add(base_cost);
+        }
+    }
+
     for (ref_node, weight) in &references {
         node_modes.insert(ref_node.id.clone(), InclusionMode::Reference);
         let cost = match weight {
@@ -252,6 +275,8 @@ pub fn compile_context(
             EdgeWeight::Summary => summary_cost(ref_node),
         };
         used_tokens = used_tokens.saturating_add(cost);
+        let entry = mode_tokens.entry(InclusionMode::Reference).or_insert(0);
+        *entry = entry.saturating_add(cost);
     }
 
     // -------------------------------------------------------------------------
@@ -287,7 +312,35 @@ pub fn compile_context(
     if !direct_parents.is_empty() {
         let body = direct_parents
             .iter()
-            .map(|n| format!("### {} [{:?}]\n{}", n.title, n.node_type, n.content))
+            .map(|n| {
+                let mut relations: Vec<&'static str> = engine
+                    .outgoing
+                    .get(&n.id)
+                    .map(|edges| {
+                        edges
+                            .iter()
+                            .filter(|e| {
+                                is_ancestor_edge(e.edge_type)
+                                    && focus_set.contains(e.target_id.as_str())
+                            })
+                            .map(|e| e.edge_type.as_str())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                relations.sort_unstable();
+                relations.dedup();
+                if relations.is_empty() {
+                    format!("### {} [{:?}]\n{}", n.title, n.node_type, n.content)
+                } else {
+                    format!(
+                        "### {} [{:?} · {}]\n{}",
+                        n.title,
+                        n.node_type,
+                        relations.join(", "),
+                        n.content
+                    )
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n\n");
         sections.push(format!("[DIRECT PARENTS & INPUTS]\n{body}"));
@@ -338,18 +391,24 @@ pub fn compile_context(
     let mut active_edge_list: Vec<String> = active_edges.into_iter().collect();
     active_edge_list.sort();
 
+    let prompt_text = sections.join("\n\n---\n\n");
+    let prompt_preview = prompt_text.clone();
+
     CompiledContext {
-        prompt_text: sections.join("\n\n---\n\n"),
+        prompt_text,
         xray: CompiledXray {
             total_tokens: used_tokens,
             budget_tokens: token_budget,
+            overflow: used_tokens > token_budget,
             node_modes,
+            mode_tokens,
             active_edges: active_edge_list,
+            prompt_preview,
         },
     }
 }
 
-fn kahn_topo_sort_cycle_safe(
+pub(crate) fn kahn_topo_sort_cycle_safe(
     engine: &GraphEngine,
     subset: &HashSet<String>,
     depth_map: &HashMap<String, u32>,

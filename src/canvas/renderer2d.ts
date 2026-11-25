@@ -5,6 +5,7 @@ import type {
   InclusionMode,
   NodeDto,
   Severity,
+  SpawnDirection,
 } from "../ipc/types";
 import type { LoopholeSummary } from "../store/graphStore";
 import { resolveNodeTone } from "../cards/nodeAccent";
@@ -20,6 +21,7 @@ export interface MarqueeRect {
 
 export interface EdgePreview {
   sourceId: string;
+  sourceDir?: SpawnDirection;
   targetX: number;
   targetY: number;
 }
@@ -35,6 +37,9 @@ export interface RenderSceneInput {
   selectedIds: ReadonlySet<string>;
   focusId: string | null;
   hoveredId?: string | null;
+  selectedEdgeId?: string | null;
+  hoveredEdgeId?: string | null;
+  connectSourceId?: string | null;
   xrayState: CompiledXray | null;
   unresolvedLoopholes: Map<string, LoopholeSummary>;
   marqueeWorld: MarqueeRect | null;
@@ -43,6 +48,8 @@ export interface RenderSceneInput {
   animTimeMs?: number;
   animateEdges?: boolean;
 }
+
+export type RenderFrameInput = RenderSceneInput;
 
 interface ThemePalette {
   bgCanvas: string;
@@ -267,6 +274,20 @@ export function computeDynamicEdgeCurve(
   return { x1, y1, cx1, cy1, cx2, cy2, x2, y2 };
 }
 
+function portForDirection(rect: NodeRect, dir: SpawnDirection): PortPoint {
+  const ports = cardinalPorts(rect);
+  switch (dir) {
+    case "top":
+      return ports[0];
+    case "bottom":
+      return ports[1];
+    case "left":
+      return ports[2];
+    case "right":
+      return ports[3];
+  }
+}
+
 function nearestPortToPoint(src: NodeRect, tx: number, ty: number): PortPoint {
   const sp = cardinalPorts(src);
   let best = sp[3];
@@ -379,6 +400,163 @@ function cubicBezierAt(p0: number, p1: number, p2: number, p3: number, t: number
   return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
 }
 
+function pointToSegmentDistSq(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq <= 1e-8) {
+    const ox = px - ax;
+    const oy = py - ay;
+    return ox * ox + oy * oy;
+  }
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+  const cx = ax + t * dx;
+  const cy = ay + t * dy;
+  const ox = px - cx;
+  const oy = py - cy;
+  return ox * ox + oy * oy;
+}
+
+export function getEdgeMidpointWorld(
+  edge: EdgeDto,
+  nodes: Map<string, NodeDto>,
+  dragOffsets: Map<string, { x: number; y: number }>,
+  resizeSizes: Map<string, { width: number; height: number }>,
+): { x: number; y: number } | null {
+  const srcNode = nodes.get(edge.source_id);
+  const dstNode = nodes.get(edge.target_id);
+  if (!srcNode || !dstNode) {
+    return null;
+  }
+  const srcRect = getNodeRect(srcNode, dragOffsets, resizeSizes);
+  const dstRect = getNodeRect(dstNode, dragOffsets, resizeSizes);
+  const obstacles: Array<{ id: string; rect: NodeRect }> = [];
+  for (const node of nodes.values()) {
+    if (node.id === srcNode.id || node.id === dstNode.id) {
+      continue;
+    }
+    obstacles.push({ id: node.id, rect: getNodeRect(node, dragOffsets, resizeSizes) });
+  }
+  const curve = computeDynamicEdgeCurve(srcRect, dstRect, srcNode.id, dstNode.id, obstacles);
+  return {
+    x: cubicBezierAt(curve.x1, curve.cx1, curve.cx2, curve.x2, 0.5),
+    y: cubicBezierAt(curve.y1, curve.cy1, curve.cy2, curve.y2, 0.5),
+  };
+}
+
+export function hitTestEdge(
+  worldX: number,
+  worldY: number,
+  nodes: Map<string, NodeDto>,
+  edges: Map<string, EdgeDto>,
+  dragOffsets: Map<string, { x: number; y: number }>,
+  resizeSizes: Map<string, { width: number; height: number }>,
+  zoom: number,
+): string | null {
+  if (edges.size === 0) {
+    return null;
+  }
+  const threshold = Math.max(8, 10 / Math.max(0.2, zoom));
+  const thresholdSq = threshold * threshold;
+  const cullPad = 650 + threshold;
+
+  const rects = new Map<string, NodeRect>();
+  const obstacles: Array<{ id: string; rect: NodeRect }> = [];
+  for (const node of nodes.values()) {
+    const rect = getNodeRect(node, dragOffsets, resizeSizes);
+    rects.set(node.id, rect);
+    obstacles.push({ id: node.id, rect });
+  }
+
+  let bestEdgeId: string | null = null;
+  let bestDistSq = thresholdSq;
+
+  for (const edge of edges.values()) {
+    const srcRect = rects.get(edge.source_id);
+    const dstRect = rects.get(edge.target_id);
+    if (!srcRect || !dstRect) {
+      continue;
+    }
+
+    const minX = Math.min(srcRect.x, dstRect.x) - cullPad;
+    const minY = Math.min(srcRect.y, dstRect.y) - cullPad;
+    const maxX = Math.max(srcRect.x + srcRect.w, dstRect.x + dstRect.w) + cullPad;
+    const maxY = Math.max(srcRect.y + srcRect.h, dstRect.y + dstRect.h) + cullPad;
+    if (worldX < minX || worldX > maxX || worldY < minY || worldY > maxY) {
+      continue;
+    }
+
+    const curve = computeDynamicEdgeCurve(
+      srcRect,
+      dstRect,
+      edge.source_id,
+      edge.target_id,
+      obstacles,
+    );
+
+    let prevX = curve.x1;
+    let prevY = curve.y1;
+    let edgeMinDistSq = Number.POSITIVE_INFINITY;
+    for (let i = 1; i <= 16; i += 1) {
+      const t = i / 16;
+      const nx = cubicBezierAt(curve.x1, curve.cx1, curve.cx2, curve.x2, t);
+      const ny = cubicBezierAt(curve.y1, curve.cy1, curve.cy2, curve.y2, t);
+      const d2 = pointToSegmentDistSq(worldX, worldY, prevX, prevY, nx, ny);
+      if (d2 < edgeMinDistSq) {
+        edgeMinDistSq = d2;
+      }
+      prevX = nx;
+      prevY = ny;
+    }
+
+    if (edgeMinDistSq <= bestDistSq) {
+      bestDistSq = edgeMinDistSq;
+      bestEdgeId = edge.id;
+    }
+  }
+
+  return bestEdgeId;
+}
+
+function drawEdgeMidpointBadge(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  label: string,
+  accentStroke: string,
+  p: ThemePalette,
+  emphasized: boolean,
+): void {
+  ctx.save();
+  ctx.font = "600 10.5px Inter, sans-serif";
+  const textW =
+    typeof ctx.measureText === "function" ? ctx.measureText(label).width : label.length * 6.2;
+  const padX = 7;
+  const badgeW = textW + padX * 2;
+  const badgeH = 20;
+  const bx = x - badgeW * 0.5;
+  const by = y - badgeH * 0.5;
+
+  drawRoundedRectPath(ctx, bx, by, badgeW, badgeH, 10);
+  ctx.fillStyle = p.bgCard;
+  ctx.fill();
+  ctx.lineWidth = emphasized ? 1.5 : 1;
+  ctx.strokeStyle = emphasized ? accentStroke : p.borderStrong;
+  ctx.stroke();
+
+  ctx.fillStyle = p.textPrimary;
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, bx + padX, y + 0.5);
+  ctx.restore();
+}
+
 export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderSceneInput): void {
   const {
     cam,
@@ -391,6 +569,9 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     selectedIds,
     focusId,
     hoveredId = null,
+    selectedEdgeId = null,
+    hoveredEdgeId = null,
+    connectSourceId = null,
     xrayState,
     unresolvedLoopholes,
     marqueeWorld,
@@ -532,6 +713,8 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
         break;
     }
 
+    const isSelectedEdge = selectedEdgeId === edge.id;
+    const isHoveredEdge = hoveredEdgeId === edge.id;
     const isIncidentEmphasized =
       srcNode.id === focusId ||
       dstNode.id === focusId ||
@@ -553,15 +736,27 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
       lineWidth = 2.75;
     }
 
+    if (isSelectedEdge) {
+      lineWidth = Math.max(lineWidth, 3.75);
+      alpha = 1.0;
+    } else if (isHoveredEdge) {
+      lineWidth = Math.max(lineWidth, 3.0);
+      alpha = Math.max(alpha, 0.9);
+    }
+
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.strokeStyle = stroke;
     ctx.fillStyle = stroke;
     ctx.lineWidth = lineWidth;
     ctx.lineCap = "round";
-    if (isIncidentEmphasized && (!activeEdgeSet || activeEdgeSet.has(edge.id))) {
+    if (
+      isSelectedEdge ||
+      isHoveredEdge ||
+      (isIncidentEmphasized && (!activeEdgeSet || activeEdgeSet.has(edge.id)))
+    ) {
       ctx.shadowColor = stroke;
-      ctx.shadowBlur = 8;
+      ctx.shadowBlur = isSelectedEdge ? 10 : isHoveredEdge ? 7 : 8;
     }
     ctx.setLineDash(dash);
 
@@ -571,8 +766,22 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     ctx.stroke();
 
     ctx.setLineDash([]);
-    drawArrowhead(ctx, x2, y2, cx2, cy2, 8.5);
+    drawArrowhead(ctx, x2, y2, cx2, cy2, isSelectedEdge ? 9.5 : 8.5);
     ctx.restore();
+
+    if ((isSelectedEdge || isHoveredEdge) && !isBirdsEyeLod) {
+      const mx = cubicBezierAt(x1, cx1, cx2, x2, 0.5);
+      const my = cubicBezierAt(y1, cy1, cy2, y2, 0.5);
+      drawEdgeMidpointBadge(
+        ctx,
+        mx,
+        my,
+        `${edge.type} · ${edge.weight}`,
+        stroke,
+        p,
+        isSelectedEdge,
+      );
+    }
 
     const isDimmedByXray = Boolean(activeEdgeSet && !activeEdgeSet.has(edge.id));
     if (animateEdges && !isBirdsEyeLod && !isDimmedByXray && alpha > 0.35) {
@@ -706,6 +915,29 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     }
   }
 
+  // 5.5 Connect-Edge Source Highlight Ring (Normal & Bird's-Eye LOD)
+  if (connectSourceId) {
+    const srcRect = sceneRects.get(connectSourceId);
+    if (srcRect) {
+      ctx.save();
+      ctx.strokeStyle = p.accentBranch;
+      ctx.lineWidth = isBirdsEyeLod ? 2.5 / cam.zoom : 2.5;
+      const dashScale = isBirdsEyeLod ? 1 / cam.zoom : 1;
+      ctx.setLineDash([6 * dashScale, 4 * dashScale]);
+      const pad = isBirdsEyeLod ? 5 / cam.zoom : 5;
+      drawRoundedRectPath(
+        ctx,
+        srcRect.x - pad,
+        srcRect.y - pad,
+        srcRect.w + pad * 2,
+        srcRect.h + pad * 2,
+        10,
+      );
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   // 6. Marquee Box-Select Rectangle
   if (marqueeWorld && marqueeWorld.width > 0 && marqueeWorld.height > 0) {
     ctx.save();
@@ -717,15 +949,13 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     ctx.restore();
   }
 
-  // 7. Live Alt+Drag Edge Preview
+  // 7. Live Alt+Drag / Port-Drag Edge Preview
   if (edgePreviewWorld) {
     const srcRect = sceneRects.get(edgePreviewWorld.sourceId);
     if (srcRect) {
-      const from = nearestPortToPoint(
-        srcRect,
-        edgePreviewWorld.targetX,
-        edgePreviewWorld.targetY,
-      );
+      const from = edgePreviewWorld.sourceDir
+        ? portForDirection(srcRect, edgePreviewWorld.sourceDir)
+        : nearestPortToPoint(srcRect, edgePreviewWorld.targetX, edgePreviewWorld.targetY);
       const dist = Math.hypot(edgePreviewWorld.targetX - from.x, edgePreviewWorld.targetY - from.y);
       const offset = Math.max(36, dist * 0.35);
       const cx1 = from.x + from.nx * offset;

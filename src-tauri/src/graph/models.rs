@@ -398,8 +398,37 @@ pub struct SpawnConnectedResult {
 pub struct CompiledXray {
     pub total_tokens: u32,
     pub budget_tokens: u32,
+    pub overflow: bool,
     pub node_modes: HashMap<String, InclusionMode>,
+    pub mode_tokens: HashMap<InclusionMode, u32>,
     pub active_edges: Vec<String>,
+    pub prompt_preview: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactScope {
+    Subgraph,
+    Workspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactFormat {
+    Adr,
+    Brief,
+    Mermaid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompiledArtifact {
+    pub format: ArtifactFormat,
+    pub scope: ArtifactScope,
+    pub title: String,
+    pub markdown: String,
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub unresolved_loophole_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
