@@ -35,6 +35,8 @@ interface NodeCardProps {
 
 export function NodeCard({ node }: NodeCardProps) {
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const latestLayoutRef = useRef(node.layout);
+  latestLayoutRef.current = node.layout;
   const [moreOpen, setMoreOpen] = useState(false);
 
   const isFocused = focusId.value === node.id;
@@ -70,7 +72,7 @@ export function NodeCard({ node }: NodeCardProps) {
 
     let timer: ReturnType<typeof setTimeout> | null = null;
     const observer = new ResizeObserver(() => {
-      if (node.layout.collapsed || resizeSizes.has(node.id) || isInteracting.value) {
+      if (latestLayoutRef.current.collapsed || resizeSizes.has(node.id) || isInteracting.value) {
         return;
       }
       if (timer !== null) {
@@ -78,12 +80,18 @@ export function NodeCard({ node }: NodeCardProps) {
       }
       timer = setTimeout(() => {
         const currentEl = cardRef.current;
-        if (!currentEl || resizeSizes.has(node.id) || isInteracting.value) {
+        const currentLayout = latestLayoutRef.current;
+        if (
+          !currentEl ||
+          currentLayout.collapsed ||
+          resizeSizes.has(node.id) ||
+          isInteracting.value
+        ) {
           return;
         }
-        if (currentEl.scrollHeight > node.layout.height + 2) {
-          const nextW = Math.max(node.layout.width, currentEl.offsetWidth || node.layout.width);
-          queueNodeResize(node.id, nextW, currentEl.scrollHeight);
+        const measuredHeight = currentEl.offsetHeight;
+        if (measuredHeight > currentLayout.height + 2) {
+          queueNodeResize(node.id, currentLayout.width, measuredHeight);
         }
       }, 90);
     });
@@ -96,7 +104,7 @@ export function NodeCard({ node }: NodeCardProps) {
       observer.disconnect();
       cardDomRefs.delete(node.id);
     };
-  }, [node.id, node.layout.collapsed, node.layout.width, node.layout.height]);
+  }, [node.id, node.layout.collapsed]);
 
   useEffect(() => {
     if (!showHoverPill && moreOpen) {

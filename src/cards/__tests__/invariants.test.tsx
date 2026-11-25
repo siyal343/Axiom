@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { render } from "preact";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NodeDto } from "../../ipc/types";
-import { isBirdsEye, loadSnapshot, visibleNodeIds } from "../../store/graphStore";
-import { enterEditMode, exitEditMode, modalState } from "../../store/selection";
+import { isBirdsEye, loadSnapshot, nodesMap, visibleNodeIds } from "../../store/graphStore";
+import { enterEditMode, exitEditMode, modalState, selectSingle } from "../../store/selection";
 import { CardLayer } from "../CardLayer";
 import { LiveEditorOverlay } from "../LiveEditorOverlay";
+import { NodeCard } from "../NodeCard";
 
 function makeTestNode(id: string, status: NodeDto["status"], title: string): NodeDto {
   return {
@@ -154,5 +155,58 @@ describe("Slice 2 architectural invariants: One Live Editor & LOD cutoff", () =>
     isBirdsEye.value = true;
     await flushDom();
     expect(container.querySelectorAll(".node-card").length).toBe(0);
+  });
+
+  it("ignores port/handle scrollHeight overhang in ResizeObserver so focused cards keep height 180", async () => {
+    const roState: { callback: ResizeObserverCallback | null } = { callback: null };
+    class MockResizeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        roState.callback = cb;
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+    try {
+      const focusedNode = makeTestNode("node_focus", "active", "Focused Card");
+      loadSnapshot({
+        path: "",
+        nodes: [focusedNode],
+        edges: [],
+        camera: { x: 0, y: 0, zoom: 1.0, last_focus_id: "node_focus" },
+        token_budget: 6000,
+      });
+      modalState.value = "navigate";
+      selectSingle("node_focus");
+
+      render(<NodeCard node={focusedNode} />, container);
+      await flushDom();
+
+      expect(container.querySelector(".hover-pill")).not.toBeNull();
+      expect(container.querySelector(".node-port--bottom")).not.toBeNull();
+
+      const cardEl = container.querySelector<HTMLElement>(".node-card");
+      expect(cardEl).not.toBeNull();
+      if (!cardEl) return;
+
+      Object.defineProperty(cardEl, "scrollHeight", { configurable: true, value: 200 });
+      Object.defineProperty(cardEl, "offsetHeight", { configurable: true, value: 180 });
+
+      vi.useFakeTimers();
+      try {
+        expect(roState.callback).not.toBeNull();
+        if (roState.callback) {
+          roState.callback([], new MockResizeObserver(() => {}));
+        }
+        vi.advanceTimersByTime(200);
+        expect(nodesMap.get("node_focus")?.layout.height).toBe(180);
+      } finally {
+        vi.useRealTimers();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

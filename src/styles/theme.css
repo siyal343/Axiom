@@ -1632,11 +1632,12 @@ body,
 .node-card__resize-handle--se {
   right: 1px;
   bottom: 1px;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   cursor: nwse-resize;
+  pointer-events: auto;
   border-bottom-right-radius: calc(var(--radius-card) - 1px);
-  opacity: 0;
+  opacity: 0.35;
   background: linear-gradient(
     135deg,
     transparent 42%,
@@ -1652,7 +1653,7 @@ body,
 }
 
 .node-card--focused .node-card__resize-handle--se {
-  opacity: 0.75;
+  opacity: 0.9;
 }
 
 /* AI Thinking & Streaming Indicator */
@@ -1696,7 +1697,7 @@ body,
   height: 5px;
   border-radius: 50%;
   background: var(--ring-edit);
-  animation: ai-dot-bounce 900ms ease-in-out infinite;
+  animation: ai-dot-pulse 900ms var(--ease-out) infinite;
 }
 
 .ai-thinking-pill__dot:nth-child(2) {
@@ -1707,16 +1708,14 @@ body,
   animation-delay: 300ms;
 }
 
-@keyframes ai-dot-bounce {
+@keyframes ai-dot-pulse {
   0%,
   80%,
   100% {
     opacity: 0.35;
-    transform: translateY(0);
   }
   40% {
     opacity: 1;
-    transform: translateY(-2px);
   }
 }
 
@@ -1737,7 +1736,7 @@ body,
 
 @media (hover: hover) and (pointer: fine) {
   .node-card:hover .node-card__resize-handle--se {
-    opacity: 0.75;
+    opacity: 0.9;
   }
 
   .node-port:hover {
