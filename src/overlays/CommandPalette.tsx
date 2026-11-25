@@ -17,11 +17,12 @@ import {
   runSeedStress500Action,
   runToggleThemeAction,
 } from "../ipc/workspaceActions";
-import { executeActionTag, openSettingsModal } from "../store/aiRunner";
+import { executeActionTag, openSettingsModal, shouldRunTagInPlace } from "../store/aiRunner";
 import { cameraControllerRef, nodesMap } from "../store/graphStore";
 import {
   closeCommandPalette,
   commandPaletteOpen,
+  focusId,
   modalState,
   selectSingle,
 } from "../store/selection";
@@ -415,10 +416,13 @@ export function CommandPalette() {
       parsedTagInvocation && parsedTagInvocation.action.tag === action.tag
         ? parsedTagInvocation.argument
         : inlineTagArg;
+    const fid = focusId.value;
+    const focusedNode = fid ? nodesMap.get(fid) : undefined;
+    const inPlace = shouldRunTagInPlace(action, arg, focusedNode);
     setQuery("");
     setActiveIndex(0);
     closeCommandPalette();
-    void executeActionTag(action, arg.length > 0 ? arg : undefined);
+    void executeActionTag(action, arg.length > 0 ? arg : undefined, { inPlace });
   };
 
   const toggleCommandsMode = (): void => {

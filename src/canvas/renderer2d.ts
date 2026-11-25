@@ -7,6 +7,7 @@ import type {
   Severity,
 } from "../ipc/types";
 import type { LoopholeSummary } from "../store/graphStore";
+import { resolveNodeTone } from "../cards/nodeAccent";
 import { LOD_THRESHOLD, screenToWorld } from "./camera";
 import { getEffectiveNodeHeight } from "./spatialIndex";
 
@@ -327,22 +328,19 @@ function drawRoundedRectPath(
   ctx.closePath();
 }
 
-function getSemanticBarColor(node: NodeDto, p: ThemePalette): string {
-  switch (node.type) {
-    case "core":
-      return p.accentCore;
-    case "branch":
-      return p.accentBranch;
-    case "probe":
-      return p.accentProbe;
-    case "synthesis":
-      return p.accentSynthesis;
-    case "loophole":
-      if (node.status === "resolved" || node.status === "dismissed") {
-        return p.borderStrong;
-      }
-      return getSeverityColor(node.metadata.severity, p);
+function getSemanticBarColor(
+  node: NodeDto,
+  p: ThemePalette,
+  themeKey: "dark" | "light",
+): string {
+  if (node.type === "loophole") {
+    if (node.status === "resolved" || node.status === "dismissed") {
+      return p.borderStrong;
+    }
+    return getSeverityColor(node.metadata.severity, p);
   }
+  const tone = resolveNodeTone(node);
+  return themeKey === "light" ? tone.colorLight : tone.colorDark;
 }
 
 function getSeverityColor(sev: Severity | null, p: ThemePalette): string {
@@ -672,7 +670,7 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
       ctx.stroke();
 
       // 4px semantic left accent bar
-      ctx.fillStyle = getSemanticBarColor(node, p);
+      ctx.fillStyle = getSemanticBarColor(node, p, themeKey);
       ctx.fillRect(rect.x + 1, rect.y + 4, 4, Math.max(4, rect.h - 8));
 
       // Pin indicator dot

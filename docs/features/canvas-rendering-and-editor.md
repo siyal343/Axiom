@@ -20,6 +20,14 @@ Every edge in `renderCanvas2d` uses `computeDynamicEdgeCurve` and `nearestPortPa
 - **Semantic styling and incident glow:** Base strokes use `2.0` px width (`2.25` px for `challenges`, `1.75` px for `references`) with round caps and `8.5` px arrowheads. Edges incident to `focusId`, `hoveredId`, or any actively dragged or resized card increase to `2.75` px width with a matching colored glow (`shadowBlur = 8`).
 - **Animated directional connection flow:** When `animateEdges` is true, `renderCanvas2d` draws marching dashes (`lineDashOffset` driven by `animTimeMs`) from source to target along each non-dimmed edge and draws a `3.2` px traveling directional orb along emphasized incident edges. `App.tsx` disables `CanvasCameraController.setContinuousAnimation` automatically in Bird's-Eye LOD (`cam.zoom < 0.45`), when `edgesMap.size === 0`, when `prefers-reduced-motion: reduce` matches, or when you toggle **Pause connection flow** / **Play connection flow** in `.canvas-controls`.
 
+### Semantic node color-coding
+
+`resolveNodeTone` in `src/cards/nodeAccent.ts` assigns each node one of `11` semantic tones (`user`, `feynman`, `study`, `research`, `diverge`, `synthesize`, `red_team`, `edge_case`, `triage`, `custom`, and `ai`) and caches lookups in a `2000`-entry map keyed by node ID, `content_hash`, content length, `lens`, `type`, and `created_by`:
+
+1. **Tag directives first:** Scans outside fenced code blocks (`extractActionTagFromContent`) for `@feynman`, `@study`, `@research`, `@diverge`, `@synthesize`, `@redteam`, `@edgecase`, `@triage`, or `@custom`.
+2. **Metadata and type fallbacks:** Falls back to non-`manual` `metadata.lens`, then semantic `node.type` (`loophole`, `synthesis`, `branch`, `probe`), then `"Note"` for `created_by === "user"` or `"AI"` otherwise.
+3. **DOM and Canvas2D parity:** `NodeCard` applies `.node-card--tone-<key>` (top gradient wash and tinted border) and `.badge--tone-<key>` (`src/styles/theme.css`). In Bird's-Eye LOD (`< 0.45x`), `getSemanticBarColor` in `src/canvas/renderer2d.ts` uses the tone palette for the `4` px left bar (or severity colors for active loopholes and muted borders for resolved or dismissed loopholes).
+
 ## Decoupled camera loop
 
 Mutable graph collections (`nodesMap`, `edgesMap`, `cardDomRefs`, and `dragOffsets`) in `src/store/graphStore.ts` live outside `@preact/signals`. `CanvasCameraController` in `src/canvas/camera.ts` batches redraws with `requestAnimationFrame` (`markDirty` / `flushFrame`):
@@ -72,10 +80,11 @@ After pointer drags, manual resizes, `queueNodeResize` card growth, and finalize
 
 ## Workspaces and flows sidebar
 
-`WorkspaceSidebar` (`src/overlays/WorkspaceSidebar.tsx`) renders a collapsible left drawer (`#workspace-sidebar`) paired with a top-left toggle pill (`.sidebar-toggle-bar`) displaying the active `<Workspace> / <Flow>` label:
+`WorkspaceSidebar` (`src/overlays/WorkspaceSidebar.tsx`) renders a collapsible `268` px left drawer (`#workspace-sidebar`) paired with a top-left toggle pill (`.sidebar-toggle-bar`) displaying the active `<Workspace> / <Flow>` label:
 
 - **Toggle and focus safety:** Press `Ctrl+B` (`Cmd+B` on macOS), select **> Toggle Sidebar** in the Command Palette, or click `.sidebar-toggle-bar` to open or close the drawer. The sidebar stops `pointerdown` and `wheel` propagation so canvas pan and zoom stay unaffected, and sets `inert` and `aria-hidden="true"` when closed.
-- **Multi-flow organization:** Each collapsible workspace group lists its flows with template badges (**Design** for `engineering`, **Research** for `research`, **Study** for `study`, and **Blank** for `blank`). Inline micro-forms handle creating workspaces, creating flows with template selection, renaming entries, and confirming deletions without browser `window.prompt` or `window.confirm` dialogs.
+- **Top actions and bottom settings:** The top stack provides **New Flow** (toggling the inline flow creator with **Design**, **Study**, **Research**, and **Blank** template radio pills on the active workspace), **Search & Actions** (opening `CommandPalette`), and **Shortcuts** (opening `ShortcutsModal`). A pinned footer holds **Settings** (opening `SettingsModal`).
+- **Workspace filtering and nested flow rows:** The **Workspaces** section header provides a filter input toggle (`Filter workspaces or flows`), an inline workspace creator (`FolderPlus`), and a close button. Each collapsible workspace group lists nested flows with template-colored dots, relative timestamps from `formatRelativeAge` (`now`, `5m`, `2h`, `3d`, `mo`), and hover/`:focus-within` `...` action menus for inline rename and two-step delete confirmation without `window.prompt` or `window.confirm` dialogs.
 
 ## Static Markdown, math, and sanitization cache
 

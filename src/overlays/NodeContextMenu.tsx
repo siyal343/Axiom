@@ -1,8 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
-import { ACTION_TAGS, type ActionTagDef } from "../input/actionTags";
+import {
+  ACTION_TAGS,
+  extractActionTagFromContent,
+  type ActionTagDef,
+} from "../input/actionTags";
 import { isTauriRuntime, tidySubtree as tidySubtreeIpc } from "../ipc/client";
 import type { NodeDto, NodePositionUpdate } from "../ipc/types";
-import { executeActionTag } from "../store/aiRunner";
+import { executeActionTag, shouldRunTagInPlace } from "../store/aiRunner";
 import {
   applyTidyPositions,
   duplicateNode,
@@ -241,7 +245,12 @@ export function NodeContextMenu() {
     if (!keepMultiSelection) {
       selectSingle(node.id);
     }
-    void executeActionTag(def);
+    const extracted =
+      node.content.includes("@") ? extractActionTagFromContent(node.content) : null;
+    const matchingArg =
+      extracted && extracted.action.tag === def.tag ? extracted.argument : undefined;
+    const inPlace = shouldRunTagInPlace(def, matchingArg, node);
+    void executeActionTag(def, matchingArg, { inPlace });
   };
 
   const handleDelete = (): void => {

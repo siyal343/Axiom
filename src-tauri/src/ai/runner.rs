@@ -24,9 +24,90 @@ pub struct LensRunParams {
     pub lens: LensKind,
     pub focus_ids: Vec<String>,
     pub custom_prompt: Option<String>,
+    pub in_place: bool,
     pub config: ModelTierConfig,
     pub api_key: Option<String>,
     pub token_budget: u32,
+}
+
+pub fn is_generic_lens_title(title: &str) -> bool {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    const GENERIC_TITLES: &[&str] = &[
+        "AI Response",
+        "First Principles",
+        "Study & Recall",
+        "Research Brief",
+        "Alternative Branch",
+        "Synthesis Decision",
+        "Red-Team Finding",
+        "Edge-Case Matrix",
+    ];
+    GENERIC_TITLES
+        .iter()
+        .any(|g| trimmed.eq_ignore_ascii_case(g))
+}
+
+pub fn derive_title_from_prompt(prompt: Option<&str>, fallback: &str) -> String {
+    let mut text = prompt.unwrap_or("").trim();
+    if let Some(after_at) = text.strip_prefix('@') {
+        let tag_len = after_at
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .unwrap_or(after_at.len());
+        if tag_len > 0 {
+            let rem = &after_at[tag_len..];
+            if rem.is_empty() {
+                text = "";
+            } else if let Some(after_colon) = rem.strip_prefix(':') {
+                if after_colon.is_empty() || after_colon.starts_with(char::is_whitespace) {
+                    text = after_colon.trim();
+                }
+            } else if rem.starts_with(char::is_whitespace) {
+                text = rem.trim();
+            }
+        }
+    }
+
+    let is_trim_punct = |c: char| c.is_whitespace() || matches!(c, '?' | '!' | '.' | ',' | ':');
+    let cleaned = text.trim_matches(is_trim_punct);
+    if cleaned.is_empty() {
+        return fallback.to_owned();
+    }
+
+    let mut phrase = String::new();
+    for (idx, word) in cleaned.split_whitespace().take(6).enumerate() {
+        let word_chars = word.chars().count();
+        let current_chars = phrase.chars().count();
+        if idx == 0 {
+            if word_chars > 48 {
+                phrase.extend(word.chars().take(48));
+                break;
+            }
+            phrase.push_str(word);
+        } else if current_chars + 1 + word_chars <= 48 {
+            phrase.push(' ');
+            phrase.push_str(word);
+        } else {
+            break;
+        }
+    }
+
+    let final_trimmed = phrase.trim_matches(is_trim_punct);
+    if final_trimmed.is_empty() {
+        return fallback.to_owned();
+    }
+
+    let mut chars = final_trimmed.chars();
+    match chars.next() {
+        None => fallback.to_owned(),
+        Some(first) => {
+            let mut out = first.to_uppercase().to_string();
+            out.push_str(chars.as_str());
+            out
+        }
+    }
 }
 
 pub fn prepare_lens_context(
@@ -35,6 +116,7 @@ pub fn prepare_lens_context(
     focus_ids: &[String],
     token_budget: u32,
     custom_prompt: Option<&str>,
+    in_place: bool,
 ) -> Result<String, IpcError> {
     if focus_ids.is_empty() {
         return Err(IpcError::validation(
@@ -68,6 +150,16 @@ pub fn prepare_lens_context(
         }
     }
 
+    if in_place {
+        if let Some(target_id) = focus_ids.first() {
+            if let Some(target_node) = active.engine.nodes.get(target_id) {
+                if target_node.status == NodeStatus::Locked {
+                    return Err(IpcError::node_locked(target_id));
+                }
+            }
+        }
+    }
+
     let compiled = compile_context(&active.engine, focus_ids, token_budget);
     Ok(compiled.prompt_text)
 }
@@ -83,12 +175,14 @@ pub async fn execute_lens_run(
     cancel: CancellationToken,
     mut emit_event: impl FnMut(LensStreamEvent) + Send,
 ) -> Result<Vec<String>, IpcError> {
+    let in_place = params.in_place;
     let context_result = prepare_lens_context(
         &workspace,
         params.lens,
         &params.focus_ids,
         params.token_budget,
         params.custom_prompt.as_deref(),
+        in_place,
     );
 
     let compiled_prompt = match context_result {
@@ -106,7 +200,12 @@ pub async fn execute_lens_run(
         }
     };
 
-    let system_prompt = format!("{BASE_SYSTEM_PROMPT}\n\n{}", lens_prompt(params.lens));
+    let mut system_prompt = format!("{BASE_SYSTEM_PROMPT}\n\n{}", lens_prompt(params.lens));
+    if in_place {
+        system_prompt.push_str(
+            "\n\nIN-PLACE MODE: Emit ONE @@NODE block with a concise 3-7 word title=\"...\" summarizing the question and answer, containing only the answer body.",
+        );
+    }
     let extra_instruction = params.custom_prompt.as_deref().unwrap_or("").trim();
     let user_prompt = if extra_instruction.is_empty() {
         compiled_prompt
@@ -142,6 +241,83 @@ pub async fn execute_lens_run(
         let conn = db_guard
             .as_mut()
             .ok_or_else(IpcError::workspace_not_open)?;
+
+        if in_place {
+            if let Some(ref existing_nid) = *active_node_id {
+                let heading_chunk = format!("\n\n### {}\n\n", meta.title);
+                active_content.push_str(&heading_chunk);
+                emit(LensStreamEvent::TokenDelta {
+                    node_id: existing_nid.clone(),
+                    chunk: heading_chunk,
+                });
+                return Ok(());
+            }
+
+            let target_id = params
+                .focus_ids
+                .first()
+                .ok_or_else(|| IpcError::validation("Missing focus node for in-place lens"))?
+                .clone();
+            let existing = active
+                .engine
+                .nodes
+                .get(&target_id)
+                .ok_or_else(|| IpcError::validation(format!("Focus node {target_id} not found")))?
+                .clone();
+            if existing.status == NodeStatus::Locked {
+                return Err(IpcError::node_locked(&target_id));
+            }
+
+            let derived_title = if is_generic_lens_title(&meta.title) {
+                derive_title_from_prompt(params.custom_prompt.as_deref(), &meta.title)
+            } else {
+                meta.title.trim().to_owned()
+            };
+            let auto_title = if derived_title.is_empty() {
+                existing.title.clone()
+            } else {
+                derived_title
+            };
+            let prefix = if existing.content.trim().is_empty() {
+                String::new()
+            } else {
+                format!("{}\n\n---\n\n", existing.content.trim_end())
+            };
+
+            let ops = vec![
+                GraphOp::UpdateNodeText {
+                    id: target_id.clone(),
+                    title: auto_title.clone(),
+                    content: prefix.clone(),
+                },
+                GraphOp::UpdateNodeMeta {
+                    id: target_id.clone(),
+                    node_type: None,
+                    status: Some(NodeStatus::Draft),
+                    severity: None,
+                    pin_global: None,
+                    exclude_from_ai: None,
+                    collapsed: None,
+                },
+            ];
+            let (apply_res, _) = db::queries::apply_ops(conn, &mut active.engine, &ops)?;
+            let updated_target = apply_res
+                .updated_nodes
+                .into_iter()
+                .find(|n| n.id == target_id)
+                .unwrap_or(existing);
+
+            *active_node_id = Some(target_id.clone());
+            *active_title = auto_title;
+            *active_content = prefix;
+            spawned_ids.push(target_id);
+
+            emit(LensStreamEvent::SkeletonSpawned {
+                node: updated_target,
+                edges: Vec::new(),
+            });
+            return Ok(());
+        }
 
         let anchors: Vec<NodeDto> = params
             .focus_ids
@@ -347,7 +523,9 @@ pub async fn execute_lens_run(
                     }
                 }
                 ParsedEvent::FinalizeNode => {
-                    finalize_active(active_node_id, active_title, active_content, emit)?;
+                    if !in_place {
+                        finalize_active(active_node_id, active_title, active_content, emit)?;
+                    }
                 }
             }
         }
@@ -391,6 +569,14 @@ pub async fn execute_lens_run(
     }
 
     if cancel.is_cancelled() {
+        if in_place && active_node_id.is_some() {
+            let _ = finalize_active(
+                &mut active_node_id,
+                &mut active_title,
+                &mut active_content,
+                &mut emit_event,
+            );
+        }
         emit_event(LensStreamEvent::RunCompleted {
             run_id: params.run_id,
             spawned_ids: spawned_ids.clone(),
@@ -400,6 +586,14 @@ pub async fn execute_lens_run(
     }
 
     if let Err(err) = stream_res {
+        if in_place && active_node_id.is_some() {
+            let _ = finalize_active(
+                &mut active_node_id,
+                &mut active_title,
+                &mut active_content,
+                &mut emit_event,
+            );
+        }
         emit_event(LensStreamEvent::RunError {
             run_id: params.run_id,
             code: err.code.as_str().to_owned(),
@@ -409,6 +603,14 @@ pub async fn execute_lens_run(
     }
 
     if let Err(err) = tail_res {
+        if in_place && active_node_id.is_some() {
+            let _ = finalize_active(
+                &mut active_node_id,
+                &mut active_title,
+                &mut active_content,
+                &mut emit_event,
+            );
+        }
         emit_event(LensStreamEvent::RunError {
             run_id: params.run_id,
             code: err.code.as_str().to_owned(),
@@ -417,10 +619,67 @@ pub async fn execute_lens_run(
         return Err(err);
     }
 
+    if in_place && active_node_id.is_some() {
+        finalize_active(
+            &mut active_node_id,
+            &mut active_title,
+            &mut active_content,
+            &mut emit_event,
+        )?;
+    }
+
     emit_event(LensStreamEvent::RunCompleted {
         run_id: params.run_id,
         spawned_ids: spawned_ids.clone(),
         cancelled: false,
     });
     Ok(spawned_ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{derive_title_from_prompt, is_generic_lens_title};
+
+    #[test]
+    fn derive_title_strips_tags_punctuation_and_caps_words() {
+        assert_eq!(
+            derive_title_from_prompt(Some("@feynman why does Raft need pre-vote?"), "Fallback"),
+            "Why does Raft need pre-vote"
+        );
+        assert_eq!(
+            derive_title_from_prompt(
+                Some("@custom: compare leader election in Raft Paxos Zab Viewstamped Replication"),
+                "Fallback"
+            ),
+            "Compare leader election in Raft Paxos"
+        );
+        assert_eq!(
+            derive_title_from_prompt(Some("@study   "), "Study & Recall"),
+            "Study & Recall"
+        );
+        assert_eq!(
+            derive_title_from_prompt(Some("  ?!.,:  "), "Default Title"),
+            "Default Title"
+        );
+        assert_eq!(derive_title_from_prompt(None, "Default Title"), "Default Title");
+    }
+
+    #[test]
+    fn recognizes_generic_lens_titles() {
+        for title in [
+            "",
+            "   ",
+            "AI Response",
+            "first principles",
+            "Study & Recall",
+            "Research Brief",
+            "Alternative Branch",
+            "Synthesis Decision",
+            "Red-Team Finding",
+            "Edge-Case Matrix",
+        ] {
+            assert!(is_generic_lens_title(title), "expected generic: {title}");
+        }
+        assert!(!is_generic_lens_title("Raft Leader Election Safety"));
+    }
 }

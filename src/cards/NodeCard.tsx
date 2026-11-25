@@ -28,6 +28,7 @@ import {
   xrayState,
 } from "../store/selection";
 import { getRenderedMarkdown, renderMarkdownToSanitizedHtml } from "./markdownCache";
+import { resolveNodeTone } from "./nodeAccent";
 
 interface NodeCardProps {
   node: NodeDto;
@@ -119,10 +120,13 @@ export function NodeCard({ node }: NodeCardProps) {
   const tx = node.layout.x + (offset?.x ?? 0);
   const ty = node.layout.y + (offset?.y ?? 0);
 
+  const tone = resolveNodeTone(node);
+
   const classes = [
     "node-card",
     `node-card--${node.type}`,
     `node-card--status-${node.status}`,
+    `node-card--tone-${tone.key}`,
   ];
   if (node.type === "loophole" && node.metadata.severity) {
     classes.push(`node-card--severity-${node.metadata.severity}`);
@@ -177,6 +181,7 @@ export function NodeCard({ node }: NodeCardProps) {
       ref={cardRef}
       class={classes.join(" ")}
       data-node-id={node.id}
+      data-node-tone={tone.key}
       style={{
         transform: `translate3d(${tx}px, ${ty}px, 0)`,
         width: `${displayWidth}px`,
@@ -330,6 +335,10 @@ export function NodeCard({ node }: NodeCardProps) {
       <header class="node-card__header">
         <span class="node-card__title">{node.title || "Untitled"}</span>
         <div class="node-card__badges">
+          <span class={`badge badge--tone badge--tone-${tone.key}`}>
+            <span class="badge--tone__dot" aria-hidden="true" />
+            {tone.label}
+          </span>
           {node.type === "loophole" && node.metadata.severity && (
             <span class={`badge badge--sev-${node.metadata.severity}`}>
               {node.metadata.severity.toUpperCase()}

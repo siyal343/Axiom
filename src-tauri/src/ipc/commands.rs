@@ -454,9 +454,11 @@ pub fn run_lens(
     lens: LensKind,
     focus_ids: Vec<String>,
     custom_prompt: Option<String>,
+    in_place: Option<bool>,
     on_event: tauri::ipc::Channel<LensStreamEvent>,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, IpcError> {
+    let in_place = in_place.unwrap_or(false);
     let token_budget = {
         let ws_guard = state
             .workspace
@@ -474,6 +476,7 @@ pub fn run_lens(
         &focus_ids,
         token_budget,
         custom_prompt.as_deref(),
+        in_place,
     )?;
 
     let (config, api_key) = state.settings.tier_config_and_key("reasoning")?;
@@ -502,6 +505,7 @@ pub fn run_lens(
                 lens,
                 focus_ids,
                 custom_prompt,
+                in_place,
                 config,
                 api_key,
                 token_budget,

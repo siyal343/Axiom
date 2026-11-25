@@ -1,7 +1,8 @@
 import { signal } from "@preact/signals";
 import { worldToScreen } from "../canvas/camera";
 import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
-import type { ActionTagDef } from "../input/actionTags";
+import { deriveTitleFromTagPrompt, isPlaceholderTitle } from "../cards/nodeAccent";
+import { extractActionTagFromContent, type ActionTagDef } from "../input/actionTags";
 import {
   cancelRun as cancelRunIpc,
   isTauriRuntime,
@@ -22,6 +23,7 @@ import {
   cameraControllerRef,
   edgesMap,
   graphVersion,
+  mutateGraph,
   nodesMap,
   recomputeUnresolvedLoopholes,
   resolveAndAnimateOverlaps,
@@ -37,6 +39,7 @@ import {
   selectedIds,
   selectSingle,
   shortcutsHelpOpen,
+  triggerLockedShake,
 } from "./selection";
 
 export const LENS_LABELS: Record<LensKind, string> = {
@@ -59,9 +62,31 @@ export const customPromptOpen = signal<boolean>(false);
 export const settingsModalOpen = signal<boolean>(false);
 export const triageBanner = signal<string | null>(null);
 
+export interface TriggerLensOptions {
+  inPlace?: boolean;
+}
+
+export interface InPlaceSnapshot {
+  nodeId: string;
+  prevTitle: string;
+  prevContent: string;
+}
+
+const LENS_TO_TAG: Record<LensKind, string> = {
+  custom: "@custom",
+  feynman: "@feynman",
+  red_team: "@redteam",
+  edge_case: "@edgecase",
+  diverge: "@diverge",
+  synthesize: "@synthesize",
+  research: "@research",
+  study: "@study",
+};
+
 interface ActiveRunTracker {
   lens: LensKind | null;
   startFocusId: string | null;
+  inPlaceSnapshot: InPlaceSnapshot | null;
   spawnedNodes: Map<string, NodeDto>;
   spawnedEdges: EdgeDto[];
   pendingDeltas: Map<string, string>;
@@ -71,6 +96,7 @@ interface ActiveRunTracker {
 const tracker: ActiveRunTracker = {
   lens: null,
   startFocusId: null,
+  inPlaceSnapshot: null,
   spawnedNodes: new Map(),
   spawnedEdges: [],
   pendingDeltas: new Map(),
@@ -168,9 +194,14 @@ function scheduleDeltaFlush(): void {
   }
 }
 
-export function resetRunTracker(lens: LensKind | null = null, startFocus: string | null = null): void {
+export function resetRunTracker(
+  lens: LensKind | null = null,
+  startFocus: string | null = null,
+  inPlaceSnapshot: InPlaceSnapshot | null = null,
+): void {
   tracker.lens = lens;
   tracker.startFocusId = startFocus;
+  tracker.inPlaceSnapshot = inPlaceSnapshot;
   tracker.spawnedNodes.clear();
   tracker.spawnedEdges = [];
   tracker.pendingDeltas.clear();
@@ -180,13 +211,16 @@ export function resetRunTracker(lens: LensKind | null = null, startFocus: string
 export function handleLensStreamEvent(evt: LensStreamEvent): void {
   switch (evt.kind) {
     case "skeleton_spawned": {
+      const isInPlaceSpawn = tracker.inPlaceSnapshot?.nodeId === evt.node.id;
       nodesMap.set(evt.node.id, evt.node);
-      for (const edge of evt.edges) {
-        edgesMap.set(edge.id, edge);
+      if (!isInPlaceSpawn) {
+        for (const edge of evt.edges) {
+          edgesMap.set(edge.id, edge);
+        }
+        tracker.spawnedEdges.push(...evt.edges);
       }
       viewportSpatialIndex.upsert(evt.node);
       tracker.spawnedNodes.set(evt.node.id, evt.node);
-      tracker.spawnedEdges.push(...evt.edges);
       activeRunStatus.value = "streaming";
       activeRunSpawnedCount.value = tracker.spawnedNodes.size;
       recomputeUnresolvedLoopholes();
@@ -219,6 +253,7 @@ export function handleLensStreamEvent(evt: LensStreamEvent): void {
       flushPendingTokenDeltas();
       const completedLens = tracker.lens;
       const startFocus = tracker.startFocusId;
+      const inPlaceSnap = tracker.inPlaceSnapshot;
       const spawnedNodes = Array.from(tracker.spawnedNodes.values());
       const spawnedEdges = [...tracker.spawnedEdges];
 
@@ -229,7 +264,35 @@ export function handleLensStreamEvent(evt: LensStreamEvent): void {
       activeRunSpawnedCount.value = 0;
       resetRunTracker();
 
-      if (spawnedNodes.length > 0) {
+      if (inPlaceSnap) {
+        const finalNode = nodesMap.get(inPlaceSnap.nodeId);
+        if (
+          finalNode &&
+          (finalNode.title !== inPlaceSnap.prevTitle ||
+            finalNode.content !== inPlaceSnap.prevContent)
+        ) {
+          graphHistory.push({
+            label: `AI ${completedLens ?? "lens"}`,
+            forward: [
+              {
+                op: "update_node_text",
+                id: inPlaceSnap.nodeId,
+                title: finalNode.title,
+                content: finalNode.content,
+              },
+            ],
+            inverse: [
+              {
+                op: "update_node_text",
+                id: inPlaceSnap.nodeId,
+                title: inPlaceSnap.prevTitle,
+                content: inPlaceSnap.prevContent,
+              },
+            ],
+          });
+          syncHistorySignals();
+        }
+      } else if (spawnedNodes.length > 0) {
         const forward: GraphOp[] = [
           ...spawnedNodes.map((node): GraphOp => ({ op: "create_node", node })),
           ...spawnedEdges.map((edge): GraphOp => ({ op: "create_edge", edge })),
@@ -244,6 +307,7 @@ export function handleLensStreamEvent(evt: LensStreamEvent): void {
       }
 
       if (
+        !inPlaceSnap &&
         completedLens === "red_team" &&
         evt.spawned_ids.length > 0 &&
         focusId.value === startFocus
@@ -312,7 +376,11 @@ export function closeSettingsModal(): void {
   }
 }
 
-export async function triggerLens(lens: LensKind, customPrompt?: string): Promise<void> {
+export async function triggerLens(
+  lens: LensKind,
+  customPrompt?: string,
+  options?: TriggerLensOptions,
+): Promise<void> {
   if (activeRunId.value !== null) {
     pushToast("An AI lens run is already streaming (press Esc to cancel)", "warning");
     return;
@@ -338,19 +406,92 @@ export async function triggerLens(lens: LensKind, customPrompt?: string): Promis
     return;
   }
 
+  const useInPlace = Boolean(options?.inPlace) && lens !== "synthesize";
+  let effectiveTargetIds = targetIds;
+  let inPlaceSnap: InPlaceSnapshot | null = null;
+
+  if (useInPlace) {
+    const inPlaceTargetId =
+      focusId.value && targetIds.includes(focusId.value) ? focusId.value : targetIds[0];
+    const targetNode = inPlaceTargetId ? nodesMap.get(inPlaceTargetId) : undefined;
+    if (!targetNode) {
+      pushToast("Select a focus node first", "warning");
+      return;
+    }
+    if (targetNode.status === "locked") {
+      triggerLockedShake(targetNode.id);
+      pushToast("Node is locked — unlock before running in-place AI", "warning");
+      return;
+    }
+    effectiveTargetIds = [targetNode.id];
+    inPlaceSnap = {
+      nodeId: targetNode.id,
+      prevTitle: targetNode.title,
+      prevContent: targetNode.content,
+    };
+  }
+
   if (!isTauriRuntime()) {
     pushToast("AI Lens streaming requires the Axiom desktop runtime", "info");
     return;
   }
 
-  resetRunTracker(lens, focusId.value);
+  if (useInPlace && inPlaceSnap) {
+    const targetNode = nodesMap.get(inPlaceSnap.nodeId);
+    const trimmedPrompt = customPrompt?.trim() ?? "";
+    if (targetNode && trimmedPrompt.length > 0) {
+      const tagForLens = LENS_TO_TAG[lens];
+      const existingTag = targetNode.content.includes("@")
+        ? extractActionTagFromContent(targetNode.content)
+        : null;
+      const alreadyHasPrompt =
+        targetNode.content.trimEnd().endsWith(trimmedPrompt) ||
+        (existingTag !== null && existingTag.argument === trimmedPrompt);
+      const promptLine = trimmedPrompt.startsWith("@")
+        ? trimmedPrompt
+        : `${tagForLens} ${trimmedPrompt}`;
+      const nextContent = alreadyHasPrompt
+        ? targetNode.content
+        : targetNode.content.trim().length > 0
+          ? `${targetNode.content.trimEnd()}\n\n${promptLine}`
+          : promptLine;
+      const nextTitle = isPlaceholderTitle(targetNode.title)
+        ? deriveTitleFromTagPrompt(tagForLens, trimmedPrompt, targetNode.title)
+        : targetNode.title;
+
+      if (nextTitle !== targetNode.title || nextContent !== targetNode.content) {
+        nodesMap.set(targetNode.id, {
+          ...targetNode,
+          title: nextTitle,
+          content: nextContent,
+        });
+        graphVersion.value += 1;
+        await mutateGraph([
+          {
+            op: "update_node_text",
+            id: targetNode.id,
+            title: nextTitle,
+            content: nextContent,
+          },
+        ]);
+      }
+    }
+  }
+
+  resetRunTracker(lens, focusId.value, inPlaceSnap);
   activeRunStatus.value = "thinking";
   activeRunLens.value = lens;
-  activeRunFocusIds.value = targetIds;
+  activeRunFocusIds.value = effectiveTargetIds;
   activeRunSpawnedCount.value = 0;
 
   try {
-    const runId = await runLensIpc(lens, targetIds, handleLensStreamEvent, customPrompt);
+    const runId = await runLensIpc(
+      lens,
+      effectiveTargetIds,
+      handleLensStreamEvent,
+      customPrompt,
+      useInPlace,
+    );
     activeRunId.value = runId;
   } catch (err) {
     activeRunId.value = null;
@@ -472,7 +613,28 @@ export function startLoopholeTriage(): boolean {
   return true;
 }
 
-export async function executeActionTag(action: ActionTagDef, argument?: string): Promise<void> {
+export function shouldRunTagInPlace(
+  action: ActionTagDef,
+  argument: string | undefined,
+  targetNode: NodeDto | undefined,
+): boolean {
+  if (action.kind !== "lens" || action.lens === "synthesize") {
+    return false;
+  }
+  const hasArg = Boolean(argument && argument.trim().length > 0);
+  const hasNodeTag = Boolean(
+    targetNode &&
+      targetNode.content.includes("@") &&
+      extractActionTagFromContent(targetNode.content),
+  );
+  return hasArg || hasNodeTag;
+}
+
+export async function executeActionTag(
+  action: ActionTagDef,
+  argument?: string,
+  options?: TriggerLensOptions,
+): Promise<void> {
   if (action.kind === "triage") {
     startLoopholeTriage();
     return;
@@ -480,8 +642,8 @@ export async function executeActionTag(action: ActionTagDef, argument?: string):
 
   const trimmed = argument?.trim() ?? "";
   if (action.lens === "custom" && trimmed.length === 0) {
-    await triggerLens("custom");
+    await triggerLens("custom", undefined, options);
     return;
   }
-  await triggerLens(action.lens, trimmed.length > 0 ? trimmed : undefined);
+  await triggerLens(action.lens, trimmed.length > 0 ? trimmed : undefined, options);
 }

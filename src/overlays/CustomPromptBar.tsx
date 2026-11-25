@@ -6,6 +6,7 @@ import {
   closeCustomPromptBar,
   customPromptOpen,
   executeActionTag,
+  shouldRunTagInPlace,
   triggerLens,
 } from "../store/aiRunner";
 import { cameraControllerRef, nodesMap } from "../store/graphStore";
@@ -61,7 +62,8 @@ export function CustomPromptBar() {
     closeCustomPromptBar();
     const parsed = parseActionTagInvocation(trimmed);
     if (parsed) {
-      void executeActionTag(parsed.action, parsed.argument);
+      const inPlace = shouldRunTagInPlace(parsed.action, parsed.argument, node);
+      void executeActionTag(parsed.action, parsed.argument, { inPlace });
       return;
     }
     void triggerLens("custom", trimmed);

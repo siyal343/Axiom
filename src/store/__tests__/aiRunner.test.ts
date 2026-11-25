@@ -188,4 +188,61 @@ describe("Slice 4 aiRunner: grouped Undo/Redo, Red-Team triage, PROVIDER_AUTH to
     expect(nodesMap.get("node_root")?.summary).toBe("Concise two-sentence summary.");
     expect(nodesMap.get("node_root")?.summary_hash).toBe("hash_node_root");
   });
+
+  it("streams in-place @tag response into the focused node with single undoable text history", async () => {
+    const originalPrompt = "@feynman Explain quantum tunneling";
+    const root = nodesMap.get("node_root");
+    expect(root).toBeDefined();
+    if (!root) return;
+
+    nodesMap.set("node_root", {
+      ...root,
+      title: "New Concept",
+      content: originalPrompt,
+    });
+    selectSingle("node_root");
+    resetRunTracker("feynman", "node_root", {
+      nodeId: "node_root",
+      prevTitle: "New Concept",
+      prevContent: originalPrompt,
+    });
+
+    const draftInPlace: NodeDto = {
+      ...root,
+      status: "draft",
+      title: "Explain Quantum Tunneling",
+      content: `${originalPrompt}\n\n---\n\n`,
+    };
+    const finalizedInPlace: NodeDto = {
+      ...draftInPlace,
+      status: "active",
+      content: `${originalPrompt}\n\n---\n\nAnswer body...`,
+    };
+
+    handleLensStreamEvent({ kind: "skeleton_spawned", node: draftInPlace, edges: [] });
+    handleLensStreamEvent({ kind: "token_delta", node_id: "node_root", chunk: "Answer body..." });
+    handleLensStreamEvent({ kind: "node_finalized", node: finalizedInPlace });
+    handleLensStreamEvent({
+      kind: "run_completed",
+      run_id: "run_inplace",
+      spawned_ids: ["node_root"],
+      cancelled: false,
+    });
+
+    expect(nodesMap.size).toBe(2);
+    expect(edgesMap.size).toBe(0);
+    expect(nodesMap.get("node_root")?.title).toBe("Explain Quantum Tunneling");
+    expect(nodesMap.get("node_root")?.content).toBe(`${originalPrompt}\n\n---\n\nAnswer body...`);
+    expect(graphHistory.size()).toBe(1);
+
+    await performUndo();
+    expect(nodesMap.has("node_root")).toBe(true);
+    expect(nodesMap.size).toBe(2);
+    expect(nodesMap.get("node_root")?.title).toBe("New Concept");
+    expect(nodesMap.get("node_root")?.content).toBe(originalPrompt);
+
+    await performRedo();
+    expect(nodesMap.get("node_root")?.title).toBe("Explain Quantum Tunneling");
+    expect(nodesMap.get("node_root")?.content).toBe(`${originalPrompt}\n\n---\n\nAnswer body...`);
+  });
 });

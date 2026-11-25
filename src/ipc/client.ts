@@ -133,6 +133,7 @@ export async function runLens(
   focusIds: string[],
   onEvent: (event: LensStreamEvent) => void,
   customPrompt?: string,
+  inPlace?: boolean,
 ): Promise<string> {
   const channel = new Channel<LensStreamEvent>();
   channel.onmessage = onEvent;
@@ -140,6 +141,7 @@ export async function runLens(
     lens,
     focusIds,
     customPrompt,
+    inPlace: inPlace ?? false,
     onEvent: channel,
   });
 }

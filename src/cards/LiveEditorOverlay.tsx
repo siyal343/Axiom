@@ -15,6 +15,7 @@ import { cameraControllerRef, mutateGraphUndoable, nodesMap } from "../store/gra
 import { buildUpdateTextWithInverse } from "../store/history";
 import { exitEditMode, focusId, modalState, selectSingle } from "../store/selection";
 import { getRenderedMarkdown } from "./markdownCache";
+import { deriveTitleFromTagPrompt, isPlaceholderTitle } from "./nodeAccent";
 
 const monochromeEditorTheme = EditorView.theme({
   "&": {
@@ -158,8 +159,13 @@ function LiveEditorInstance({
       return;
     }
     committedRef.current = true;
-    const nextTitle = titleValRef.current;
+    const rawTitle = titleValRef.current;
     const nextContent = viewRef.current ? viewRef.current.state.doc.toString() : initialContent;
+    const latestDetected = extractActionTagFromContent(nextContent);
+    const nextTitle =
+      latestDetected && isPlaceholderTitle(rawTitle) && latestDetected.argument.length > 0
+        ? deriveTitleFromTagPrompt(latestDetected.action.tag, latestDetected.argument, rawTitle)
+        : rawTitle;
 
     let savePromise: Promise<unknown> = Promise.resolve();
     if (nextTitle !== initialTitle || nextContent !== initialContent) {
@@ -175,10 +181,11 @@ function LiveEditorInstance({
     exitEditMode();
     if (afterAction === "run_or_chord") {
       selectSingle(nodeId);
-      const latestDetected = extractActionTagFromContent(nextContent);
       if (latestDetected) {
+        const inPlace =
+          latestDetected.action.kind === "lens" && latestDetected.action.lens !== "synthesize";
         void savePromise.then(() =>
-          executeActionTag(latestDetected.action, latestDetected.argument),
+          executeActionTag(latestDetected.action, latestDetected.argument, { inPlace }),
         );
       } else {
         modalState.value = "chord_a";
