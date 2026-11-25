@@ -7,9 +7,9 @@ use axiom_canvas_lib::db::{hydrate_or_seed_workspace, open_connection};
 use axiom_canvas_lib::graph::checkpoints::{create_checkpoint, restore_checkpoint};
 use axiom_canvas_lib::graph::compiler::compile_context;
 use axiom_canvas_lib::graph::models::{
-    compute_content_hash, estimate_tokens, ContextControls, CreatedBy, EdgeDto, EdgeType,
-    EdgeWeight, GraphOp, NodeDto, NodeLayout, NodeLensOrigin, NodeMetadata, NodeStatus, NodeType,
-    Severity, StudyCardDto, StudyCardKind, StudyRating,
+    compute_content_hash, estimate_tokens, now_epoch_ms, ContextControls, CreatedBy, EdgeDto,
+    EdgeType, EdgeWeight, GraphOp, NodeDto, NodeLayout, NodeLensOrigin, NodeMetadata, NodeStatus,
+    NodeType, Severity, StudyCardDto, StudyCardKind, StudyRating,
 };
 use axiom_canvas_lib::graph::spatial::{DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH};
 use axiom_canvas_lib::graph::study::{
@@ -689,7 +689,7 @@ fn extract_and_sync_study_deck_preserves_sm2_and_cleans_resolved_loopholes() {
     .expect("create manual card");
 
     // Review qa_card with Good so it gets SM-2 state + future due_at
-    let review_now = 1_700_000_000_000_i64;
+    let review_now = now_epoch_ms();
     let reviewed = review_study_card(&mut conn, &qa_card.id, StudyRating::Good, review_now)
         .expect("review qa card");
     assert_eq!(reviewed.repetitions, 1);

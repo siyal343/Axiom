@@ -3,11 +3,14 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
-use crate::db::queries::{insert_edge_tx, insert_group_tx, insert_node_tx};
+use crate::db::queries::{
+    insert_edge_tx, insert_group_tx, insert_node_tx, insert_study_card_tx,
+    list_study_cards as db_list_study_cards,
+};
 use crate::error::IpcError;
 use crate::graph::models::{
     now_epoch_ms, CameraState, CanvasGroupDto, CheckpointDiff, CheckpointNodeChange,
-    CheckpointSummary, EdgeDto, EdgeType, NodeDto, WorkspaceSnapshot,
+    CheckpointSummary, EdgeDto, EdgeType, NodeDto, StudyCardDto, WorkspaceSnapshot,
 };
 use crate::graph::GraphEngine;
 use crate::ipc::ActiveWorkspace;
@@ -18,6 +21,8 @@ struct CheckpointPayload {
     edges: Vec<EdgeDto>,
     #[serde(default)]
     pub groups: Vec<CanvasGroupDto>,
+    #[serde(default)]
+    pub study_cards: Vec<StudyCardDto>,
     system_prompt: String,
     token_budget: u32,
 }
@@ -38,6 +43,7 @@ pub fn create_checkpoint(
     let nodes = engine.all_nodes_sorted();
     let edges = engine.all_edges_sorted();
     let groups = engine.all_groups_sorted();
+    let study_cards = db_list_study_cards(conn, None)?;
     let node_count = nodes.len();
     let edge_count = edges.len();
 
@@ -45,6 +51,7 @@ pub fn create_checkpoint(
         nodes,
         edges,
         groups,
+        study_cards,
         system_prompt: system_prompt.to_owned(),
         token_budget,
     };
@@ -271,18 +278,30 @@ pub fn restore_checkpoint(
     )?;
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute("DELETE FROM study_cards", [])?;
     tx.execute("DELETE FROM canvas_groups", [])?;
     tx.execute("DELETE FROM edges", [])?;
     tx.execute("DELETE FROM nodes", [])?;
 
+    let mut restored_node_ids: HashSet<&str> = HashSet::with_capacity(payload.nodes.len());
     for node in &payload.nodes {
         insert_node_tx(&tx, node)?;
+        restored_node_ids.insert(node.id.as_str());
     }
     for edge in &payload.edges {
         insert_edge_tx(&tx, edge)?;
     }
     for group in &payload.groups {
         insert_group_tx(&tx, group)?;
+    }
+    for card in &payload.study_cards {
+        let node_valid = match card.node_id.as_deref() {
+            None => true,
+            Some(nid) => restored_node_ids.contains(nid),
+        };
+        if node_valid {
+            insert_study_card_tx(&tx, card)?;
+        }
     }
 
     tx.execute(
