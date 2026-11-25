@@ -1,4 +1,5 @@
-import type { LensKind } from "../ipc/types";
+import { signal } from "@preact/signals";
+import type { CustomLensDef, LensKind } from "../ipc/types";
 
 export interface BaseActionTagDef {
   tag: string;
@@ -11,6 +12,7 @@ export type ActionTagDef =
   | (BaseActionTagDef & {
       kind: "lens";
       lens: LensKind;
+      customLens?: CustomLensDef;
     })
   | (BaseActionTagDef & {
       kind: "triage";
@@ -99,12 +101,70 @@ export const ACTION_TAGS: readonly ActionTagDef[] = [
   },
 ];
 
+export const customLensesSignal = signal<CustomLensDef[]>([]);
+
+export function setCustomLenses(lenses: CustomLensDef[]): void {
+  customLensesSignal.value = [...lenses];
+}
+
+export const BUILTIN_LENS_PRESETS: readonly Omit<CustomLensDef, "id">[] = [
+  {
+    name: "STRIDE Threat Model",
+    tag: "threat",
+    description:
+      "Analyze Spoofing, Tampering, Repudiation, Information Disclosure, DoS, and Elevation of Privilege risks",
+    prompt_template:
+      "Apply STRIDE threat modeling (Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, Elevation of Privilege) to the focused context. Surface concrete attack vectors, preconditions, and mitigations.",
+    default_node_type: "loophole",
+    default_edge_type: "challenges",
+    default_severity: "high",
+  },
+  {
+    name: "Zero-Downtime Rollout",
+    tag: "rollout",
+    description:
+      "Plan phased deployment, expand-and-contract compatibility, canary gates, and rollback triggers",
+    prompt_template:
+      "Design a zero-downtime rollout plan for the focused change. Cover expand-and-contract compatibility, feature flags, canary verification metrics, and fast rollback triggers.",
+    default_node_type: "branch",
+    default_edge_type: "derives",
+    default_severity: null,
+  },
+  {
+    name: "Reviewer #2 Critique",
+    tag: "reviewer2",
+    description:
+      "Deliver a rigorous peer-review critique of hidden assumptions, missing baselines, and weak claims",
+    prompt_template:
+      "Act as a skeptical, rigorous Reviewer #2. Challenge weak assumptions, missing baselines or ablations, unverified claims, and methodological gaps with concrete evidence requests.",
+    default_node_type: "loophole",
+    default_edge_type: "challenges",
+    default_severity: "high",
+  },
+];
+
+export function getAllActionTags(): ActionTagDef[] {
+  const customTags: ActionTagDef[] = customLensesSignal.value.map((customLens) => {
+    const cleanTag = customLens.tag.trim().toLowerCase().replace(/^@+/, "");
+    return {
+      tag: `@${cleanTag}`,
+      label: customLens.name,
+      description: customLens.description,
+      aliases: [],
+      kind: "lens",
+      lens: "custom",
+      customLens,
+    };
+  });
+  return [...ACTION_TAGS, ...customTags];
+}
+
 function findActionTagByToken(token: string): ActionTagDef | null {
   const normalized = token.trim().toLowerCase().replace(/^@+/, "");
   if (!normalized) {
     return null;
   }
-  for (const def of ACTION_TAGS) {
+  for (const def of getAllActionTags()) {
     if (def.tag.slice(1).toLowerCase() === normalized) {
       return def;
     }
@@ -116,13 +176,14 @@ function findActionTagByToken(token: string): ActionTagDef | null {
 }
 
 export function filterActionTags(queryAfterAt: string): ActionTagDef[] {
+  const allTags = getAllActionTags();
   const query = queryAfterAt.trim().toLowerCase().replace(/^@+/, "");
   if (!query) {
-    return [...ACTION_TAGS];
+    return allTags;
   }
 
   const scored: Array<{ def: ActionTagDef; rank: number }> = [];
-  for (const def of ACTION_TAGS) {
+  for (const def of allTags) {
     const bareTag = def.tag.slice(1).toLowerCase();
     const labelLower = def.label.toLowerCase();
     const descLower = def.description.toLowerCase();

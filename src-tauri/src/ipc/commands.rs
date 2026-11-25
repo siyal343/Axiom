@@ -13,10 +13,11 @@ use crate::error::IpcError;
 use crate::graph::compiler::compile_context;
 use crate::graph::models::{
     AppSettingsDto, ApplyResult, ArtifactFormat, ArtifactScope, CameraState, CompiledArtifact,
-    CompiledXray, EdgeType, GraphOp, LensKind, LensStreamEvent, NodePositionUpdate, NodeType,
-    OpenFlowResult, RelatedNodeHit, SaveSettingsInput, SearchHit, SpawnConnectedResult,
-    SpawnDirection, StaleNodeInfo, TestConnectionResult, WorkspaceCatalogDto, WorkspaceEntryDto,
-    WorkspaceSearchHit, WorkspaceSnapshot,
+    CompiledXray, EdgeType, GraphDiagnostics, GraphOp, ImportOutlineResult, LensKind,
+    LensStreamEvent, NodePositionUpdate, NodeType, OpenFlowResult, RelatedNodeHit,
+    SaveSettingsInput, SearchHit, SpawnConnectedResult, SpawnDirection, StaleNodeInfo,
+    TestConnectionResult, WorkspaceCatalogDto, WorkspaceEntryDto, WorkspaceSearchHit,
+    WorkspaceSnapshot,
 };
 use crate::graph::provenance::{acknowledge_stale_node as ack_stale_node_db, compute_stale_nodes};
 use crate::graph::spatial::{
@@ -840,15 +841,119 @@ pub fn export_markdown_artifact(
 }
 
 #[tauri::command]
+pub fn get_graph_diagnostics(
+    state: tauri::State<'_, AppState>,
+) -> Result<GraphDiagnostics, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let workspace_guard = state
+        .workspace
+        .read()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::diagnostics::compute_graph_diagnostics(conn, &active.engine)
+}
+
+#[tauri::command]
+pub fn enqueue_stale_summaries(
+    limit: Option<usize>,
+    state: tauri::State<'_, AppState>,
+) -> Result<usize, IpcError> {
+    let db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    let max_items = limit.unwrap_or(64).clamp(1, 500);
+    let ids = db::queries::list_stale_summary_node_ids(conn, max_items)?;
+    let count = ids.len();
+    for id in ids {
+        let _ = state.summary_tx.send(id);
+    }
+    Ok(count)
+}
+
+#[tauri::command]
+pub fn import_markdown_outline(
+    markdown: String,
+    parent_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<ImportOutlineResult, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let mut workspace_guard = state
+        .workspace
+        .write()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    let parent_opt = parent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let result = crate::graph::importer::import_markdown_outline(
+        conn,
+        &mut active.engine,
+        &markdown,
+        parent_opt,
+    )?;
+
+    for node in &result.created_nodes {
+        if !node.context_controls.exclude_from_ai && node.content_hash != node.summary_hash {
+            let _ = state.summary_tx.send(node.id.clone());
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
 pub fn run_lens(
     lens: LensKind,
     focus_ids: Vec<String>,
     custom_prompt: Option<String>,
     in_place: Option<bool>,
+    custom_lens_id: Option<String>,
     on_event: tauri::ipc::Channel<LensStreamEvent>,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, IpcError> {
     let in_place = in_place.unwrap_or(false);
+    let custom_lens = match custom_lens_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(id) => Some(
+            state
+                .settings
+                .find_custom_lens(id)?
+                .ok_or_else(|| IpcError::validation(format!("Custom lens '{id}' not found")))?,
+        ),
+        None => None,
+    };
+
     let expected_generation = state.workspace_generation.load(Ordering::SeqCst);
     let token_budget = {
         let ws_guard = state
@@ -868,6 +973,7 @@ pub fn run_lens(
         token_budget,
         custom_prompt.as_deref(),
         in_place,
+        custom_lens.as_ref(),
     )?;
 
     let (config, api_key) = state.settings.tier_config_and_key("reasoning")?;
@@ -898,6 +1004,7 @@ pub fn run_lens(
                 focus_ids,
                 custom_prompt,
                 in_place,
+                custom_lens,
                 config,
                 api_key,
                 token_budget,

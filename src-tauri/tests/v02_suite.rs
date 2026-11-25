@@ -550,6 +550,7 @@ async fn generation_guard_aborts_stale_lens_and_summarizer_writes_and_anthropic_
             focus_ids: vec!["n_root".to_owned()],
             custom_prompt: None,
             in_place: false,
+            custom_lens: None,
             config: ModelTierConfig {
                 provider: ProviderKind::OpenaiCompat,
                 base_url,
@@ -695,6 +696,7 @@ async fn generation_guard_aborts_stale_lens_and_summarizer_writes_and_anthropic_
             default_token_budget: 6000,
             auto_summarize: true,
             theme: "dark".to_owned(),
+            custom_lenses: Vec::new(),
         })
         .expect("save settings");
 

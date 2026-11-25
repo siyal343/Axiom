@@ -1,14 +1,50 @@
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::IpcError;
-use crate::graph::models::{AppSettingsDto, ModelTierConfig, ProviderKind, SaveSettingsInput};
+use crate::graph::models::{
+    AppSettingsDto, CustomLensDef, ModelTierConfig, ProviderKind, SaveSettingsInput,
+};
 
 const KEYRING_SERVICE: &str = "dev.axiom.canvas";
 const REASONING_KEY_NAME: &str = "reasoning_api_key";
 const UTILITY_KEY_NAME: &str = "utility_api_key";
+
+const RESERVED_LENS_TAGS: &[&str] = &[
+    "custom",
+    "prompt",
+    "ask",
+    "feynman",
+    "firstprinciples",
+    "explain",
+    "redteam",
+    "red-team",
+    "critique",
+    "challenge",
+    "edgecase",
+    "edge-case",
+    "edgecases",
+    "boundary",
+    "diverge",
+    "branches",
+    "options",
+    "synthesize",
+    "synth",
+    "decide",
+    "research",
+    "lit",
+    "cite",
+    "sources",
+    "study",
+    "quiz",
+    "recall",
+    "flashcards",
+    "triage",
+    "loopholes",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredTierConfig {
@@ -26,6 +62,8 @@ struct StoredSettings {
     default_token_budget: u32,
     auto_summarize: bool,
     theme: String,
+    #[serde(default)]
+    custom_lenses: Vec<CustomLensDef>,
 }
 
 impl Default for StoredSettings {
@@ -48,6 +86,7 @@ impl Default for StoredSettings {
             default_token_budget: 6000,
             auto_summarize: true,
             theme: "dark".to_owned(),
+            custom_lenses: Vec::new(),
         }
     }
 }
@@ -153,7 +192,17 @@ impl SettingsStore {
             default_token_budget: stored.default_token_budget,
             auto_summarize: stored.auto_summarize,
             theme: stored.theme,
+            custom_lenses: stored.custom_lenses,
         })
+    }
+
+    pub fn find_custom_lens(&self, id: &str) -> Result<Option<CustomLensDef>, IpcError> {
+        let trimmed = id.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let stored = self.load_stored()?;
+        Ok(stored.custom_lenses.into_iter().find(|l| l.id == trimmed))
     }
 
     pub fn save(&self, input: SaveSettingsInput) -> Result<AppSettingsDto, IpcError> {
@@ -171,6 +220,7 @@ impl SettingsStore {
 
         let reasoning = validate_tier(&input.reasoning, "reasoning")?;
         let utility = validate_tier(&input.utility, "utility")?;
+        let custom_lenses = validate_custom_lenses(&input.custom_lenses)?;
 
         let stored = StoredSettings {
             reasoning,
@@ -178,6 +228,7 @@ impl SettingsStore {
             default_token_budget: input.default_token_budget,
             auto_summarize: input.auto_summarize,
             theme,
+            custom_lenses,
         };
 
         let json = serde_json::to_string_pretty(&stored)?;
@@ -256,4 +307,71 @@ fn validate_tier(tier: &ModelTierConfig, label: &str) -> Result<StoredTierConfig
         temperature: tier.temperature,
         max_tokens: tier.max_tokens,
     })
+}
+
+fn normalize_lens_tag(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let stripped = trimmed.strip_prefix('@').unwrap_or(trimmed);
+    stripped.trim().to_ascii_lowercase()
+}
+
+fn is_valid_lens_tag(tag: &str) -> bool {
+    (2..=24).contains(&tag.len())
+        && tag
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+fn validate_custom_lenses(lenses: &[CustomLensDef]) -> Result<Vec<CustomLensDef>, IpcError> {
+    let mut seen_tags: HashSet<String> = HashSet::with_capacity(lenses.len());
+    let mut out = Vec::with_capacity(lenses.len());
+
+    for lens in lenses {
+        let name = lens.name.trim().to_owned();
+        if name.is_empty() {
+            return Err(IpcError::validation("Custom lens name cannot be empty"));
+        }
+        let prompt_template = lens.prompt_template.trim().to_owned();
+        if prompt_template.is_empty() {
+            return Err(IpcError::validation(format!(
+                "Prompt template for custom lens '{name}' cannot be empty"
+            )));
+        }
+
+        let tag = normalize_lens_tag(&lens.tag);
+        if !is_valid_lens_tag(&tag) {
+            return Err(IpcError::validation(format!(
+                "Custom lens tag '@{tag}' must be 2-24 characters of [a-z0-9_-]"
+            )));
+        }
+        if RESERVED_LENS_TAGS.contains(&tag.as_str()) {
+            return Err(IpcError::validation(format!(
+                "Custom lens tag '@{tag}' collides with a built-in lens tag"
+            )));
+        }
+        if !seen_tags.insert(tag.clone()) {
+            return Err(IpcError::validation(format!(
+                "Duplicate custom lens tag '@{tag}'"
+            )));
+        }
+
+        let id = if lens.id.trim().is_empty() {
+            format!("lens_{}", ulid::Ulid::new())
+        } else {
+            lens.id.trim().to_owned()
+        };
+
+        out.push(CustomLensDef {
+            id,
+            name,
+            tag,
+            description: lens.description.trim().to_owned(),
+            prompt_template,
+            default_node_type: lens.default_node_type,
+            default_edge_type: lens.default_edge_type,
+            default_severity: lens.default_severity,
+        });
+    }
+
+    Ok(out)
 }

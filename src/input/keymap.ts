@@ -55,14 +55,18 @@ import {
 import {
   closeArtifactExport,
   closeCommandPalette,
+  closeDiagnosticsModal,
   closeNodeContextMenu,
+  closeOutlineImportModal,
   connectSourceId,
+  diagnosticsModalOpen,
   edgePopover,
   enterEditMode,
   focusId,
   minimapOpen,
   modalState,
   openCommandPalette,
+  openDiagnosticsModal,
   relatedPopoverNodeId,
   selectedEdgeId,
   selectedIds,
@@ -114,6 +118,7 @@ export interface KeymapDeps {
   zoomOut?: () => void;
   resetZoom?: () => void;
   toggleShortcutsHelp?: () => void;
+  toggleDiagnosticsModal?: () => void;
   closeOverlays: () => void;
   setConnectSourceId?: (id: string | null) => void;
   openEdgePopoverFor: (sourceId: string, targetId: string) => void;
@@ -549,6 +554,18 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
       const fid = deps.getFocusId();
       if (deps.getSelectedIds().size > 1 && fid !== null) {
         deps.selectSingle(fid);
+      }
+      return;
+    }
+
+    if (lower === "h" && e.shiftKey) {
+      e.preventDefault();
+      if (deps.toggleDiagnosticsModal) {
+        deps.toggleDiagnosticsModal();
+      } else if (diagnosticsModalOpen.value) {
+        closeDiagnosticsModal();
+      } else {
+        openDiagnosticsModal();
       }
       return;
     }
@@ -1087,11 +1104,20 @@ export function attachKeymap(
     toggleShortcutsHelp: () => {
       shortcutsHelpOpen.value = !shortcutsHelpOpen.value;
     },
+    toggleDiagnosticsModal: () => {
+      if (diagnosticsModalOpen.value) {
+        closeDiagnosticsModal();
+      } else {
+        openDiagnosticsModal();
+      }
+    },
     closeOverlays: () => {
       edgePopover.value = null;
       closeNodeContextMenu();
       relatedPopoverNodeId.value = null;
       shortcutsHelpOpen.value = false;
+      closeDiagnosticsModal();
+      closeOutlineImportModal();
       closeCommandPalette();
       closeCustomPromptBar();
       closeSettingsModal();

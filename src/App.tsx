@@ -15,6 +15,7 @@ import { getEffectiveNodeHeight } from "./canvas/spatialIndex";
 import { CardLayer } from "./cards/CardLayer";
 import { LiveEditorOverlay } from "./cards/LiveEditorOverlay";
 import { attachKeymap } from "./input/keymap";
+import { setCustomLenses } from "./input/actionTags";
 import { findParentTarget } from "./input/topologyNav";
 import {
   getSettings,
@@ -26,9 +27,11 @@ import type { EdgeType, GraphOp, LensKind, NodeDto } from "./ipc/types";
 import { ArtifactExportModal } from "./overlays/ArtifactExportModal";
 import { CommandPalette } from "./overlays/CommandPalette";
 import { CustomPromptBar } from "./overlays/CustomPromptBar";
+import { DiagnosticsModal } from "./overlays/DiagnosticsModal";
 import { EdgeInspectorPill } from "./overlays/EdgeInspectorPill";
 import { MinimapOverlay } from "./overlays/MinimapOverlay";
 import { NodeContextMenu } from "./overlays/NodeContextMenu";
+import { OutlineImportModal } from "./overlays/OutlineImportModal";
 import { PerfHud } from "./overlays/PerfHud";
 import { RelatedNodesPopover } from "./overlays/RelatedNodesPopover";
 import { SettingsModal } from "./overlays/SettingsModal";
@@ -38,6 +41,7 @@ import { notifyIpcError, ToastStack } from "./overlays/ToastStack";
 import { WorkspaceSidebar } from "./overlays/WorkspaceSidebar";
 import { XrayHud } from "./overlays/XrayHud";
 import {
+  activeRunLabel,
   activeRunLens,
   activeRunSpawnedCount,
   activeRunStatus,
@@ -74,6 +78,7 @@ import {
 } from "./store/history";
 import {
   connectSourceId,
+  diagnosticsModalOpen,
   edgePopover,
   enterEditMode,
   focusId,
@@ -81,6 +86,7 @@ import {
   isInteracting,
   minimapOpen,
   modalState,
+  openDiagnosticsModal,
   selectedEdgeId,
   selectedIds,
   selectSingle,
@@ -176,9 +182,11 @@ export function App() {
   const activeTriage = triageBanner.value;
   const runStatus = activeRunStatus.value;
   const runLens = activeRunLens.value;
+  const runLabel = activeRunLabel.value;
   const runSpawnedCount = activeRunSpawnedCount.value;
   const isSidebarOpen = sidebarOpen.value;
   const isMinimapOpen = minimapOpen.value;
+  const isDiagnosticsOpen = diagnosticsModalOpen.value;
   const hasXray = xrayState.value !== null;
   const staleNodes = staleNodesMap.value;
   const staleCount = staleNodes.size;
@@ -342,6 +350,7 @@ export function App() {
           if (!active) return;
           theme.value = s.theme;
           tokenBudget.value = s.default_token_budget;
+          setCustomLenses(s.custom_lenses ?? []);
         })
         .catch(() => {
           // Non-fatal: defaults remain active
@@ -818,7 +827,7 @@ export function App() {
             </span>
             <span class="ai-thinking-pill__text">
               {runStatus === "thinking"
-                ? `Thinking — ${runLens ? LENS_LABELS[runLens] : "AI"}…`
+                ? `Thinking — ${runLabel ?? (runLens ? LENS_LABELS[runLens] : "AI")}…`
                 : `Streaming — ${runSpawnedCount} card${runSpawnedCount === 1 ? "" : "s"}…`}
             </span>
             <button
@@ -947,6 +956,18 @@ export function App() {
         <span class="canvas-controls__sep" aria-hidden="true" />
         <button
           type="button"
+          class={`canvas-controls__btn ${isDiagnosticsOpen ? "canvas-controls__btn--active" : ""}`}
+          title="Graph Health & Diagnostics (Shift+H)"
+          aria-label="Graph Health & Diagnostics"
+          aria-pressed={isDiagnosticsOpen}
+          onClick={() => {
+            openDiagnosticsModal();
+          }}
+        >
+          ♥ Health
+        </button>
+        <button
+          type="button"
           class="canvas-controls__btn"
           title="Keyboard shortcuts (?)"
           aria-label="Keyboard shortcuts"
@@ -968,6 +989,8 @@ export function App() {
       <CommandPalette />
       <CustomPromptBar />
       <ArtifactExportModal />
+      <DiagnosticsModal />
+      <OutlineImportModal />
       <SettingsModal />
       <ShortcutsModal />
       <ToastStack />

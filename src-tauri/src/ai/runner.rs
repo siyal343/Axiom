@@ -6,16 +6,16 @@ use rusqlite::Connection;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai::parser::{NodeStreamParser, ParsedEvent, ParsedNodeMeta};
+use crate::ai::parser::{LensDefaults, NodeStreamParser, ParsedEvent, ParsedNodeMeta};
 use crate::ai::prompts::{lens_defaults, lens_prompt, lens_to_origin, BASE_SYSTEM_PROMPT};
 use crate::ai::provider::{stream_completion, LlmStreamRequest};
 use crate::db;
 use crate::error::IpcError;
 use crate::graph::compiler::compile_context;
 use crate::graph::models::{
-    compute_content_hash, estimate_tokens, now_epoch_ms, ContextControls, CreatedBy, EdgeDto,
-    EdgeType, EdgeWeight, GraphOp, LensKind, LensStreamEvent, ModelTierConfig, NodeDto,
-    NodeLayout, NodeMetadata, NodeStatus, ProvenanceInput,
+    compute_content_hash, estimate_tokens, now_epoch_ms, ContextControls, CreatedBy,
+    CustomLensDef, EdgeDto, EdgeType, EdgeWeight, GraphOp, LensKind, LensStreamEvent,
+    ModelTierConfig, NodeDto, NodeLayout, NodeMetadata, NodeStatus, ProvenanceInput,
 };
 use crate::graph::spatial::{find_free_position, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH};
 use crate::ipc::ActiveWorkspace;
@@ -26,6 +26,8 @@ pub struct PreparedLensRun {
     pub flow_system_prompt: String,
     pub provenance_inputs: Vec<ProvenanceInput>,
     pub prompt_tokens: u32,
+    pub custom_lens_prompt: Option<String>,
+    pub custom_defaults: Option<LensDefaults>,
 }
 
 pub struct LensRunParams {
@@ -34,6 +36,7 @@ pub struct LensRunParams {
     pub focus_ids: Vec<String>,
     pub custom_prompt: Option<String>,
     pub in_place: bool,
+    pub custom_lens: Option<CustomLensDef>,
     pub config: ModelTierConfig,
     pub api_key: Option<String>,
     pub token_budget: u32,
@@ -121,6 +124,25 @@ pub fn derive_title_from_prompt(prompt: Option<&str>, fallback: &str) -> String 
     }
 }
 
+fn build_custom_lens_prompt(def: &CustomLensDef, custom_prompt: Option<&str>) -> String {
+    let severity_attr = def
+        .default_severity
+        .map(|s| format!(" severity={}", s.as_str()))
+        .unwrap_or_default();
+    let mut out = format!(
+        "CUSTOM LENS: {}\n{}\n\nOUTPUT FORMAT:\nEmit 1 or more blocks using:\n@@NODE type={} edge={}{} title=\"<concise title>\"\n<Dense, concrete Markdown response>\n@@END",
+        def.name.trim(),
+        def.prompt_template.trim(),
+        def.default_node_type.as_str(),
+        def.default_edge_type.as_str(),
+        severity_attr,
+    );
+    if let Some(extra) = custom_prompt.map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str(&format!("\n\n[USER INSTRUCTION]\n{extra}"));
+    }
+    out
+}
+
 pub fn prepare_lens_context(
     workspace: &Arc<RwLock<Option<ActiveWorkspace>>>,
     lens: LensKind,
@@ -128,6 +150,7 @@ pub fn prepare_lens_context(
     token_budget: u32,
     custom_prompt: Option<&str>,
     in_place: bool,
+    custom_lens: Option<&CustomLensDef>,
 ) -> Result<PreparedLensRun, IpcError> {
     if focus_ids.is_empty() {
         return Err(IpcError::validation(
@@ -139,7 +162,7 @@ pub fn prepare_lens_context(
             "Synthesize lens requires at least 2 selected focus nodes",
         ));
     }
-    if lens == LensKind::Custom {
+    if lens == LensKind::Custom && custom_lens.is_none() {
         let instr = custom_prompt.map(str::trim).unwrap_or("");
         if instr.is_empty() {
             return Err(IpcError::validation(
@@ -172,11 +195,26 @@ pub fn prepare_lens_context(
     }
 
     let compiled = compile_context(&active.engine, focus_ids, token_budget);
+    let (custom_lens_prompt, custom_defaults) = match custom_lens {
+        Some(def) => (
+            Some(build_custom_lens_prompt(def, custom_prompt)),
+            Some(LensDefaults {
+                node_type: def.default_node_type,
+                edge_type: def.default_edge_type,
+                severity: def.default_severity,
+                title: def.name.clone(),
+            }),
+        ),
+        None => (None, None),
+    };
+
     Ok(PreparedLensRun {
         compiled_prompt: compiled.prompt_text,
         flow_system_prompt: active.system_prompt.clone(),
         provenance_inputs: compiled.provenance_inputs,
         prompt_tokens: compiled.xray.total_tokens,
+        custom_lens_prompt,
+        custom_defaults,
     })
 }
 
@@ -202,6 +240,7 @@ pub async fn execute_lens_run(
             params.token_budget,
             params.custom_prompt.as_deref(),
             in_place,
+            params.custom_lens.as_ref(),
         ),
     };
 
@@ -223,6 +262,8 @@ pub async fn execute_lens_run(
     let flow_system_prompt = prepared.flow_system_prompt;
     let provenance_inputs = prepared.provenance_inputs;
     let prompt_tokens = prepared.prompt_tokens;
+    let custom_lens_prompt = prepared.custom_lens_prompt;
+    let custom_defaults = prepared.custom_defaults;
 
     if workspace_generation.load(Ordering::SeqCst) != params.expected_generation {
         if let Ok(mut runs) = active_runs.lock() {
@@ -236,7 +277,10 @@ pub async fn execute_lens_run(
         return Ok(Vec::new());
     }
 
-    let mut system_prompt = format!("{BASE_SYSTEM_PROMPT}\n\n{}", lens_prompt(params.lens));
+    let active_lens_prompt = custom_lens_prompt
+        .as_deref()
+        .unwrap_or_else(|| lens_prompt(params.lens));
+    let mut system_prompt = format!("{BASE_SYSTEM_PROMPT}\n\n{active_lens_prompt}");
     if in_place {
         system_prompt.push_str(
             "\n\nIN-PLACE MODE: Emit ONE @@NODE block with a concise 3-7 word title=\"...\" summarizing the question and answer, containing only the answer body.",
@@ -255,7 +299,8 @@ pub async fn execute_lens_run(
         format!("{compiled_prompt}\n\n---\n\n[USER INSTRUCTION]\n{extra_instruction}")
     };
 
-    let mut parser = NodeStreamParser::new(lens_defaults(params.lens));
+    let mut parser =
+        NodeStreamParser::new(custom_defaults.unwrap_or_else(|| lens_defaults(params.lens)));
     let mut active_node_id: Option<String> = None;
     let mut active_title = String::new();
     let mut active_content = String::new();

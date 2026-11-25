@@ -55,6 +55,7 @@ export const LENS_LABELS: Record<LensKind, string> = {
 
 export const activeRunId = signal<string | null>(null);
 export const activeRunLens = signal<LensKind | null>(null);
+export const activeRunLabel = signal<string | null>(null);
 export const activeRunStatus = signal<"idle" | "thinking" | "streaming">("idle");
 export const activeRunFocusIds = signal<string[]>([]);
 export const activeRunSpawnedCount = signal<number>(0);
@@ -64,6 +65,8 @@ export const triageBanner = signal<string | null>(null);
 
 export interface TriggerLensOptions {
   inPlace?: boolean;
+  customLensId?: string | null;
+  customLensLabel?: string | null;
 }
 
 export interface InPlaceSnapshot {
@@ -206,6 +209,7 @@ export function resetRunTracker(
   tracker.spawnedEdges = [];
   tracker.pendingDeltas.clear();
   tracker.flushScheduled = false;
+  activeRunLabel.value = null;
 }
 
 export function handleLensStreamEvent(evt: LensStreamEvent): void {
@@ -259,6 +263,7 @@ export function handleLensStreamEvent(evt: LensStreamEvent): void {
 
       activeRunId.value = null;
       activeRunLens.value = null;
+      activeRunLabel.value = null;
       activeRunStatus.value = "idle";
       activeRunFocusIds.value = [];
       activeRunSpawnedCount.value = 0;
@@ -325,6 +330,7 @@ export function handleLensStreamEvent(evt: LensStreamEvent): void {
       flushPendingTokenDeltas();
       activeRunId.value = null;
       activeRunLens.value = null;
+      activeRunLabel.value = null;
       activeRunStatus.value = "idle";
       activeRunFocusIds.value = [];
       activeRunSpawnedCount.value = 0;
@@ -401,7 +407,8 @@ export async function triggerLens(
     pushToast("Select 2 or more nodes to synthesize (Shift+J/K)", "warning");
     return;
   }
-  if (lens === "custom" && customPrompt === undefined) {
+  const customLensId = options?.customLensId?.trim() ? options.customLensId : null;
+  if (lens === "custom" && customPrompt === undefined && !customLensId) {
     openCustomPromptBar();
     return;
   }
@@ -481,6 +488,7 @@ export async function triggerLens(
   resetRunTracker(lens, focusId.value, inPlaceSnap);
   activeRunStatus.value = "thinking";
   activeRunLens.value = lens;
+  activeRunLabel.value = options?.customLensLabel ?? null;
   activeRunFocusIds.value = effectiveTargetIds;
   activeRunSpawnedCount.value = 0;
 
@@ -491,11 +499,13 @@ export async function triggerLens(
       handleLensStreamEvent,
       customPrompt,
       useInPlace,
+      customLensId,
     );
     activeRunId.value = runId;
   } catch (err) {
     activeRunId.value = null;
     activeRunLens.value = null;
+    activeRunLabel.value = null;
     activeRunStatus.value = "idle";
     activeRunFocusIds.value = [];
     activeRunSpawnedCount.value = 0;
@@ -527,6 +537,7 @@ export function cancelActiveRun(): boolean {
   } else {
     activeRunId.value = null;
     activeRunLens.value = null;
+    activeRunLabel.value = null;
     activeRunStatus.value = "idle";
     activeRunFocusIds.value = [];
     activeRunSpawnedCount.value = 0;
@@ -641,6 +652,14 @@ export async function executeActionTag(
   }
 
   const trimmed = argument?.trim() ?? "";
+  if (action.kind === "lens" && action.customLens) {
+    await triggerLens("custom", trimmed || undefined, {
+      inPlace: options?.inPlace,
+      customLensId: action.customLens.id,
+      customLensLabel: action.customLens.name,
+    });
+    return;
+  }
   if (action.lens === "custom" && trimmed.length === 0) {
     await triggerLens("custom", undefined, options);
     return;

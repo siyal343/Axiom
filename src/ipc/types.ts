@@ -183,12 +183,24 @@ export interface ModelTierConfig {
   max_tokens: number;
 }
 
+export interface CustomLensDef {
+  id: string;
+  name: string;
+  tag: string;
+  description: string;
+  prompt_template: string;
+  default_node_type: NodeType;
+  default_edge_type: EdgeType;
+  default_severity: Severity | null;
+}
+
 export interface AppSettingsDto {
   reasoning: ModelTierConfig;
   utility: ModelTierConfig;
   default_token_budget: number;
   auto_summarize: boolean;
   theme: "dark" | "light";
+  custom_lenses?: CustomLensDef[];
 }
 
 export interface SaveSettingsInput {
@@ -199,6 +211,7 @@ export interface SaveSettingsInput {
   default_token_budget: number;
   auto_summarize: boolean;
   theme: "dark" | "light";
+  custom_lenses?: CustomLensDef[];
 }
 
 export interface SummaryUpdatedEvent {
@@ -288,4 +301,38 @@ export interface RelatedNodeHit {
   score: number;
   x: number;
   y: number;
+}
+
+export interface DiagnosticItem {
+  node_id: string;
+  title: string;
+  type: NodeType;
+  severity: Severity | null;
+  detail: string;
+  token_count: number;
+}
+
+export interface CycleDiagnostic {
+  node_ids: string[];
+  titles: string[];
+}
+
+export interface GraphDiagnostics {
+  health_score: number;
+  node_count: number;
+  edge_count: number;
+  total_tokens: number;
+  pin_count: number;
+  excluded_count: number;
+  unresolved_loopholes: DiagnosticItem[];
+  stale_ai_nodes: DiagnosticItem[];
+  cycles: CycleDiagnostic[];
+  orphan_nodes: DiagnosticItem[];
+  unsummarized_heavy_nodes: DiagnosticItem[];
+}
+
+export interface ImportOutlineResult {
+  root_id: string;
+  created_nodes: NodeDto[];
+  created_edges: EdgeDto[];
 }

@@ -3,6 +3,7 @@ import { clampZoom } from "../canvas/camera";
 import { perfHudOpen } from "../canvas/perfMetrics";
 import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
 import {
+  customLensesSignal,
   filterActionTags,
   parseActionTagInvocation,
   type ActionTagDef,
@@ -32,6 +33,8 @@ import {
   minimapOpen,
   modalState,
   openArtifactExport,
+  openDiagnosticsModal,
+  openOutlineImportModal,
   relatedPopoverNodeId,
   selectedIds,
   selectSingle,
@@ -265,6 +268,36 @@ function buildPaletteCommands(onFilterStale: () => void): PaletteCommand[] {
         openSettingsModal();
       },
     },
+    {
+      id: "graph-health-diagnostics",
+      label: "> Graph Health & Diagnostics (Shift+H)",
+      description: "Audit graph health score, loopholes, stale AI nodes, cycles, and orphans",
+      keywords: "health diagnostics audit score loopholes stale cycles orphans",
+      badge: "Diagnostics",
+      run: () => {
+        openDiagnosticsModal();
+      },
+    },
+    {
+      id: "import-markdown-outline",
+      label: "> Import Markdown Outline",
+      description: "Parse a Markdown heading outline into connected canvas nodes",
+      keywords: "import markdown outline headings hierarchy tree",
+      badge: "Workspace",
+      run: () => {
+        openOutlineImportModal();
+      },
+    },
+    {
+      id: "manage-custom-lenses",
+      label: "> Manage Custom Lenses (@tags)",
+      description: "Create, edit, or delete reusable custom @tag AI lenses",
+      keywords: "custom lenses tags prompt template settings @tag",
+      badge: "AI",
+      run: () => {
+        openSettingsModal();
+      },
+    },
   ];
 
   if (import.meta.env.DEV) {
@@ -424,6 +457,8 @@ function searchNodesLocally(query: string, limit: number): SearchHit[] {
 
 export function CommandPalette() {
   const isOpen = modalState.value === "command" && commandPaletteOpen.value;
+  // Subscribe to customLensesSignal so @tag autocomplete reflects newly added/edited custom lenses.
+  void customLensesSignal.value;
   const [query, setQuery] = useState("");
   const [searchScope, setSearchScope] = useState<"flow" | "all">("flow");
   const [hits, setHits] = useState<SearchHit[]>([]);

@@ -11,7 +11,9 @@ import type {
   EdgeDto,
   EdgeType,
   FlowTemplate,
+  GraphDiagnostics,
   GraphOp,
+  ImportOutlineResult,
   IpcError,
   LensKind,
   LensStreamEvent,
@@ -154,6 +156,7 @@ export async function runLens(
   onEvent: (event: LensStreamEvent) => void,
   customPrompt?: string,
   inPlace?: boolean,
+  customLensId?: string | null,
 ): Promise<string> {
   const channel = new Channel<LensStreamEvent>();
   channel.onmessage = onEvent;
@@ -162,6 +165,7 @@ export async function runLens(
     focusIds,
     customPrompt,
     inPlace: inPlace ?? false,
+    customLensId: customLensId ?? null,
     onEvent: channel,
   });
 }
@@ -269,4 +273,22 @@ export async function searchWorkspaceFlows(
 
 export async function saveFlowSystemPrompt(prompt: string): Promise<void> {
   return invoke<void>("save_flow_system_prompt", { prompt });
+}
+
+export async function getGraphDiagnostics(): Promise<GraphDiagnostics> {
+  return invoke<GraphDiagnostics>("get_graph_diagnostics", {});
+}
+
+export async function enqueueStaleSummaries(limit?: number): Promise<number> {
+  return invoke<number>("enqueue_stale_summaries", { limit: limit ?? 64 });
+}
+
+export async function importMarkdownOutline(
+  markdown: string,
+  parentId?: string | null,
+): Promise<ImportOutlineResult> {
+  return invoke<ImportOutlineResult>("import_markdown_outline", {
+    markdown,
+    parentId: parentId ?? null,
+  });
 }

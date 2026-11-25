@@ -42,9 +42,41 @@ export const shortcutsHelpOpen = signal<boolean>(false);
 export const connectSourceId = signal<string | null>(null);
 export const staleNodesMap = signal<ReadonlyMap<string, StaleNodeInfo>>(new Map());
 export const relatedPopoverNodeId = signal<string | null>(null);
+export const diagnosticsModalOpen = signal<boolean>(false);
+export const outlineImportModalOpen = signal<boolean>(false);
 
 export function closeNodeContextMenu(): void {
   nodeContextMenu.value = null;
+}
+
+export function openDiagnosticsModal(): void {
+  edgePopover.value = null;
+  nodeContextMenu.value = null;
+  relatedPopoverNodeId.value = null;
+  hoveredId.value = null;
+  shortcutsHelpOpen.value = false;
+  artifactExportOpen.value = false;
+  outlineImportModalOpen.value = false;
+  diagnosticsModalOpen.value = true;
+}
+
+export function closeDiagnosticsModal(): void {
+  diagnosticsModalOpen.value = false;
+}
+
+export function openOutlineImportModal(): void {
+  edgePopover.value = null;
+  nodeContextMenu.value = null;
+  relatedPopoverNodeId.value = null;
+  hoveredId.value = null;
+  shortcutsHelpOpen.value = false;
+  artifactExportOpen.value = false;
+  diagnosticsModalOpen.value = false;
+  outlineImportModalOpen.value = true;
+}
+
+export function closeOutlineImportModal(): void {
+  outlineImportModalOpen.value = false;
 }
 
 export function openArtifactExport(
@@ -56,6 +88,8 @@ export function openArtifactExport(
   relatedPopoverNodeId.value = null;
   hoveredId.value = null;
   shortcutsHelpOpen.value = false;
+  diagnosticsModalOpen.value = false;
+  outlineImportModalOpen.value = false;
   artifactExportFormat.value = format;
   artifactExportScope.value = scope;
   artifactExportOpen.value = true;
@@ -72,6 +106,8 @@ export function openCommandPalette(): void {
   hoveredId.value = null;
   shortcutsHelpOpen.value = false;
   artifactExportOpen.value = false;
+  diagnosticsModalOpen.value = false;
+  outlineImportModalOpen.value = false;
   selectedEdgeId.value = null;
   commandPaletteOpen.value = true;
   modalState.value = "command";
@@ -172,6 +208,8 @@ export function enterEditMode(node: NodeDto): boolean {
   edgePopover.value = null;
   nodeContextMenu.value = null;
   relatedPopoverNodeId.value = null;
+  diagnosticsModalOpen.value = false;
+  outlineImportModalOpen.value = false;
   modalState.value = "edit";
   return true;
 }

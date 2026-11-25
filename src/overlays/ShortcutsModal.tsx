@@ -42,9 +42,10 @@ const AI_LENS_ROWS: ShortcutRow[] = [
 ];
 
 const WORKSPACE_ROWS: ShortcutRow[] = [
-  { keys: "Ctrl/Cmd + K", action: "Search nodes, > commands, or @ actions" },
+  { keys: "Ctrl/Cmd + K", action: "Search, All Flows, > Commands, @ Tags" },
   { keys: "Ctrl/Cmd + B", action: "Toggle Workspaces & Flows sidebar" },
   { keys: "Ctrl/Cmd + ,", action: "Open AI & Workspace Settings" },
+  { keys: "Shift + H", action: "Graph Health & Diagnostics" },
   { keys: "Ctrl/Cmd + = / - / 0", action: "Zoom in, zoom out, reset 100%" },
   { keys: "F / F F", action: "Fit selection/subtree or fit entire graph" },
   { keys: "M", action: "Toggle canvas minimap" },

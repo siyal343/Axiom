@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import {
   ACTION_TAGS,
+  customLensesSignal,
   extractActionTagFromContent,
+  getAllActionTags,
   type ActionTagDef,
 } from "../input/actionTags";
 import { isTauriRuntime, tidySubtree as tidySubtreeIpc } from "../ipc/client";
@@ -30,6 +32,7 @@ import {
   enterEditMode,
   nodeContextMenu,
   openArtifactExport,
+  openOutlineImportModal,
   relatedPopoverNodeId,
   selectedIds,
   selectSingle,
@@ -66,8 +69,13 @@ function getMenuButtons(container: HTMLElement | null): HTMLButtonElement[] {
 
 export function NodeContextMenu() {
   const menuState = nodeContextMenu.value;
-  // Subscribe to graphVersion so item labels reflect live status/pin/fold changes.
+  // Subscribe to graphVersion & customLensesSignal so labels/custom tags stay live.
   void graphVersion.value;
+  void customLensesSignal.value;
+
+  const customTags = getAllActionTags().filter(
+    (def) => def.kind === "lens" && def.customLens !== undefined,
+  );
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [coords, setCoords] = useState<{ left: number; top: number }>({
@@ -316,6 +324,12 @@ export function NodeContextMenu() {
     relatedPopoverNodeId.value = node.id;
   };
 
+  const handleImportOutlineHere = (): void => {
+    closeNodeContextMenu();
+    selectSingle(node.id);
+    openOutlineImportModal();
+  };
+
   const staleInfo = staleNodesMap.value.get(node.id);
 
   const handleMarkFresh = (): void => {
@@ -389,6 +403,14 @@ export function NodeContextMenu() {
           onClick={handleFindRelated}
         >
           <span>Find Related Nodes</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="node-context-menu__item"
+          onClick={handleImportOutlineHere}
+        >
+          <span>Import Outline Here…</span>
         </button>
         {staleInfo && (
           <>
@@ -595,6 +617,29 @@ export function NodeContextMenu() {
           </button>
         ))}
       </div>
+
+      {customTags.length > 0 && (
+        <>
+          <div class="node-context-menu__divider" role="separator" />
+          <div class="node-context-menu__section">
+            <span class="node-context-menu__section-label">Custom Lenses</span>
+            <div class="node-context-menu__group">
+              {customTags.map((def) => (
+                <button
+                  key={def.kind === "lens" && def.customLens ? def.customLens.id : def.tag}
+                  type="button"
+                  role="menuitem"
+                  class="node-context-menu__item"
+                  onClick={() => handleActionTag(def)}
+                >
+                  <span>{def.label}</span>
+                  <kbd>{def.tag}</kbd>
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       <div class="node-context-menu__divider" role="separator" />
 

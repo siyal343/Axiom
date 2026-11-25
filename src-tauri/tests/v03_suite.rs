@@ -341,6 +341,7 @@ async fn provenance_lifecycle_tracks_modified_deleted_acknowledge_and_stale_filt
             focus_ids: vec!["n_root".to_owned()],
             custom_prompt: None,
             in_place: false,
+            custom_lens: None,
             config: ModelTierConfig {
                 provider: ProviderKind::OpenaiCompat,
                 base_url,

@@ -1,5 +1,11 @@
 import { useEffect, useState } from "preact/hooks";
 import {
+  ACTION_TAGS,
+  BUILTIN_LENS_PRESETS,
+  customLensesSignal,
+  setCustomLenses,
+} from "../input/actionTags";
+import {
   getSettings,
   isTauriRuntime,
   parseIpcError,
@@ -9,9 +15,13 @@ import {
 } from "../ipc/client";
 import type {
   AppSettingsDto,
+  CustomLensDef,
+  EdgeType,
   ModelTierConfig,
+  NodeType,
   ProviderKind,
   SaveSettingsInput,
+  Severity,
   TestConnectionResult,
 } from "../ipc/types";
 import { closeSettingsModal, settingsModalOpen } from "../store/aiRunner";
@@ -235,6 +245,40 @@ function TierEditor({
   );
 }
 
+const LENS_TAG_PATTERN = /^[a-z0-9_-]{2,24}$/;
+
+interface LensFormDraft {
+  editingId: string | null;
+  name: string;
+  tag: string;
+  description: string;
+  prompt_template: string;
+  default_node_type: NodeType;
+  default_edge_type: EdgeType;
+  default_severity: Severity;
+}
+
+function normalizeLensTag(raw: string): string {
+  return raw.trim().toLowerCase().replace(/^@+/, "");
+}
+
+function makeLensId(tag: string): string {
+  return `lens_${tag}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function createEmptyLensForm(): LensFormDraft {
+  return {
+    editingId: null,
+    name: "",
+    tag: "",
+    description: "",
+    prompt_template: "",
+    default_node_type: "branch",
+    default_edge_type: "derives",
+    default_severity: "medium",
+  };
+}
+
 export function SettingsModal() {
   const isOpen = modalState.value === "command" && settingsModalOpen.value;
 
@@ -253,6 +297,11 @@ export function SettingsModal() {
   const [autoSummarize, setAutoSummarize] = useState<boolean>(true);
   const [selectedTheme, setSelectedTheme] = useState<"dark" | "light">("dark");
   const [systemPromptDraft, setSystemPromptDraft] = useState<string>("");
+  const [customLenses, setCustomLensesDraft] = useState<CustomLensDef[]>(() => [
+    ...customLensesSignal.value,
+  ]);
+  const [lensForm, setLensForm] = useState<LensFormDraft | null>(null);
+  const [lensFormError, setLensFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testingTier, setTestingTier] = useState<"reasoning" | "utility" | null>(null);
   const [testResults, setTestResults] = useState<{
@@ -268,6 +317,8 @@ export function SettingsModal() {
     setUtilityKey(null);
     setTestResults({ reasoning: null, utility: null });
     setSystemPromptDraft(flowSystemPrompt.value);
+    setLensForm(null);
+    setLensFormError(null);
 
     if (!isTauriRuntime()) {
       setDefaultBudget(tokenBudget.value);
@@ -275,11 +326,13 @@ export function SettingsModal() {
       setReasoningMaxTokensDraft(String(reasoning.max_tokens));
       setUtilityMaxTokensDraft(String(utility.max_tokens));
       setSelectedTheme(theme.value);
+      setCustomLensesDraft([...customLensesSignal.value]);
       return;
     }
 
     void getSettings()
       .then((dto) => {
+        const loadedLenses = dto.custom_lenses ?? [];
         setReasoning(dto.reasoning);
         setUtility(dto.utility);
         setDefaultBudget(dto.default_token_budget);
@@ -288,6 +341,8 @@ export function SettingsModal() {
         setUtilityMaxTokensDraft(String(dto.utility.max_tokens));
         setAutoSummarize(dto.auto_summarize);
         setSelectedTheme(dto.theme);
+        setCustomLensesDraft(loadedLenses);
+        setCustomLenses(loadedLenses);
       })
       .catch((err) => {
         pushToast(parseIpcError(err).message, "error");
@@ -331,9 +386,122 @@ export function SettingsModal() {
     default_token_budget: committedBudget,
     auto_summarize: autoSummarize,
     theme: selectedTheme,
+    custom_lenses: customLenses,
   });
 
+  const handleInstallPreset = (preset: (typeof BUILTIN_LENS_PRESETS)[number]): void => {
+    const normalized = normalizeLensTag(preset.tag);
+    if (customLenses.some((l) => normalizeLensTag(l.tag) === normalized)) {
+      return;
+    }
+    const created: CustomLensDef = {
+      ...preset,
+      id: makeLensId(normalized),
+      tag: normalized,
+    };
+    setCustomLensesDraft((prev) => [...prev, created]);
+  };
+
+  const handleOpenAddLens = (): void => {
+    setLensFormError(null);
+    setLensForm(createEmptyLensForm());
+  };
+
+  const handleOpenEditLens = (lens: CustomLensDef): void => {
+    setLensFormError(null);
+    setLensForm({
+      editingId: lens.id,
+      name: lens.name,
+      tag: lens.tag,
+      description: lens.description,
+      prompt_template: lens.prompt_template,
+      default_node_type: lens.default_node_type,
+      default_edge_type: lens.default_edge_type,
+      default_severity: lens.default_severity ?? "medium",
+    });
+  };
+
+  const handleDeleteLens = (id: string): void => {
+    setCustomLensesDraft((prev) => prev.filter((l) => l.id !== id));
+    if (lensForm?.editingId === id) {
+      setLensForm(null);
+      setLensFormError(null);
+    }
+  };
+
+  const handleCommitLensForm = (): void => {
+    if (!lensForm) {
+      return;
+    }
+    const name = lensForm.name.trim();
+    const tag = normalizeLensTag(lensForm.tag);
+    const description = lensForm.description.trim();
+    const promptTemplate = lensForm.prompt_template.trim();
+
+    if (name.length === 0) {
+      setLensFormError("Lens name is required.");
+      return;
+    }
+    if (!LENS_TAG_PATTERN.test(tag)) {
+      setLensFormError("Tag must be 2–24 characters using lowercase a-z, 0-9, _ or -.");
+      return;
+    }
+    const collidesBuiltin = ACTION_TAGS.some(
+      (def) =>
+        def.tag.slice(1).toLowerCase() === tag ||
+        def.aliases.some((alias) => alias.toLowerCase() === tag),
+    );
+    if (collidesBuiltin) {
+      setLensFormError(`Tag @${tag} conflicts with a built-in action tag.`);
+      return;
+    }
+    const collidesCustom = customLenses.some(
+      (l) => l.id !== lensForm.editingId && normalizeLensTag(l.tag) === tag,
+    );
+    if (collidesCustom) {
+      setLensFormError(`A custom lens with @${tag} is already installed.`);
+      return;
+    }
+    if (promptTemplate.length === 0) {
+      setLensFormError("Prompt template is required.");
+      return;
+    }
+
+    const nextLens: CustomLensDef = {
+      id: lensForm.editingId ?? makeLensId(tag),
+      name,
+      tag,
+      description,
+      prompt_template: promptTemplate,
+      default_node_type: lensForm.default_node_type,
+      default_edge_type: lensForm.default_edge_type,
+      default_severity:
+        lensForm.default_node_type === "loophole" ? lensForm.default_severity : null,
+    };
+
+    setCustomLensesDraft((prev) => {
+      if (lensForm.editingId) {
+        return prev.map((l) => (l.id === lensForm.editingId ? nextLens : l));
+      }
+      return [...prev, nextLens];
+    });
+    setLensForm(null);
+    setLensFormError(null);
+  };
+
   const handleSave = async (closeAfter: boolean): Promise<boolean> => {
+    if (lensForm !== null) {
+      setLensFormError("Save or cancel the custom lens draft before saving settings.");
+      return false;
+    }
+    for (const lens of customLenses) {
+      const normalized = normalizeLensTag(lens.tag);
+      if (!LENS_TAG_PATTERN.test(normalized)) {
+        pushToast(`Invalid custom lens tag "@${lens.tag}" (must match [a-z0-9_-]{2,24})`, "error");
+        return false;
+      }
+    }
+
     const committedBudget = commitTokenBudgetDraft();
     const committedReasoningMax = commitReasoningMaxTokensDraft();
     const committedUtilityMax = commitUtilityMaxTokensDraft();
@@ -342,6 +510,7 @@ export function SettingsModal() {
       theme.value = selectedTheme;
       tokenBudget.value = committedBudget;
       flowSystemPrompt.value = systemPromptDraft;
+      setCustomLenses(customLenses);
       pushToast("Settings updated (local preview)", "info");
       if (closeAfter) {
         closeSettingsModal();
@@ -358,6 +527,7 @@ export function SettingsModal() {
         await saveFlowSystemPrompt(systemPromptDraft);
         flowSystemPrompt.value = systemPromptDraft;
       }
+      const savedLenses = saved.custom_lenses ?? customLenses;
       setReasoning(saved.reasoning);
       setUtility(saved.utility);
       setReasoningMaxTokensDraft(String(saved.reasoning.max_tokens));
@@ -366,6 +536,8 @@ export function SettingsModal() {
       setTokenBudgetDraft(String(saved.default_token_budget));
       setReasoningKey(null);
       setUtilityKey(null);
+      setCustomLensesDraft(savedLenses);
+      setCustomLenses(savedLenses);
       theme.value = saved.theme;
       tokenBudget.value = saved.default_token_budget;
       if (closeAfter) {
@@ -538,6 +710,263 @@ export function SettingsModal() {
                 />
               </label>
             </div>
+          </section>
+
+          <section class="settings-section" aria-label="Custom Lenses">
+            <div class="settings-section__header">
+              <h3 class="settings-section__title">Custom Lenses (@tags)</h3>
+              <button
+                type="button"
+                class="settings-btn settings-btn--secondary"
+                onClick={handleOpenAddLens}
+              >
+                + Add Lens
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: "6px",
+                marginBottom: "10px",
+              }}
+            >
+              <span class="settings-field__label">Starter Presets:</span>
+              {BUILTIN_LENS_PRESETS.map((preset) => {
+                const installed = customLenses.some(
+                  (l) => normalizeLensTag(l.tag) === normalizeLensTag(preset.tag),
+                );
+                return (
+                  <button
+                    key={preset.tag}
+                    type="button"
+                    class="settings-btn settings-btn--secondary"
+                    title={preset.name}
+                    disabled={installed}
+                    onClick={() => handleInstallPreset(preset)}
+                  >
+                    + @{preset.tag}
+                  </button>
+                );
+              })}
+            </div>
+
+            {customLenses.length === 0 ? (
+              <p class="related-popover__empty">
+                No custom lenses installed. Install a starter preset or add your own @tag lens.
+              </p>
+            ) : (
+              <ul class="related-popover__list" style={{ marginBottom: lensForm ? "10px" : "0" }}>
+                {customLenses.map((lens) => (
+                  <li key={lens.id} class="related-popover__item">
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "8px",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                        <span class="badge badge--pin">@{normalizeLensTag(lens.tag)}</span>
+                        <strong>{lens.name}</strong>
+                        <span class="settings-field__label">
+                          {lens.default_node_type} / {lens.default_edge_type}
+                          {lens.default_node_type === "loophole" && lens.default_severity
+                            ? ` (${lens.default_severity})`
+                            : ""}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <button
+                          type="button"
+                          class="settings-btn settings-btn--secondary"
+                          onClick={() => handleOpenEditLens(lens)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          class="settings-btn settings-btn--secondary"
+                          onClick={() => handleDeleteLens(lens.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                    {lens.description && (
+                      <span class="settings-field__label">{lens.description}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {lensForm && (
+              <div class="settings-section" style={{ marginTop: "10px" }}>
+                <div class="settings-section__header">
+                  <h4 class="settings-section__title">
+                    {lensForm.editingId ? "Edit Custom Lens" : "Add Custom Lens"}
+                  </h4>
+                </div>
+                <div class="settings-grid">
+                  <label class="settings-field">
+                    <span class="settings-field__label">Name</span>
+                    <input
+                      type="text"
+                      class="settings-input"
+                      placeholder="STRIDE Threat Model"
+                      value={lensForm.name}
+                      onInput={(e) => {
+                        const val = e.currentTarget.value;
+                        setLensForm((prev) => (prev ? { ...prev, name: val } : prev));
+                      }}
+                    />
+                  </label>
+
+                  <label class="settings-field">
+                    <span class="settings-field__label">@tag</span>
+                    <input
+                      type="text"
+                      class="settings-input"
+                      placeholder="threat"
+                      value={lensForm.tag}
+                      onInput={(e) => {
+                        const val = e.currentTarget.value;
+                        setLensForm((prev) => (prev ? { ...prev, tag: val } : prev));
+                      }}
+                    />
+                  </label>
+
+                  <label class="settings-field settings-field--wide">
+                    <span class="settings-field__label">Description</span>
+                    <input
+                      type="text"
+                      class="settings-input"
+                      placeholder="Short description shown in @tag menu"
+                      value={lensForm.description}
+                      onInput={(e) => {
+                        const val = e.currentTarget.value;
+                        setLensForm((prev) => (prev ? { ...prev, description: val } : prev));
+                      }}
+                    />
+                  </label>
+
+                  <label class="settings-field settings-field--wide">
+                    <span class="settings-field__label">Prompt Template</span>
+                    <textarea
+                      class="settings-input settings-lens-form__textarea"
+                      rows={3}
+                      placeholder="Instructions for how this lens analyzes the focused context..."
+                      value={lensForm.prompt_template}
+                      onInput={(e) => {
+                        const val = e.currentTarget.value;
+                        setLensForm((prev) =>
+                          prev ? { ...prev, prompt_template: val } : prev,
+                        );
+                      }}
+                    />
+                  </label>
+
+                  <label class="settings-field">
+                    <span class="settings-field__label">Default Card Type</span>
+                    <select
+                      class="settings-input"
+                      value={lensForm.default_node_type}
+                      onChange={(e) => {
+                        const val = e.currentTarget.value as NodeType;
+                        setLensForm((prev) =>
+                          prev ? { ...prev, default_node_type: val } : prev,
+                        );
+                      }}
+                    >
+                      <option value="core">core</option>
+                      <option value="branch">branch</option>
+                      <option value="loophole">loophole</option>
+                      <option value="probe">probe</option>
+                      <option value="synthesis">synthesis</option>
+                    </select>
+                  </label>
+
+                  <label class="settings-field">
+                    <span class="settings-field__label">Default Edge</span>
+                    <select
+                      class="settings-input"
+                      value={lensForm.default_edge_type}
+                      onChange={(e) => {
+                        const val = e.currentTarget.value as EdgeType;
+                        setLensForm((prev) =>
+                          prev ? { ...prev, default_edge_type: val } : prev,
+                        );
+                      }}
+                    >
+                      <option value="derives">derives</option>
+                      <option value="branches">branches</option>
+                      <option value="challenges">challenges</option>
+                      <option value="resolves">resolves</option>
+                      <option value="synthesizes">synthesizes</option>
+                      <option value="references">references</option>
+                    </select>
+                  </label>
+
+                  {lensForm.default_node_type === "loophole" && (
+                    <label class="settings-field">
+                      <span class="settings-field__label">Default Severity</span>
+                      <select
+                        class="settings-input"
+                        value={lensForm.default_severity}
+                        onChange={(e) => {
+                          const val = e.currentTarget.value as Severity;
+                          setLensForm((prev) =>
+                            prev ? { ...prev, default_severity: val } : prev,
+                          );
+                        }}
+                      >
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                        <option value="critical">critical</option>
+                      </select>
+                    </label>
+                  )}
+                </div>
+
+                {lensFormError && (
+                  <p class="settings-test-result settings-test-result--err" role="alert">
+                    {lensFormError}
+                  </p>
+                )}
+
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "flex-end",
+                    gap: "8px",
+                    marginTop: "10px",
+                  }}
+                >
+                  <button
+                    type="button"
+                    class="settings-btn settings-btn--secondary"
+                    onClick={() => {
+                      setLensForm(null);
+                      setLensFormError(null);
+                    }}
+                  >
+                    Cancel Lens
+                  </button>
+                  <button
+                    type="button"
+                    class="settings-btn settings-btn--primary"
+                    onClick={handleCommitLensForm}
+                  >
+                    {lensForm.editingId ? "Update Lens" : "Save Lens"}
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
         </div>
 

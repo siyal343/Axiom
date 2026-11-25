@@ -577,6 +577,18 @@ pub struct ModelTierConfig {
     pub max_tokens: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomLensDef {
+    pub id: String,
+    pub name: String,
+    pub tag: String,
+    pub description: String,
+    pub prompt_template: String,
+    pub default_node_type: NodeType,
+    pub default_edge_type: EdgeType,
+    pub default_severity: Option<Severity>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettingsDto {
     pub reasoning: ModelTierConfig,
@@ -584,6 +596,8 @@ pub struct AppSettingsDto {
     pub default_token_budget: u32,
     pub auto_summarize: bool,
     pub theme: String,
+    #[serde(default)]
+    pub custom_lenses: Vec<CustomLensDef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -595,6 +609,47 @@ pub struct SaveSettingsInput {
     pub default_token_budget: u32,
     pub auto_summarize: bool,
     pub theme: String,
+    #[serde(default)]
+    pub custom_lenses: Vec<CustomLensDef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticItem {
+    pub node_id: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub node_type: NodeType,
+    pub severity: Option<Severity>,
+    pub detail: String,
+    pub token_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CycleDiagnostic {
+    pub node_ids: Vec<String>,
+    pub titles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphDiagnostics {
+    pub health_score: u8,
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub total_tokens: u32,
+    pub pin_count: usize,
+    pub excluded_count: usize,
+    pub unresolved_loopholes: Vec<DiagnosticItem>,
+    pub stale_ai_nodes: Vec<DiagnosticItem>,
+    pub cycles: Vec<CycleDiagnostic>,
+    pub orphan_nodes: Vec<DiagnosticItem>,
+    pub unsummarized_heavy_nodes: Vec<DiagnosticItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportOutlineResult {
+    pub root_id: String,
+    pub created_nodes: Vec<NodeDto>,
+    pub created_edges: Vec<EdgeDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
