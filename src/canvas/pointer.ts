@@ -241,7 +241,6 @@ export function attachCanvasPointer(
         startClientY: e.clientY,
         moved: false,
       };
-      shellEl.setPointerCapture(e.pointerId);
       return;
     }
 
@@ -260,7 +259,6 @@ export function attachCanvasPointer(
       startClientY: e.clientY,
       moved: false,
     };
-    shellEl.setPointerCapture(e.pointerId);
   };
 
   const onPointerMove = (e: PointerEvent): void => {
@@ -331,6 +329,11 @@ export function attachCanvasPointer(
       if (!gesture.moved) {
         gesture.moved = true;
         isInteracting.value = true;
+        try {
+          shellEl.setPointerCapture(e.pointerId);
+        } catch {
+          // Synthetic events may lack an active pointerId.
+        }
       }
       const zoom = camera.getCamera().zoom;
       let worldDx = screenDx / zoom;
@@ -365,6 +368,11 @@ export function attachCanvasPointer(
       if (!gesture.moved) {
         gesture.moved = true;
         isInteracting.value = true;
+        try {
+          shellEl.setPointerCapture(e.pointerId);
+        } catch {
+          // Synthetic events may lack an active pointerId.
+        }
       }
       const local = toLocalCoords(e.clientX, e.clientY);
       const worldNow = screenToWorld(local.x, local.y, camera.getCamera());
@@ -388,7 +396,7 @@ export function attachCanvasPointer(
     }
     const active = gesture;
     gesture = null;
-    if (shellEl.hasPointerCapture(e.pointerId)) {
+    if (shellEl.hasPointerCapture?.(e.pointerId)) {
       shellEl.releasePointerCapture(e.pointerId);
     }
 
@@ -527,7 +535,18 @@ export function attachCanvasPointer(
     }
     const targetEl = e.target instanceof Element ? e.target : null;
     const cardEl = targetEl?.closest<HTMLElement>("[data-node-id]");
-    const nodeId = cardEl?.dataset.nodeId;
+    let nodeId = cardEl?.dataset.nodeId ?? null;
+    if (!nodeId && targetEl === shellEl) {
+      const local = toLocalCoords(e.clientX, e.clientY);
+      const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
+      const hits = viewportSpatialIndex.queryRect({
+        minX: worldPt.x,
+        minY: worldPt.y,
+        maxX: worldPt.x,
+        maxY: worldPt.y,
+      });
+      nodeId = hits[hits.length - 1] ?? null;
+    }
     if (!nodeId) {
       return;
     }

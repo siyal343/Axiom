@@ -224,6 +224,36 @@ describe("Node double-click center-zoom, right-click context menu & animated edg
     expect(modalState.value).toBe("navigate");
   });
 
+  it("handles dblclick retargeted to shellEl via spatial fallback without editing empty canvas", () => {
+    const animateSpy = vi.spyOn(camera, "animateTo");
+
+    // Empty canvas coordinate (10, 10) -> world (12.5, 12.5), outside any node.
+    shellEl.dispatchEvent(
+      new MouseEvent("dblclick", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 10,
+        clientY: 10,
+      }),
+    );
+    expect(animateSpy).not.toHaveBeenCalled();
+    expect(modalState.value).toBe("navigate");
+
+    // node_user occupies world (100..420, 100..280); at zoom 0.8 + cam(0,0), center is screen (208, 152).
+    shellEl.dispatchEvent(
+      new MouseEvent("dblclick", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 208,
+        clientY: 152,
+      }),
+    );
+    expect(animateSpy).toHaveBeenCalledTimes(1);
+    expect(animateSpy.mock.calls[0]?.[0]?.zoom).toBeGreaterThanOrEqual(1.15);
+    expect(focusId.value).toBe("node_user");
+    expect(modalState.value).toBe("edit");
+  });
+
   it("right-clicking a node card opens nodeContextMenu at cursor coordinates and prevents default", () => {
     const aiCard = document.createElement("article");
     aiCard.dataset.nodeId = "node_ai";
