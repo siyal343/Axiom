@@ -476,6 +476,7 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
       resizeSizes,
       selectedIds: selectedIds.value,
       focusId: focusId.value,
+      xrayState: null,
       unresolvedLoopholes: unresolvedLoopholes.value,
       marqueeWorld: null,
       edgePreviewWorld: null,

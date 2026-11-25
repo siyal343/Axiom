@@ -255,11 +255,11 @@ export function hitTestGroupHeader(
   sceneRects: ReadonlyMap<string, NodeRect>,
   zoom: number,
 ): CanvasGroupDto | null {
-  const count = Array.isArray(groups) ? groups.length : groups.size;
+  const count = "size" in groups ? groups.size : groups.length;
   if (count === 0) {
     return null;
   }
-  const list = Array.isArray(groups) ? groups : Array.from(groups.values());
+  const list = "size" in groups ? Array.from(groups.values()) : groups;
   const padY = Math.min(10, 4 / Math.max(0.25, zoom));
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const group = list[i];
@@ -816,9 +816,9 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
   }
 
   // 2.5 Spatial Canvas Groups (O(1) skip when empty)
-  const groupCount = groups ? (Array.isArray(groups) ? groups.length : groups.size) : 0;
+  const groupCount = groups ? ("size" in groups ? groups.size : groups.length) : 0;
   if (groups && groupCount > 0) {
-    const groupIter = Array.isArray(groups) ? groups : groups.values();
+    const groupIter = "size" in groups ? groups.values() : groups;
     const isLightTheme = themeKey === "light";
     for (const group of groupIter) {
       const bounds = computeGroupBounds(group, sceneRects);
