@@ -6,6 +6,7 @@ import type {
   NodeLayout,
   NodeMetadata,
   NodePositionUpdate,
+  NodeSizeUpdate,
   NodeStatus,
   NodeType,
   Severity,
@@ -172,6 +173,16 @@ export function buildMoveNodesWithInverse(
   return {
     forward: [{ op: "move_nodes", moves: nextPositions }],
     inverse: [{ op: "move_nodes", moves: prevPositions }],
+  };
+}
+
+export function buildResizeNodesWithInverse(
+  prevSizes: NodeSizeUpdate[],
+  nextSizes: NodeSizeUpdate[],
+): { forward: GraphOp[]; inverse: GraphOp[] } {
+  return {
+    forward: [{ op: "resize_nodes", sizes: nextSizes }],
+    inverse: [{ op: "resize_nodes", sizes: prevSizes }],
   };
 }
 

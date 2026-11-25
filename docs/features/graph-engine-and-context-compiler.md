@@ -64,9 +64,14 @@ Each `SpatialBox` expands a node's rectangle by half of `COLLISION_MARGIN` (`10.
 - `SIDE_GAP`: `48.0`
 - `COLLISION_MARGIN`: `20.0`
 
-### Placement heuristics
+### Directional and collision-free placement
 
-`find_free_position` computes an initial anchor candidate based on `node_type` and `batch_index`:
+`spawn_connected_node` accepts an optional `direction: Option<SpawnDirection>` (`right`, `left`, `top`, `bottom`):
+
+- **Explicit direction:** When `direction` is `Some(dir)`, `find_free_position_in_direction` computes the cardinal slot (`directional_slot`: `H_GAP` = `100.0` horizontally, `SIDE_GAP` = `48.0` vertically) and nudges clear in `40.0`-unit steps (`nudge_clear_with_step`, stepping left by `-(width + H_GAP)` for `left` and nudging upward only for `top`).
+- **Automatic open direction:** When `direction` is `None`, `find_best_open_direction` checks `right`, `bottom`, `left`, and `top` in order and picks the first uncolliding cardinal slot, falling back to `find_free_position` if every cardinal slot is occupied.
+
+`find_free_position` computes an initial anchor candidate based on `node_type` and `batch_index` (used by multi-card AI lens runs):
 
 - **`core`, `branch`, and single-anchor `synthesis`:** Placed at `primary.x + primary.width + H_GAP`, stacked vertically by `batch_index * (height + V_GAP)`.
 - **Multi-anchor `synthesis`:** Placed at `max(anchor.x + anchor.width) + H_GAP` and centered on the mean `y` of all anchor nodes.
@@ -74,6 +79,14 @@ Each `SpatialBox` expands a node's rectangle by half of `COLLISION_MARGIN` (`10.
 - **`probe`:** Placed over the primary node at a negative Y offset (`primary.y - height - SIDE_GAP`), advancing horizontally by `batch_index * (DEFAULT_NODE_WIDTH + 24.0)`.
 
 If the candidate box intersects any stored node in `SpatialIndex`, `nudge_clear` shifts it in `40.0`-unit steps (up to `30` vertical steps per column across up to `100` horizontal `width + H_GAP` shifts). `probe` nodes nudge upward only; all other node types alternate downward first, then upward.
+
+### Automatic overlap resolution
+
+`resolve_overlaps` in `src-tauri/src/graph/spatial.rs` (exposed through the `resolve_overlaps` IPC command) separates colliding cards after drags, resizes, or AI card growth:
+
+- **Deterministic iterative separation:** Sorts all node IDs lexicographically and runs up to `24` passes against `SpatialIndex` using `COLLISION_MARGIN` (`20.0`) plus `EXTRA_CLEARANCE` (`4.0`).
+- **Pinned-node priority:** Separates intersecting pairs along the minimum penetration axis (`overlap_x` compared to `overlap_y`), keeping nodes in `pinned_ids` stationary when displacing unpinned neighbors and splitting displacement `50/50` between unpinned pairs.
+- **FTS5-safe persistence:** The `resolve_overlaps` IPC command persists updated coordinates through `GraphOp::MoveNodes` so `nodes_fts` never re-indexes.
 
 ### Subtree tidying
 

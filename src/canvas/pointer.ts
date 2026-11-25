@@ -1,13 +1,19 @@
 import type { BBox } from "rbush";
-import type { NodePositionUpdate } from "../ipc/types";
+import type { NodePositionUpdate, NodeSizeUpdate } from "../ipc/types";
 import {
   cardDomRefs,
   dragOffsets,
+  MAX_NODE_HEIGHT,
+  MAX_NODE_WIDTH,
+  MIN_NODE_HEIGHT,
+  MIN_NODE_WIDTH,
   mutateGraphUndoable,
   nodesMap,
+  resizeSizes,
+  resolveAndAnimateOverlaps,
   viewportSpatialIndex,
 } from "../store/graphStore";
-import { buildMoveNodesWithInverse } from "../store/history";
+import { buildMoveNodesWithInverse, buildResizeNodesWithInverse } from "../store/history";
 import {
   clearSelection,
   edgePopover,
@@ -46,6 +52,16 @@ type ActiveGesture =
       moved: boolean;
     }
   | {
+      kind: "node_resize";
+      nodeId: string;
+      handle: "e" | "s" | "se";
+      startClientX: number;
+      startClientY: number;
+      startWidth: number;
+      startHeight: number;
+      moved: boolean;
+    }
+  | {
       kind: "marquee";
       startWorldX: number;
       startWorldY: number;
@@ -60,6 +76,9 @@ type ActiveGesture =
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {
+    return false;
+  }
+  if (target.closest("[data-resize-handle]")) {
     return false;
   }
   return Boolean(
@@ -89,6 +108,13 @@ export function attachCanvasPointer(
   const updateCursor = (): void => {
     if (gesture?.kind === "pan") {
       shellEl.style.cursor = "grabbing";
+    } else if (gesture?.kind === "node_resize") {
+      shellEl.style.cursor =
+        gesture.handle === "e"
+          ? "ew-resize"
+          : gesture.handle === "s"
+            ? "ns-resize"
+            : "nwse-resize";
     } else if (spaceHeld) {
       shellEl.style.cursor = "grab";
     } else if (gesture?.kind === "edge_connect") {
@@ -136,6 +162,37 @@ export function attachCanvasPointer(
     }
 
     const targetEl = e.target instanceof Element ? e.target : null;
+    const resizeEl = targetEl?.closest<HTMLElement>("[data-resize-handle]");
+    const resizeCardEl = resizeEl?.closest<HTMLElement>("[data-node-id]");
+    const resizeNodeId = resizeCardEl?.dataset.nodeId ?? null;
+    const handleKind = resizeEl?.dataset.resizeHandle;
+    if (
+      resizeEl &&
+      (handleKind === "e" || handleKind === "s" || handleKind === "se") &&
+      resizeNodeId !== null
+    ) {
+      const resizeNode = nodesMap.get(resizeNodeId);
+      if (resizeNode && !resizeNode.layout.collapsed) {
+        e.preventDefault();
+        edgePopover.value = null;
+        selectSingle(resizeNodeId);
+        isInteracting.value = true;
+        gesture = {
+          kind: "node_resize",
+          nodeId: resizeNodeId,
+          handle: handleKind,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          startWidth: resizeNode.layout.width,
+          startHeight: resizeNode.layout.height,
+          moved: false,
+        };
+        shellEl.setPointerCapture(e.pointerId);
+        updateCursor();
+        return;
+      }
+    }
+
     const cardEl = targetEl?.closest<HTMLElement>("[data-node-id]");
     const nodeId = cardEl?.dataset.nodeId ?? null;
 
@@ -222,6 +279,39 @@ export function attachCanvasPointer(
         targetX: worldPt.x,
         targetY: worldPt.y,
       };
+      camera.markDirty();
+      return;
+    }
+
+    if (gesture.kind === "node_resize") {
+      const screenDx = e.clientX - gesture.startClientX;
+      const screenDy = e.clientY - gesture.startClientY;
+      if (!gesture.moved && Math.hypot(screenDx, screenDy) >= DRAG_THRESHOLD_PX) {
+        gesture.moved = true;
+      }
+      const zoom = camera.getCamera().zoom;
+      const worldDx = screenDx / zoom;
+      const worldDy = screenDy / zoom;
+
+      let nextW = gesture.startWidth;
+      let nextH = gesture.startHeight;
+      if (gesture.handle === "e" || gesture.handle === "se") {
+        const rawW = gesture.startWidth + worldDx;
+        const snappedW = e.altKey ? rawW : snapDelta(rawW);
+        nextW = Math.max(MIN_NODE_WIDTH, Math.min(MAX_NODE_WIDTH, Math.round(snappedW)));
+      }
+      if (gesture.handle === "s" || gesture.handle === "se") {
+        const rawH = gesture.startHeight + worldDy;
+        const snappedH = e.altKey ? rawH : snapDelta(rawH);
+        nextH = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, Math.round(snappedH)));
+      }
+
+      resizeSizes.set(gesture.nodeId, { width: nextW, height: nextH });
+      const el = cardDomRefs.get(gesture.nodeId);
+      if (el) {
+        el.style.width = `${nextW}px`;
+        el.style.minHeight = `${nextH}px`;
+      }
       camera.markDirty();
       return;
     }
@@ -329,6 +419,44 @@ export function attachCanvasPointer(
       return;
     }
 
+    if (active.kind === "node_resize") {
+      const resized = resizeSizes.get(active.nodeId);
+      const node = nodesMap.get(active.nodeId);
+      isInteracting.value = false;
+      updateCursor();
+
+      if (
+        active.moved &&
+        resized &&
+        node &&
+        (resized.width !== node.layout.width || resized.height !== node.layout.height)
+      ) {
+        const prevSizes: NodeSizeUpdate[] = [
+          { id: node.id, width: node.layout.width, height: node.layout.height },
+        ];
+        const nextSizes: NodeSizeUpdate[] = [
+          { id: node.id, width: resized.width, height: resized.height },
+        ];
+        const { forward, inverse } = buildResizeNodesWithInverse(prevSizes, nextSizes);
+        void mutateGraphUndoable("Resize node", forward, inverse).finally(() => {
+          resizeSizes.delete(active.nodeId);
+          camera.markDirty();
+          void resolveAndAnimateOverlaps([active.nodeId]);
+        });
+      } else {
+        resizeSizes.delete(active.nodeId);
+        if (node) {
+          const el = cardDomRefs.get(active.nodeId);
+          if (el) {
+            el.style.width = `${node.layout.width}px`;
+            el.style.minHeight = node.layout.collapsed ? "" : `${node.layout.height}px`;
+          }
+        }
+        camera.markDirty();
+      }
+      return;
+    }
+
     if (active.kind === "node_drag") {
       if (active.moved) {
         const prevMoves: NodePositionUpdate[] = [];
@@ -353,6 +481,7 @@ export function attachCanvasPointer(
             }
             isInteracting.value = false;
             camera.markDirty();
+            void resolveAndAnimateOverlaps(active.dragIds);
           });
         } else {
           for (const id of active.dragIds) {

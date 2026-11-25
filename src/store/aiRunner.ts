@@ -22,6 +22,7 @@ import {
   graphVersion,
   nodesMap,
   recomputeUnresolvedLoopholes,
+  resolveAndAnimateOverlaps,
   viewportSpatialIndex,
 } from "./graphStore";
 import { graphHistory, syncHistorySignals } from "./history";
@@ -38,6 +39,9 @@ import {
 
 export const activeRunId = signal<string | null>(null);
 export const activeRunLens = signal<LensKind | null>(null);
+export const activeRunStatus = signal<"idle" | "thinking" | "streaming">("idle");
+export const activeRunFocusIds = signal<string[]>([]);
+export const activeRunSpawnedCount = signal<number>(0);
 export const customPromptOpen = signal<boolean>(false);
 export const settingsModalOpen = signal<boolean>(false);
 export const triageBanner = signal<string | null>(null);
@@ -170,6 +174,8 @@ export function handleLensStreamEvent(evt: LensStreamEvent): void {
       viewportSpatialIndex.upsert(evt.node);
       tracker.spawnedNodes.set(evt.node.id, evt.node);
       tracker.spawnedEdges.push(...evt.edges);
+      activeRunStatus.value = "streaming";
+      activeRunSpawnedCount.value = tracker.spawnedNodes.size;
       recomputeUnresolvedLoopholes();
       graphVersion.value += 1;
       cameraControllerRef.current?.refreshCull();
@@ -191,6 +197,9 @@ export function handleLensStreamEvent(evt: LensStreamEvent): void {
       graphVersion.value += 1;
       cameraControllerRef.current?.refreshCull();
       cameraControllerRef.current?.markDirty();
+      void resolveAndAnimateOverlaps(
+        tracker.startFocusId ? [tracker.startFocusId, evt.node.id] : [evt.node.id],
+      );
       break;
     }
     case "run_completed": {
@@ -202,6 +211,9 @@ export function handleLensStreamEvent(evt: LensStreamEvent): void {
 
       activeRunId.value = null;
       activeRunLens.value = null;
+      activeRunStatus.value = "idle";
+      activeRunFocusIds.value = [];
+      activeRunSpawnedCount.value = 0;
       resetRunTracker();
 
       if (spawnedNodes.length > 0) {
@@ -236,6 +248,9 @@ export function handleLensStreamEvent(evt: LensStreamEvent): void {
       flushPendingTokenDeltas();
       activeRunId.value = null;
       activeRunLens.value = null;
+      activeRunStatus.value = "idle";
+      activeRunFocusIds.value = [];
+      activeRunSpawnedCount.value = 0;
       resetRunTracker();
 
       if (evt.code === "PROVIDER_AUTH") {
@@ -316,7 +331,10 @@ export async function triggerLens(lens: LensKind, customPrompt?: string): Promis
   }
 
   resetRunTracker(lens, focusId.value);
+  activeRunStatus.value = "thinking";
   activeRunLens.value = lens;
+  activeRunFocusIds.value = targetIds;
+  activeRunSpawnedCount.value = 0;
 
   try {
     const runId = await runLensIpc(lens, targetIds, handleLensStreamEvent, customPrompt);
@@ -324,6 +342,9 @@ export async function triggerLens(lens: LensKind, customPrompt?: string): Promis
   } catch (err) {
     activeRunId.value = null;
     activeRunLens.value = null;
+    activeRunStatus.value = "idle";
+    activeRunFocusIds.value = [];
+    activeRunSpawnedCount.value = 0;
     resetRunTracker();
     const parsed = parseIpcError(err);
     if (parsed.code === "PROVIDER_AUTH") {
@@ -339,10 +360,10 @@ export async function triggerLens(lens: LensKind, customPrompt?: string): Promis
 
 export function cancelActiveRun(): boolean {
   const runId = activeRunId.value;
-  if (!runId) {
+  if (!runId && activeRunStatus.value === "idle") {
     return false;
   }
-  if (isTauriRuntime()) {
+  if (isTauriRuntime() && runId) {
     void cancelRunIpc(runId).catch((err) => {
       const parsed = parseIpcError(err);
       if (parsed.code !== "RUN_NOT_FOUND") {
@@ -352,6 +373,9 @@ export function cancelActiveRun(): boolean {
   } else {
     activeRunId.value = null;
     activeRunLens.value = null;
+    activeRunStatus.value = "idle";
+    activeRunFocusIds.value = [];
+    activeRunSpawnedCount.value = 0;
     resetRunTracker();
   }
   return true;

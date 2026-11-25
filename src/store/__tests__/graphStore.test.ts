@@ -1,17 +1,26 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import type { NodeDto } from "../../ipc/types";
-import { loadSnapshot, nodesMap, spawnChild } from "../graphStore";
+import {
+  loadSnapshot,
+  mutateGraphUndoable,
+  nodesMap,
+  performRedo,
+  performUndo,
+  resolveAndAnimateOverlaps,
+  spawnChild,
+} from "../graphStore";
+import { buildResizeNodesWithInverse } from "../history";
 
-function makeRootNode(id: string): NodeDto {
+function makeNode(id: string, x = 0, y = 0, width = 320, height = 180): NodeDto {
   return {
     id,
     type: "core",
     status: "active",
-    title: "Parent Core",
+    title: `Node ${id}`,
     content: "",
     summary: "",
-    content_hash: "h_root",
+    content_hash: `h_${id}`,
     summary_hash: "",
     metadata: {
       severity: null,
@@ -21,7 +30,7 @@ function makeRootNode(id: string): NodeDto {
       token_count: 2,
     },
     context_controls: { pin_global: false, exclude_from_ai: false },
-    layout: { x: 0, y: 0, width: 320, height: 180, collapsed: false },
+    layout: { x, y, width, height, collapsed: false },
     created_at: 1_700_000_000_000,
     updated_at: 1_700_000_000_000,
   };
@@ -38,28 +47,76 @@ function rectsOverlap(a: NodeDto, b: NodeDto): boolean {
   );
 }
 
-describe("Browser fallback spawnChild collision avoidance", () => {
+describe("Browser graphStore: directional spawnChild, resize undo/redo, and overlap resolution", () => {
   beforeEach(() => {
     loadSnapshot({
       path: "",
-      nodes: [makeRootNode("root")],
+      nodes: [makeNode("root", 0, 0)],
       edges: [],
       camera: { x: 0, y: 0, zoom: 1.0, last_focus_id: "root" },
       token_budget: 6000,
     });
   });
 
-  it("nudges consecutive Shift+Enter siblings so they never overlap", async () => {
+  it("places Shift+Enter siblings and directional spawns without overlapping", async () => {
     const first = await spawnChild("root", "branches", "branch", "Sibling 1");
     const second = await spawnChild("root", "branches", "branch", "Sibling 2");
+    const leftChild = await spawnChild("root", "derives", "core", "Left", true, "left");
 
     const n1 = nodesMap.get(first.node.id);
     const n2 = nodesMap.get(second.node.id);
+    const nLeft = nodesMap.get(leftChild.node.id);
     expect(n1).toBeDefined();
     expect(n2).toBeDefined();
-    if (!n1 || !n2) return;
+    expect(nLeft).toBeDefined();
+    if (!n1 || !n2 || !nLeft) return;
 
-    expect(n2.layout.y).toBeGreaterThan(n1.layout.y);
+    expect(nLeft.layout.x).toBeLessThan(0);
     expect(rectsOverlap(n1, n2)).toBe(false);
+    expect(rectsOverlap(n1, nLeft)).toBe(false);
+    expect(rectsOverlap(n2, nLeft)).toBe(false);
+  });
+
+  it("supports undo and redo for ResizeNodes mutations", async () => {
+    const { forward, inverse } = buildResizeNodesWithInverse(
+      [{ id: "root", width: 320, height: 180 }],
+      [{ id: "root", width: 512, height: 340 }],
+    );
+    await mutateGraphUndoable("Resize node", forward, inverse);
+    expect(nodesMap.get("root")?.layout.width).toBe(512);
+    expect(nodesMap.get("root")?.layout.height).toBe(340);
+
+    await performUndo();
+    expect(nodesMap.get("root")?.layout.width).toBe(320);
+    expect(nodesMap.get("root")?.layout.height).toBe(180);
+
+    await performRedo();
+    expect(nodesMap.get("root")?.layout.width).toBe(512);
+    expect(nodesMap.get("root")?.layout.height).toBe(340);
+  });
+
+  it("separates overlapping neighbors via resolveAndAnimateOverlaps while keeping pinned node fixed", async () => {
+    loadSnapshot({
+      path: "",
+      nodes: [
+        makeNode("pinned", 100, 100, 320, 180),
+        makeNode("neighbor", 160, 120, 320, 180),
+      ],
+      edges: [],
+      camera: { x: 0, y: 0, zoom: 1.0, last_focus_id: "pinned" },
+      token_budget: 6000,
+    });
+
+    await resolveAndAnimateOverlaps(["pinned"]);
+
+    const pinnedAfter = nodesMap.get("pinned");
+    const neighborAfter = nodesMap.get("neighbor");
+    expect(pinnedAfter).toBeDefined();
+    expect(neighborAfter).toBeDefined();
+    if (!pinnedAfter || !neighborAfter) return;
+
+    expect(pinnedAfter.layout.x).toBe(100);
+    expect(pinnedAfter.layout.y).toBe(100);
+    expect(rectsOverlap(pinnedAfter, neighborAfter)).toBe(false);
   });
 });

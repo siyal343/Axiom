@@ -6,9 +6,17 @@ Axiom renders the infinite workspace using a three-layer pipeline designed to ke
 
 `src/App.tsx` mounts three stacked layers inside `.axiom-canvas-shell`:
 
-1. **Layer 1 — Full-viewport Canvas2D (`.canvas-layer`):** Drawn by `renderCanvas2d` in `src/canvas/renderer2d.ts` with device-pixel-ratio scaling. Renders the background fill, procedural dot grid (base `24` px world step that doubles when screen spacing drops under `10` px and fades out under `0.50x` zoom), directed cubic Bezier edges with per-type colors and dash patterns, `Hold V` X-Ray halos, Bird's-Eye level-of-detail (LOD) cards under `0.45x` zoom, marquee box-select rectangles, and live `Alt+Drag` edge previews.
+1. **Layer 1 — Full-viewport Canvas2D (`.canvas-layer`):** Drawn by `renderCanvas2d` in `src/canvas/renderer2d.ts` with device-pixel-ratio scaling. Renders the background fill, procedural dot grid (base `24` px world step that doubles when screen spacing drops under `10` px and fades out under `0.50x` zoom), dynamic 4-side cubic Bezier edges with obstacle deflection and vivid semantic colors (`--edge-default`, `--edge-branch`, `--edge-synthesis`, `--edge-challenge`, `--edge-resolve`, `--edge-reference`), `Hold V` X-Ray halos, Bird's-Eye level-of-detail (LOD) cards under `0.45x` zoom, marquee box-select rectangles, and live `Alt+Drag` edge previews.
 2. **Layer 2 — GPU-transformed static cards (`CardLayer` in `src/cards/CardLayer.tsx`):** Positions `.card-layer` with `transform: translate3d(x, y, 0) scale(zoom)` (`transform-origin: 0 0`) and renders only the viewport-culled `NodeCard` elements listed in `visibleNodeIds`.
 3. **Layer 3 — Single live editor and ephemeral pills:** `LiveEditorOverlay` (`src/cards/LiveEditorOverlay.tsx`) mounts when `modalState` equals `"edit"`, accompanied by floating `.multi-select-pill` and `.edge-popover` controls in `src/App.tsx`.
+
+### Dynamic edge routing and visual emphasis
+
+Every edge in `renderCanvas2d` uses `computeDynamicEdgeCurve` and `nearestPortPair` rather than fixed left-to-right anchors:
+
+- **4-side port selection:** `nearestPortPair` evaluates all `16` cardinal port pairs between source and target rectangles, scoring Euclidean distance plus an alignment penalty whenever the connecting vector opposes a port's outward normal `(nx, ny)`. As cards move `360°` around each other, edges transition cleanly to the facing sides.
+- **Obstacle bow deflection:** When an edge's direct midpoint falls within `12` px of any third node's bounding box (`id !== srcId && id !== dstId`), `computeDynamicEdgeCurve` shifts the cubic Bezier control points perpendicularly around the nearest obstacle edge so connections stay visible instead of tunneling behind cards.
+- **Semantic styling and incident glow:** Base strokes use `2.0` px width (`2.25` px for `challenges`, `1.75` px for `references`) with round caps and `8.5` px arrowheads. Edges incident to `focusId`, `hoveredId`, or any actively dragged or resized card increase to `2.75` px width with a matching colored glow (`shadowBlur = 8`).
 
 ## Decoupled camera loop
 
@@ -31,9 +39,9 @@ Mutable graph collections (`nodesMap`, `edgesMap`, `cardDomRefs`, and `dragOffse
 - `queryViewport(bounds, 200)` expands the current world viewport bounds by a `200` px margin on every side so cards entering the screen are mounted ahead of edges.
 - To avoid unnecessary Preact updates during smooth panning, `CanvasCameraController.flushFrame` invokes `refreshCull()` only when camera translation exceeds `CULL_MOVE_THRESHOLD_PX` (`80` px), relative zoom changes by more than `12%`, or zoom crosses `LOD_THRESHOLD` (`0.45x`).
 
-## Pointer controls and direct-DOM dragging
+## Pointer controls, resizing, and omnidirectional ports
 
-`attachCanvasPointer` in `src/canvas/pointer.ts` handles canvas pointer and wheel interactions while ignoring events that originate inside interactive controls (`.cm-editor`, `.live-editor-overlay`, `.hover-pill`, `.edge-popover`, `.multi-select-pill`, inputs, and buttons):
+`attachCanvasPointer` in `src/canvas/pointer.ts` handles canvas pointer and wheel interactions while ignoring events inside interactive controls (except `[data-resize-handle]`):
 
 | Gesture | Behavior |
 | --- | --- |
@@ -41,11 +49,16 @@ Mutable graph collections (`nodesMap`, `edgesMap`, `cardDomRefs`, and `dragOffse
 | `Ctrl+Wheel` or `Meta+Wheel` | Zooms anchored at the cursor (`camera.zoomAt`) |
 | Click card | Single-selects the card (`selectSingle`) |
 | `Shift+Click` card | Toggles the card in multi-selection (`toggleSelect`) |
-| Drag card past `4` px (`DRAG_THRESHOLD_PX`) | Multi-drags all selected cards, snaps the primary card delta to a `12` px grid (`GRID_SNAP_PX`, hold `Alt` to bypass), updates `dragOffsets` and direct DOM `style.transform` at 60 FPS, and commits one `move_nodes` batch on pointer release |
+| Drag card past `4` px (`DRAG_THRESHOLD_PX`) | Multi-drags all selected cards, snaps the primary card delta to a `12` px grid (`GRID_SNAP_PX`, hold `Alt` to bypass), updates `dragOffsets` and direct DOM `style.transform` at 60 FPS, commits one undoable `move_nodes` batch, and runs `resolveAndAnimateOverlaps` |
+| Drag `[data-resize-handle]` (`e`, `s`, or `se`) | Resizes card width (`220`–`960` px) and height (`112`–`1200` px) with `12` px grid snapping (`Alt` bypasses), updates `resizeSizes` and DOM styles directly without Preact re-renders, commits `resize_nodes` with `buildResizeNodesWithInverse`, and runs `resolveAndAnimateOverlaps` |
 | Drag empty canvas past `4` px | Draws a marquee selection box (`overlay.marqueeWorld`) and selects intersecting cards using `viewportSpatialIndex.queryRect` on release |
 | Click empty canvas | Clears selection (unless `Shift` is held) |
 | `Alt+Drag` from card | Draws a live dashed Bezier preview (`overlay.edgePreviewWorld`) and opens the **References** / **Resolves** / **Derives** edge popover when released over another node |
 | Double-click card | Enters Edit Mode on unlocked nodes (`enterEditMode`); see [Keyboard navigation and overlays](keyboard-navigation-and-overlays.md) for `Enter` and keyboard bindings |
+
+When a card is hovered or single-focused in Navigate Mode, `NodeCard` renders four cardinal `+` port buttons (`.node-port--top`, `.node-port--right`, `.node-port--bottom`, `.node-port--left`) alongside `.hover-pill`, spawning a connected child in the selected `SpawnDirection` and opening Edit Mode.
+
+After pointer drags, manual resizes, `queueNodeResize` card growth, and finalized AI lens nodes, `resolveAndAnimateOverlaps` in `src/store/graphStore.ts` queries `resolve_overlaps` (or `resolveOverlapsLocally` outside Tauri) with the moved or grown cards pinned and animates displaced neighbors smoothly over `180` ms (`applyTidyPositions`).
 
 ## Static Markdown, math, and sanitization cache
 
@@ -56,7 +69,7 @@ In Navigate Mode, `NodeCard` renders static HTML through `src/cards/markdownCach
 3. **HTML sanitization:** After restoring KaTeX placeholders, the full HTML output passes through `DOMPurify.sanitize` with `DOMPURIFY_CONFIG` (allowing MathML elements plus `class` and `style` attributes) to strip `<script>`, inline event handlers, and `javascript:` URLs before `NodeCard` injects it.
 4. **Content-hash LRU cache:** `getRenderedMarkdown` caches sanitized HTML keyed by `content_hash` in an LRU `Map` capped at `MAX_CACHE_ENTRIES` (`600` entries).
 
-`NodeCard` attaches a `ResizeObserver` (`90` ms debounce) to expanded cards and calls `queueNodeResize` in `src/store/graphStore.ts`, which ignores jitter within `4` px and batches `resize_nodes` updates after `160` ms so edge endpoints and spatial indexes track rendered card heights.
+`NodeCard` attaches a `ResizeObserver` (`90` ms debounce) to expanded cards while not actively dragging or resizing. When rendered `scrollHeight` exceeds `node.layout.height + 2`, it calls `queueNodeResize` in `src/store/graphStore.ts`, which ignores jitter within `4` px, batches `resize_nodes` updates after `160` ms, and runs `resolveAndAnimateOverlaps` if the card grew.
 
 ## One Live Editor architecture
 
@@ -64,5 +77,5 @@ Axiom enforces the invariant that zero CodeMirror instances exist in the DOM out
 
 - In Navigate Mode (`modalState === "navigate"`), `LiveEditorOverlay` returns `null`, leaving `0` `.cm-editor` elements in the DOM.
 - When you trigger `enterEditMode(node)` on a `locked` node, `src/store/selection.ts` aborts editing and triggers a `240` ms `lockedShakeId` animation.
-- On an unlocked node, `enterEditMode` sets `modalState` to `"edit"` and `LiveEditorOverlay` mounts one `LiveEditorInstance` clamped inside the viewport bounds with a title `<input>` and a CodeMirror 6 `EditorView` (`@codemirror/lang-markdown`, `@codemirror/commands` default and history keymaps, line wrapping, and monochrome theme).
+- On an unlocked node, `enterEditMode` sets `modalState` to `"edit"` and `LiveEditorOverlay` mounts one `LiveEditorInstance` (`role="dialog"`, `aria-label="Edit node"`) positioned through `computeOverlayRect`, synchronized on camera frames through `subscribeFrame`, with a title `<input>` and a CodeMirror 6 `EditorView` (`@codemirror/lang-markdown`, `@codemirror/commands` default and history keymaps, line wrapping, and monochrome theme). Initial focus defers to `requestAnimationFrame`, selecting the title `<input>` for empty newly created nodes (`"New Concept"` or `"New Node"`) or focusing the CodeMirror body otherwise.
 - Pressing `Escape` inside Edit Mode saves changed text through `mutateGraphUndoable` (pre-warming `getRenderedMarkdown`), calls `exitEditMode()`, and destroys the `EditorView` (`view.destroy()`), returning the `.cm-editor` count to zero. Pressing `Ctrl/Cmd+Enter` commits edits the same way and transitions directly into `chord_a` mode on the saved node (`commitAndExit(true)`).

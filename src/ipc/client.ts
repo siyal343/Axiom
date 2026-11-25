@@ -16,6 +16,7 @@ import type {
   NodeType,
   SaveSettingsInput,
   SearchHit,
+  SpawnDirection,
   SummaryUpdatedEvent,
   TestConnectionResult,
   WorkspaceSnapshot,
@@ -78,12 +79,14 @@ export async function spawnConnectedNode(
   edgeType: EdgeType,
   nodeType: NodeType,
   title?: string,
+  direction?: SpawnDirection,
 ): Promise<{ node: NodeDto; edge: EdgeDto }> {
   return invoke<{ node: NodeDto; edge: EdgeDto }>("spawn_connected_node", {
     parentId,
     edgeType,
     nodeType,
     title,
+    direction,
   });
 }
 
@@ -100,6 +103,10 @@ export async function searchNodes(query: string, limit?: number): Promise<Search
 
 export async function tidySubtree(rootId: string): Promise<NodePositionUpdate[]> {
   return invoke<NodePositionUpdate[]>("tidy_subtree", { rootId });
+}
+
+export async function resolveOverlaps(pinnedIds: string[]): Promise<NodePositionUpdate[]> {
+  return invoke<NodePositionUpdate[]>("resolve_overlaps", { pinnedIds });
 }
 
 export async function saveCamera(camera: CameraState): Promise<void> {

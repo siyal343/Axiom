@@ -1,7 +1,7 @@
 import { signal } from "@preact/signals";
 import type { CameraTransform } from "../canvas/camera";
 import { ViewportSpatialIndex } from "../canvas/spatialIndex";
-import { applyOps, isTauriRuntime, spawnConnectedNode } from "../ipc/client";
+import { applyOps, isTauriRuntime, resolveOverlaps, spawnConnectedNode } from "../ipc/client";
 import type {
   ApplyResult,
   CameraState,
@@ -13,6 +13,7 @@ import type {
   NodeSizeUpdate,
   NodeType,
   Severity,
+  SpawnDirection,
   WorkspaceSnapshot,
 } from "../ipc/types";
 import {
@@ -40,11 +41,17 @@ export interface CameraControllerHandle {
   resetZoom?: () => void;
 }
 
+export const MIN_NODE_WIDTH = 220;
+export const MAX_NODE_WIDTH = 960;
+export const MIN_NODE_HEIGHT = 112;
+export const MAX_NODE_HEIGHT = 1200;
+
 // Non-reactive stores kept OUTSIDE signals so rAF rendering & drags never trigger Preact re-renders.
 export const nodesMap = new Map<string, NodeDto>();
 export const edgesMap = new Map<string, EdgeDto>();
 export const cardDomRefs = new Map<string, HTMLElement>();
 export const dragOffsets = new Map<string, { x: number; y: number }>();
+export const resizeSizes = new Map<string, { width: number; height: number }>();
 export const viewportSpatialIndex = new ViewportSpatialIndex();
 
 export const graphVersion = signal<number>(0);
@@ -184,6 +191,7 @@ function applyOpsLocally(ops: GraphOp[]): ApplyResult {
       }
       case "resize_nodes": {
         for (const s of op.sizes) {
+          resizeSizes.delete(s.id);
           const existing = nodesMap.get(s.id);
           if (existing) {
             const resized: NodeDto = {
@@ -208,6 +216,8 @@ function applyOpsLocally(ops: GraphOp[]): ApplyResult {
           if (nodesMap.delete(id)) {
             viewportSpatialIndex.remove(id);
             cardDomRefs.delete(id);
+            dragOffsets.delete(id);
+            resizeSizes.delete(id);
             deletedNodeIds.push(id);
           }
         }
@@ -267,6 +277,7 @@ function syncStoreAfterIpc(ops: GraphOp[], result: ApplyResult): void {
         break;
       case "resize_nodes":
         for (const s of op.sizes) {
+          resizeSizes.delete(s.id);
           const existing = nodesMap.get(s.id);
           if (existing) {
             const resized: NodeDto = {
@@ -316,6 +327,7 @@ export function loadSnapshot(snapshot: WorkspaceSnapshot): void {
   edgesMap.clear();
   cardDomRefs.clear();
   dragOffsets.clear();
+  resizeSizes.clear();
 
   for (const node of snapshot.nodes) {
     nodesMap.set(node.id, node);
@@ -516,45 +528,82 @@ export async function spawnChild(
   nodeType: NodeType,
   title?: string,
   recordHistory = true,
+  direction?: SpawnDirection,
 ): Promise<{ node: NodeDto; edge: EdgeDto }> {
   const parentBefore = nodesMap.get(parentId);
   const prevParentStatus = parentBefore?.status;
 
   let spawned: { node: NodeDto; edge: EdgeDto };
   if (isTauriRuntime()) {
-    spawned = await spawnConnectedNode(parentId, edgeType, nodeType, title);
+    spawned = await spawnConnectedNode(parentId, edgeType, nodeType, title, direction);
   } else {
     const now = Date.now();
     const id = `node_local_${now}_${Math.random().toString(36).slice(2, 7)}`;
-    const px = (parentBefore?.layout.x ?? 0) + (parentBefore?.layout.width ?? 320) + 100;
-    let py = parentBefore?.layout.y ?? 0;
     const nodeW = 320;
     const nodeH = 180;
     const gap = 20;
-    for (let attempt = 0; attempt < 40; attempt += 1) {
+    const hGap = 100;
+    const sideGap = 48;
+    const parentX = parentBefore?.layout.x ?? 0;
+    const parentY = parentBefore?.layout.y ?? 0;
+    const parentW = parentBefore?.layout.width ?? 320;
+    const parentH = parentBefore ? (parentBefore.layout.collapsed ? 44 : parentBefore.layout.height) : 180;
+
+    const slotFor = (dir: SpawnDirection): { x: number; y: number } => {
+      switch (dir) {
+        case "right":
+          return { x: parentX + parentW + hGap, y: parentY };
+        case "left":
+          return { x: parentX - nodeW - hGap, y: parentY };
+        case "bottom":
+          return { x: parentX, y: parentY + parentH + sideGap };
+        case "top":
+          return { x: parentX, y: parentY - nodeH - sideGap };
+      }
+    };
+
+    const hasCollision = (x: number, y: number): boolean => {
       const candidates = viewportSpatialIndex.queryViewport(
-        { minX: px, minY: py, maxX: px + nodeW, maxY: py + nodeH },
+        { minX: x, minY: y, maxX: x + nodeW, maxY: y + nodeH },
         24,
       );
-      let overlaps = false;
       for (const existingId of candidates) {
         const existing = nodesMap.get(existingId);
         if (!existing) continue;
         const eh = existing.layout.collapsed ? 44 : existing.layout.height;
         if (
-          px < existing.layout.x + existing.layout.width + gap &&
-          px + nodeW + gap > existing.layout.x &&
-          py < existing.layout.y + eh + gap &&
-          py + nodeH + gap > existing.layout.y
+          x < existing.layout.x + existing.layout.width + gap &&
+          x + nodeW + gap > existing.layout.x &&
+          y < existing.layout.y + eh + gap &&
+          y + nodeH + gap > existing.layout.y
         ) {
-          overlaps = true;
-          break;
+          return true;
         }
       }
-      if (!overlaps) {
+      return false;
+    };
+
+    const cardinalOrder: SpawnDirection[] = ["right", "bottom", "left", "top"];
+    const chosenDir: SpawnDirection =
+      direction ??
+      cardinalOrder.find((d) => {
+        const s = slotFor(d);
+        return !hasCollision(s.x, s.y);
+      }) ??
+      "right";
+
+    const initialSlot = slotFor(chosenDir);
+    let px = initialSlot.x;
+    let py = initialSlot.y;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (!hasCollision(px, py)) {
         break;
       }
-      py += 40;
+      if (chosenDir === "top") {
+        py -= 40;
+      } else {
+        py += 40;
+      }
     }
     const nodeTitle = title && title.trim().length > 0 ? title : "New Node";
     const node: NodeDto = {
@@ -641,6 +690,113 @@ export async function spawnChild(
 
 const pendingResizes = new Map<string, NodeSizeUpdate>();
 let resizeFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let resolvingOverlaps = false;
+
+export function resolveOverlapsLocally(pinnedIds: string[]): NodePositionUpdate[] {
+  if (nodesMap.size < 2) {
+    return [];
+  }
+  const pinnedSet = new Set(pinnedIds);
+  const ids = Array.from(nodesMap.keys()).sort();
+  const initial = new Map<string, { x: number; y: number }>();
+  const rects = new Map<string, { x: number; y: number; w: number; h: number }>();
+
+  for (const id of ids) {
+    const n = nodesMap.get(id);
+    if (!n) continue;
+    const h = n.layout.collapsed ? 44 : n.layout.height;
+    initial.set(id, { x: n.layout.x, y: n.layout.y });
+    rects.set(id, { x: n.layout.x, y: n.layout.y, w: n.layout.width, h });
+  }
+
+  const margin = 20;
+  const extraClearance = 4;
+  for (let iter = 0; iter < 24; iter += 1) {
+    let movedAny = false;
+    for (let i = 0; i < ids.length; i += 1) {
+      const aId = ids[i];
+      if (!aId) continue;
+      for (let j = i + 1; j < ids.length; j += 1) {
+        const bId = ids[j];
+        if (!bId) continue;
+        const a = rects.get(aId);
+        const b = rects.get(bId);
+        if (!a || !b) continue;
+
+        const dx = b.x + b.w / 2 - (a.x + a.w / 2);
+        const dy = b.y + b.h / 2 - (a.y + a.h / 2);
+        const overlapX = (a.w + b.w) / 2 + margin - Math.abs(dx);
+        const overlapY = (a.h + b.h) / 2 + margin - Math.abs(dy);
+        if (overlapX <= 0 || overlapY <= 0) {
+          continue;
+        }
+
+        const aPinned = pinnedSet.has(aId);
+        const bPinned = pinnedSet.has(bId);
+        if (aPinned && bPinned) {
+          continue;
+        }
+
+        if (overlapX < overlapY) {
+          const sep = overlapX + extraClearance;
+          const signX = dx >= 0 ? 1 : -1;
+          if (aPinned) {
+            b.x += signX * sep;
+          } else if (bPinned) {
+            a.x -= signX * sep;
+          } else {
+            a.x -= signX * sep * 0.5;
+            b.x += signX * sep * 0.5;
+          }
+        } else {
+          const sep = overlapY + extraClearance;
+          const signY = dy >= 0 ? 1 : -1;
+          if (aPinned) {
+            b.y += signY * sep;
+          } else if (bPinned) {
+            a.y -= signY * sep;
+          } else {
+            a.y -= signY * sep * 0.5;
+            b.y += signY * sep * 0.5;
+          }
+        }
+        movedAny = true;
+      }
+    }
+    if (!movedAny) {
+      break;
+    }
+  }
+
+  const updates: NodePositionUpdate[] = [];
+  for (const id of ids) {
+    const orig = initial.get(id);
+    const cur = rects.get(id);
+    if (orig && cur && (Math.abs(cur.x - orig.x) > 1e-6 || Math.abs(cur.y - orig.y) > 1e-6)) {
+      updates.push({ id, x: cur.x, y: cur.y });
+    }
+  }
+  return updates;
+}
+
+export async function resolveAndAnimateOverlaps(pinnedIds: string[]): Promise<void> {
+  if (resolvingOverlaps || nodesMap.size < 2) {
+    return;
+  }
+  resolvingOverlaps = true;
+  try {
+    const updates = isTauriRuntime()
+      ? await resolveOverlaps(pinnedIds)
+      : resolveOverlapsLocally(pinnedIds);
+    if (updates.length > 0) {
+      applyTidyPositions(updates);
+    }
+  } catch {
+    // Non-fatal: layout remains usable if overlap resolution is skipped
+  } finally {
+    resolvingOverlaps = false;
+  }
+}
 
 export function queueNodeResize(id: string, width: number, height: number): void {
   const node = nodesMap.get(id);
@@ -656,6 +812,7 @@ export function queueNodeResize(id: string, width: number, height: number): void
     return;
   }
 
+  const grew = roundedW > node.layout.width || roundedH > node.layout.height;
   const updated: NodeDto = {
     ...node,
     layout: { ...node.layout, width: roundedW, height: roundedH },
@@ -675,6 +832,11 @@ export function queueNodeResize(id: string, width: number, height: number): void
     }
     const sizes = Array.from(pendingResizes.values());
     pendingResizes.clear();
-    void mutateGraph([{ op: "resize_nodes", sizes }]);
+    void mutateGraph([{ op: "resize_nodes", sizes }]).then(() => {
+      if (grew) {
+        return resolveAndAnimateOverlaps(sizes.map((s) => s.id));
+      }
+      return undefined;
+    });
   }, 160);
 }

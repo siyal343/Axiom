@@ -49,6 +49,7 @@ pub fn run() {
             ipc::commands::compile_xray,
             ipc::commands::search_nodes,
             ipc::commands::tidy_subtree,
+            ipc::commands::resolve_overlaps,
             ipc::commands::save_camera,
             ipc::commands::export_json,
             ipc::commands::import_json,

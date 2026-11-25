@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use rstar::{RTree, RTreeObject, AABB};
 
 use crate::error::IpcError;
-use crate::graph::models::{EdgeType, NodeDto, NodePositionUpdate, NodeType};
+use crate::graph::models::{EdgeType, NodeDto, NodePositionUpdate, NodeType, SpawnDirection};
 use crate::graph::GraphEngine;
 
 pub const DEFAULT_NODE_WIDTH: f64 = 320.0;
@@ -124,9 +124,10 @@ impl SpatialIndex {
     }
 }
 
-fn nudge_clear_directional(
+fn nudge_clear_with_step(
     index: &SpatialIndex,
     direction: i8, // -1 = up only, 1 = down only, 0 = alternating down-first
+    x_step: f64,
     start_x: f64,
     start_y: f64,
     width: f64,
@@ -154,10 +155,85 @@ fn nudge_clear_directional(
                 }
             }
         }
-        cur_x += width + H_GAP;
+        cur_x += x_step;
     }
 
     (cur_x, cur_y)
+}
+
+fn nudge_clear_directional(
+    index: &SpatialIndex,
+    direction: i8, // -1 = up only, 1 = down only, 0 = alternating down-first
+    start_x: f64,
+    start_y: f64,
+    width: f64,
+    height: f64,
+) -> (f64, f64) {
+    nudge_clear_with_step(
+        index,
+        direction,
+        width + H_GAP,
+        start_x,
+        start_y,
+        width,
+        height,
+    )
+}
+
+pub fn directional_slot(
+    parent: &NodeDto,
+    direction: SpawnDirection,
+    width: f64,
+    height: f64,
+) -> (f64, f64) {
+    let px = parent.layout.x;
+    let py = parent.layout.y;
+    let pw = parent.layout.width;
+    let ph = effective_height(parent);
+    match direction {
+        SpawnDirection::Right => (px + pw + H_GAP, py),
+        SpawnDirection::Left => (px - width - H_GAP, py),
+        SpawnDirection::Bottom => (px, py + ph + SIDE_GAP),
+        SpawnDirection::Top => (px, py - height - SIDE_GAP),
+    }
+}
+
+pub fn find_best_open_direction(
+    index: &SpatialIndex,
+    parent: &NodeDto,
+    width: f64,
+    height: f64,
+) -> SpawnDirection {
+    const ORDER: [SpawnDirection; 4] = [
+        SpawnDirection::Right,
+        SpawnDirection::Bottom,
+        SpawnDirection::Left,
+        SpawnDirection::Top,
+    ];
+    for dir in ORDER {
+        let (sx, sy) = directional_slot(parent, dir, width, height);
+        if !index.intersects_rect(sx, sy, width, height) {
+            return dir;
+        }
+    }
+    SpawnDirection::Right
+}
+
+pub fn find_free_position_in_direction(
+    index: &SpatialIndex,
+    parent: &NodeDto,
+    direction: SpawnDirection,
+    width: f64,
+    height: f64,
+) -> (f64, f64) {
+    let (sx, sy) = directional_slot(parent, direction, width, height);
+    let (v_dir, x_step) = match direction {
+        SpawnDirection::Right => (0, width + H_GAP),
+        SpawnDirection::Left => (0, -(width + H_GAP)),
+        SpawnDirection::Bottom => (1, width + H_GAP),
+        SpawnDirection::Top => (-1, width + H_GAP),
+    };
+    nudge_clear_with_step(index, v_dir, x_step, sx, sy, width, height)
 }
 
 fn nudge_clear(
@@ -561,4 +637,129 @@ pub fn compute_tidy_subtree(
     }
 
     Ok(updates)
+}
+
+pub fn resolve_overlaps(
+    engine: &GraphEngine,
+    pinned_ids: &HashSet<String>,
+) -> Vec<NodePositionUpdate> {
+    if engine.nodes.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut ids: Vec<String> = engine.nodes.keys().cloned().collect();
+    ids.sort();
+
+    let mut initial: HashMap<String, (f64, f64)> = HashMap::with_capacity(ids.len());
+    let mut rects: HashMap<String, (f64, f64, f64, f64)> = HashMap::with_capacity(ids.len());
+    let mut spatial = SpatialIndex::new();
+
+    for id in &ids {
+        if let Some(node) = engine.nodes.get(id) {
+            let h = effective_height(node);
+            initial.insert(id.clone(), (node.layout.x, node.layout.y));
+            rects.insert(id.clone(), (node.layout.x, node.layout.y, node.layout.width, h));
+            spatial.upsert_rect(id.clone(), node.layout.x, node.layout.y, node.layout.width, h);
+        }
+    }
+
+    const MAX_ITERS: usize = 24;
+    const EXTRA_CLEARANCE: f64 = 4.0;
+
+    for _ in 0..MAX_ITERS {
+        let mut moved_any = false;
+
+        for a_id in &ids {
+            let Some(&(ax, ay, aw, ah)) = rects.get(a_id) else {
+                continue;
+            };
+            let query = SpatialBox::from_rect(a_id.clone(), ax, ay, aw, ah).envelope();
+            let mut neighbor_ids: Vec<String> = spatial
+                .tree
+                .locate_in_envelope_intersecting(&query)
+                .filter(|b| b.id.as_str() > a_id.as_str())
+                .map(|b| b.id.clone())
+                .collect();
+            neighbor_ids.sort();
+
+            for b_id in neighbor_ids {
+                let Some(&(ax_cur, ay_cur, aw_cur, ah_cur)) = rects.get(a_id) else {
+                    continue;
+                };
+                let Some(&(bx, by, bw, bh)) = rects.get(&b_id) else {
+                    continue;
+                };
+
+                let dx = (bx + bw / 2.0) - (ax_cur + aw_cur / 2.0);
+                let dy = (by + bh / 2.0) - (ay_cur + ah_cur / 2.0);
+                let overlap_x = (aw_cur + bw) / 2.0 + COLLISION_MARGIN - dx.abs();
+                let overlap_y = (ah_cur + bh) / 2.0 + COLLISION_MARGIN - dy.abs();
+
+                if overlap_x <= 0.0 || overlap_y <= 0.0 {
+                    continue;
+                }
+
+                let a_pinned = pinned_ids.contains(a_id);
+                let b_pinned = pinned_ids.contains(&b_id);
+                if a_pinned && b_pinned {
+                    continue;
+                }
+
+                let (move_ax, move_ay, move_bx, move_by) = if overlap_x < overlap_y {
+                    let sep = overlap_x + EXTRA_CLEARANCE;
+                    let sign_x = if dx >= 0.0 { 1.0 } else { -1.0 };
+                    if a_pinned {
+                        (0.0, 0.0, sign_x * sep, 0.0)
+                    } else if b_pinned {
+                        (-sign_x * sep, 0.0, 0.0, 0.0)
+                    } else {
+                        (-sign_x * sep * 0.5, 0.0, sign_x * sep * 0.5, 0.0)
+                    }
+                } else {
+                    let sep = overlap_y + EXTRA_CLEARANCE;
+                    let sign_y = if dy >= 0.0 { 1.0 } else { -1.0 };
+                    if a_pinned {
+                        (0.0, 0.0, 0.0, sign_y * sep)
+                    } else if b_pinned {
+                        (0.0, -sign_y * sep, 0.0, 0.0)
+                    } else {
+                        (0.0, -sign_y * sep * 0.5, 0.0, sign_y * sep * 0.5)
+                    }
+                };
+
+                if move_ax.abs() > 1e-6 || move_ay.abs() > 1e-6 {
+                    let nx = ax_cur + move_ax;
+                    let ny = ay_cur + move_ay;
+                    rects.insert(a_id.clone(), (nx, ny, aw_cur, ah_cur));
+                    spatial.upsert_rect(a_id.clone(), nx, ny, aw_cur, ah_cur);
+                    moved_any = true;
+                }
+                if move_bx.abs() > 1e-6 || move_by.abs() > 1e-6 {
+                    let nx = bx + move_bx;
+                    let ny = by + move_by;
+                    rects.insert(b_id.clone(), (nx, ny, bw, bh));
+                    spatial.upsert_rect(b_id.clone(), nx, ny, bw, bh);
+                    moved_any = true;
+                }
+            }
+        }
+
+        if !moved_any {
+            break;
+        }
+    }
+
+    let mut updates = Vec::new();
+    for id in &ids {
+        if let (Some(&(ix, iy)), Some(&(fx, fy, _, _))) = (initial.get(id), rects.get(id)) {
+            if (fx - ix).abs() > 1e-6 || (fy - iy).abs() > 1e-6 {
+                updates.push(NodePositionUpdate {
+                    id: id.clone(),
+                    x: fx,
+                    y: fy,
+                });
+            }
+        }
+    }
+    updates
 }

@@ -14,7 +14,7 @@ import {
   openWorkspace,
   saveCamera,
 } from "./ipc/client";
-import type { EdgeDto, EdgeType, GraphOp, NodeDto } from "./ipc/types";
+import type { EdgeDto, EdgeType, GraphOp, LensKind, NodeDto } from "./ipc/types";
 import { CommandPalette } from "./overlays/CommandPalette";
 import { CustomPromptBar } from "./overlays/CustomPromptBar";
 import { PerfHud } from "./overlays/PerfHud";
@@ -22,7 +22,15 @@ import { SettingsModal } from "./overlays/SettingsModal";
 import { ShortcutsModal } from "./overlays/ShortcutsModal";
 import { notifyIpcError, ToastStack } from "./overlays/ToastStack";
 import { XrayHud } from "./overlays/XrayHud";
-import { applySummaryUpdate, triageBanner, triggerLens } from "./store/aiRunner";
+import {
+  activeRunLens,
+  activeRunSpawnedCount,
+  activeRunStatus,
+  applySummaryUpdate,
+  cancelActiveRun,
+  triageBanner,
+  triggerLens,
+} from "./store/aiRunner";
 import {
   cameraControllerRef,
   dragOffsets,
@@ -32,6 +40,7 @@ import {
   loadSnapshot,
   mutateGraphUndoable,
   nodesMap,
+  resizeSizes,
   theme,
   tokenBudget,
   unresolvedLoopholes,
@@ -43,6 +52,7 @@ import {
   edgePopover,
   enterEditMode,
   focusId,
+  hoveredId,
   isInteracting,
   modalState,
   selectedIds,
@@ -50,6 +60,15 @@ import {
   shortcutsHelpOpen,
   xrayState,
 } from "./store/selection";
+
+const LENS_LABELS: Record<LensKind, string> = {
+  red_team: "Red-Team",
+  edge_case: "Edge Cases",
+  diverge: "Diverge",
+  feynman: "Feynman",
+  synthesize: "Synthesize",
+  custom: "Custom Prompt",
+};
 
 export function App() {
   const shellRef = useRef<HTMLElement | null>(null);
@@ -65,6 +84,9 @@ export function App() {
   const interacting = isInteracting.value;
   const currentModal = modalState.value;
   const activeTriage = triageBanner.value;
+  const runStatus = activeRunStatus.value;
+  const runLens = activeRunLens.value;
+  const runSpawnedCount = activeRunSpawnedCount.value;
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme.value);
@@ -94,8 +116,10 @@ export function App() {
           nodes: nodesMap,
           edges: edgesMap,
           dragOffsets,
+          resizeSizes,
           selectedIds: selectedIds.value,
           focusId: focusId.value,
+          hoveredId: hoveredId.value,
           xrayState: xrayState.value,
           unresolvedLoopholes: unresolvedLoopholes.value,
           marqueeWorld: overlay.marqueeWorld,
@@ -206,7 +230,7 @@ export function App() {
 
   useEffect(() => {
     cameraControllerRef.current?.markDirty();
-  }, [version, currentSelected, focusId.value, xrayState.value]);
+  }, [version, currentSelected, focusId.value, hoveredId.value, xrayState.value]);
 
   const viewportSize = cameraControllerRef.current?.getViewportSize() ?? {
     width: typeof window !== "undefined" ? window.innerWidth : 1280,
@@ -398,6 +422,35 @@ export function App() {
       {currentModal === "navigate" && activeTriage !== null && (
         <div class="triage-hint-pill" role="status">
           {activeTriage}
+        </div>
+      )}
+
+      {runStatus !== "idle" && (
+        <div
+          class="ai-thinking-pill"
+          role="status"
+          aria-live="polite"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <span class="ai-thinking-pill__spinner" aria-hidden="true">
+            <span class="ai-thinking-pill__dot" />
+            <span class="ai-thinking-pill__dot" />
+            <span class="ai-thinking-pill__dot" />
+          </span>
+          <span class="ai-thinking-pill__text">
+            {runStatus === "thinking"
+              ? `Thinking — ${runLens ? LENS_LABELS[runLens] : "AI"}…`
+              : `Streaming — ${runSpawnedCount} card${runSpawnedCount === 1 ? "" : "s"}…`}
+          </span>
+          <button
+            type="button"
+            class="ai-thinking-pill__cancel"
+            onClick={() => {
+              cancelActiveRun();
+            }}
+          >
+            Cancel (Esc)
+          </button>
         </div>
       )}
 

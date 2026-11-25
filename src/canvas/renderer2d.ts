@@ -30,8 +30,10 @@ export interface RenderSceneInput {
   nodes: Map<string, NodeDto>;
   edges: Map<string, EdgeDto>;
   dragOffsets: Map<string, { x: number; y: number }>;
+  resizeSizes?: Map<string, { width: number; height: number }>;
   selectedIds: ReadonlySet<string>;
   focusId: string | null;
+  hoveredId?: string | null;
   xrayState: CompiledXray | null;
   unresolvedLoopholes: Map<string, LoopholeSummary>;
   marqueeWorld: MarqueeRect | null;
@@ -48,6 +50,7 @@ interface ThemePalette {
   textPrimary: string;
   edgeDefault: string;
   edgeBranch: string;
+  edgeSynthesis: string;
   edgeChallenge: string;
   edgeResolve: string;
   edgeReference: string;
@@ -90,11 +93,12 @@ function getPalette(themeKey: "dark" | "light"): ThemePalette {
     borderSubtle: readCssVar(style, "--border-subtle", isLight ? "#c5cedb" : "#262b36"),
     borderStrong: readCssVar(style, "--border-strong", isLight ? "#94a3b8" : "#3a4252"),
     textPrimary: readCssVar(style, "--text-primary", isLight ? "#111827" : "#e6eaf0"),
-    edgeDefault: readCssVar(style, "--edge-default", isLight ? "#64748b" : "#3f4756"),
-    edgeBranch: readCssVar(style, "--edge-branch", isLight ? "#2563eb" : "#5b7fa6"),
-    edgeChallenge: readCssVar(style, "--edge-challenge", "#d97706"),
-    edgeResolve: readCssVar(style, "--edge-resolve", isLight ? "#15803d" : "#2f855a"),
-    edgeReference: readCssVar(style, "--edge-reference", isLight ? "#64748b" : "#4b5563"),
+    edgeDefault: readCssVar(style, "--edge-default", isLight ? "#0284c7" : "#7dd3fc"),
+    edgeBranch: readCssVar(style, "--edge-branch", isLight ? "#2563eb" : "#60a5fa"),
+    edgeSynthesis: readCssVar(style, "--edge-synthesis", isLight ? "#059669" : "#34d399"),
+    edgeChallenge: readCssVar(style, "--edge-challenge", isLight ? "#d97706" : "#f59e0b"),
+    edgeResolve: readCssVar(style, "--edge-resolve", isLight ? "#16a34a" : "#4ade80"),
+    edgeReference: readCssVar(style, "--edge-reference", isLight ? "#7c3aed" : "#a78bfa"),
     accentCore: readCssVar(style, "--accent-core", isLight ? "#475569" : "#cbd5e1"),
     accentBranch: readCssVar(style, "--accent-branch", isLight ? "#2563eb" : "#60a5fa"),
     accentProbe: readCssVar(style, "--accent-probe", isLight ? "#0284c7" : "#38bdf8"),
@@ -117,7 +121,7 @@ function getPalette(themeKey: "dark" | "light"): ThemePalette {
   return palette;
 }
 
-interface NodeRect {
+export interface NodeRect {
   x: number;
   y: number;
   w: number;
@@ -127,17 +131,25 @@ interface NodeRect {
 function getNodeRect(
   node: NodeDto,
   dragOffsets: Map<string, { x: number; y: number }>,
+  resizeSizes?: Map<string, { width: number; height: number }>,
 ): NodeRect {
   const offset = dragOffsets.get(node.id);
+  const resized = resizeSizes?.get(node.id);
+  const w = resized ? resized.width : node.layout.width;
+  const h = node.layout.collapsed
+    ? getEffectiveNodeHeight(node)
+    : resized
+      ? resized.height
+      : node.layout.height;
   return {
     x: node.layout.x + (offset?.x ?? 0),
     y: node.layout.y + (offset?.y ?? 0),
-    w: node.layout.width,
-    h: getEffectiveNodeHeight(node),
+    w,
+    h,
   };
 }
 
-interface PortPoint {
+export interface PortPoint {
   x: number;
   y: number;
   nx: number;
@@ -153,25 +165,103 @@ function cardinalPorts(rect: NodeRect): PortPoint[] {
   ];
 }
 
-function nearestPortPair(src: NodeRect, dst: NodeRect): { from: PortPoint; to: PortPoint } {
+export function nearestPortPair(
+  src: NodeRect,
+  dst: NodeRect,
+): { from: PortPoint; to: PortPoint } {
   const sp = cardinalPorts(src);
   const dp = cardinalPorts(dst);
   let bestFrom = sp[0];
   let bestTo = dp[0];
-  let bestDistSq = Number.POSITIVE_INFINITY;
+  let bestScore = Number.POSITIVE_INFINITY;
   for (const a of sp) {
     for (const b of dp) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < bestDistSq) {
-        bestDistSq = d2;
+      const dist = Math.hypot(dx, dy);
+      let score = dist;
+      if (dist > 1e-4) {
+        const ux = dx / dist;
+        const uy = dy / dist;
+        const dotA = ux * a.nx + uy * a.ny;
+        const dotB = -ux * b.nx + -uy * b.ny;
+        const penaltyA = dotA < 0.15 ? (0.15 - dotA) * 280 : 0;
+        const penaltyB = dotB < 0.15 ? (0.15 - dotB) * 280 : 0;
+        score = dist + penaltyA + penaltyB - (dotA + dotB) * 12;
+      }
+      if (score < bestScore) {
+        bestScore = score;
         bestFrom = a;
         bestTo = b;
       }
     }
   }
   return { from: bestFrom, to: bestTo };
+}
+
+export interface DynamicEdgeCurve {
+  x1: number;
+  y1: number;
+  cx1: number;
+  cy1: number;
+  cx2: number;
+  cy2: number;
+  x2: number;
+  y2: number;
+}
+
+export function computeDynamicEdgeCurve(
+  srcRect: NodeRect,
+  dstRect: NodeRect,
+  srcId: string,
+  dstId: string,
+  obstacles: ReadonlyArray<{ id: string; rect: NodeRect }>,
+): DynamicEdgeCurve {
+  const { from, to } = nearestPortPair(srcRect, dstRect);
+  const x1 = from.x;
+  const y1 = from.y;
+  const x2 = to.x;
+  const y2 = to.y;
+  const dist = Math.hypot(x2 - x1, y2 - y1);
+  const offset = Math.max(42, dist * 0.35);
+  let cx1 = x1 + from.nx * offset;
+  let cy1 = y1 + from.ny * offset;
+  let cx2 = x2 + to.nx * offset;
+  let cy2 = y2 + to.ny * offset;
+
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  const pad = 12;
+  const clearance = 28;
+
+  for (const obs of obstacles) {
+    if (obs.id === srcId || obs.id === dstId) {
+      continue;
+    }
+    const r = obs.rect;
+    if (mx >= r.x - pad && mx <= r.x + r.w + pad && my >= r.y - pad && my <= r.y + r.h + pad) {
+      const shiftLeft = r.x - clearance - mx;
+      const shiftRight = r.x + r.w + clearance - mx;
+      const shiftUp = r.y - clearance - my;
+      const shiftDown = r.y + r.h + clearance - my;
+
+      const bestX = Math.abs(shiftLeft) <= Math.abs(shiftRight) ? shiftLeft : shiftRight;
+      const bestY = Math.abs(shiftUp) <= Math.abs(shiftDown) ? shiftUp : shiftDown;
+
+      if (Math.abs(bestX) < Math.abs(bestY)) {
+        const dxShift = bestX * 1.35;
+        cx1 += dxShift;
+        cx2 += dxShift;
+      } else {
+        const dyShift = bestY * 1.35;
+        cy1 += dyShift;
+        cy2 += dyShift;
+      }
+      break;
+    }
+  }
+
+  return { x1, y1, cx1, cy1, cx2, cy2, x2, y2 };
 }
 
 function nearestPortToPoint(src: NodeRect, tx: number, ty: number): PortPoint {
@@ -292,8 +382,10 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     nodes,
     edges,
     dragOffsets,
+    resizeSizes,
     selectedIds,
     focusId,
+    hoveredId = null,
     xrayState,
     unresolvedLoopholes,
     marqueeWorld,
@@ -339,93 +431,89 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
   ctx.scale(cam.zoom, cam.zoom);
 
   const activeEdgeSet = xrayState ? new Set(xrayState.active_edges) : null;
+  const sceneRects = new Map<string, NodeRect>();
+  const obstacleList: Array<{ id: string; rect: NodeRect }> = [];
+  for (const node of nodes.values()) {
+    const rect = getNodeRect(node, dragOffsets, resizeSizes);
+    sceneRects.set(node.id, rect);
+    obstacleList.push({ id: node.id, rect });
+  }
 
-  // 3. Directed Cubic Bezier Edges
+  // 3. Directed Cubic Bezier Edges (dynamic 4-side routing + obstacle deflection)
   for (const edge of edges.values()) {
     const srcNode = nodes.get(edge.source_id);
     const dstNode = nodes.get(edge.target_id);
-    if (!srcNode || !dstNode) {
+    const srcRect = sceneRects.get(edge.source_id);
+    const dstRect = sceneRects.get(edge.target_id);
+    if (!srcNode || !dstNode || !srcRect || !dstRect) {
       continue;
     }
 
-    const srcRect = getNodeRect(srcNode, dragOffsets);
-    const dstRect = getNodeRect(dstNode, dragOffsets);
-
-    let x1: number;
-    let y1: number;
-    let cx1: number;
-    let cy1: number;
-    let cx2: number;
-    let cy2: number;
-    let x2: number;
-    let y2: number;
-
-    if (edge.type === "derives" || edge.type === "branches" || edge.type === "synthesizes") {
-      x1 = srcRect.x + srcRect.w;
-      y1 = srcRect.y + srcRect.h / 2;
-      x2 = dstRect.x;
-      y2 = dstRect.y + dstRect.h / 2;
-      const dx = Math.max(48, Math.abs(x2 - x1) * 0.45);
-      cx1 = x1 + dx;
-      cy1 = y1;
-      cx2 = x2 - dx;
-      cy2 = y2;
-    } else {
-      const { from, to } = nearestPortPair(srcRect, dstRect);
-      x1 = from.x;
-      y1 = from.y;
-      x2 = to.x;
-      y2 = to.y;
-      const dist = Math.hypot(x2 - x1, y2 - y1);
-      const offset = Math.max(36, dist * 0.35);
-      cx1 = x1 + from.nx * offset;
-      cy1 = y1 + from.ny * offset;
-      cx2 = x2 + to.nx * offset;
-      cy2 = y2 + to.ny * offset;
-    }
+    const { x1, y1, cx1, cy1, cx2, cy2, x2, y2 } = computeDynamicEdgeCurve(
+      srcRect,
+      dstRect,
+      srcNode.id,
+      dstNode.id,
+      obstacleList,
+    );
 
     let stroke = p.edgeDefault;
-    let lineWidth = 1.5;
+    let lineWidth = 2.0;
     let dash: number[] = [];
     let alpha = 1.0;
 
     switch (edge.type) {
       case "derives":
-      case "synthesizes":
         stroke = p.edgeDefault;
-        lineWidth = 1.5;
+        lineWidth = 2.0;
+        break;
+      case "synthesizes":
+        stroke = p.edgeSynthesis;
+        lineWidth = 2.0;
         break;
       case "branches":
         stroke = p.edgeBranch;
-        lineWidth = 1.5;
+        lineWidth = 2.0;
         dash = [6, 4];
         break;
       case "challenges":
         stroke = p.edgeChallenge;
-        lineWidth = 1.75;
+        lineWidth = 2.25;
         if (srcNode.status === "resolved" || srcNode.status === "dismissed") {
           alpha = 0.3;
         }
         break;
       case "resolves":
         stroke = p.edgeResolve;
-        lineWidth = 1.5;
+        lineWidth = 2.0;
         dash = [2, 4];
         break;
       case "references":
         stroke = p.edgeReference;
-        lineWidth = 1.25;
-        dash = [3, 5];
+        lineWidth = 1.75;
+        dash = [4, 5];
         break;
     }
 
+    const isIncidentEmphasized =
+      srcNode.id === focusId ||
+      dstNode.id === focusId ||
+      srcNode.id === hoveredId ||
+      dstNode.id === hoveredId ||
+      dragOffsets.has(srcNode.id) ||
+      dragOffsets.has(dstNode.id) ||
+      Boolean(resizeSizes?.has(srcNode.id)) ||
+      Boolean(resizeSizes?.has(dstNode.id));
+
     if (activeEdgeSet) {
       if (activeEdgeSet.has(edge.id)) {
-        lineWidth = 2.5;
+        lineWidth = 2.75;
         alpha = 1.0;
       } else {
         alpha = 0.12;
       }
+    } else if (isIncidentEmphasized) {
+      lineWidth = 2.75;
     }
 
     ctx.save();
@@ -433,6 +521,11 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     ctx.strokeStyle = stroke;
     ctx.fillStyle = stroke;
     ctx.lineWidth = lineWidth;
+    ctx.lineCap = "round";
+    if (isIncidentEmphasized && (!activeEdgeSet || activeEdgeSet.has(edge.id))) {
+      ctx.shadowColor = stroke;
+      ctx.shadowBlur = 8;
+    }
     ctx.setLineDash(dash);
 
     ctx.beginPath();
@@ -441,18 +534,17 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     ctx.stroke();
 
     ctx.setLineDash([]);
-    drawArrowhead(ctx, x2, y2, cx2, cy2, 7);
+    drawArrowhead(ctx, x2, y2, cx2, cy2, 8.5);
     ctx.restore();
   }
 
   // 4. Hold-V X-Ray Halos
   if (xrayState) {
     for (const [nodeId, mode] of Object.entries(xrayState.node_modes)) {
-      const node = nodes.get(nodeId);
-      if (!node) {
+      const rect = sceneRects.get(nodeId);
+      if (!rect) {
         continue;
       }
-      const rect = getNodeRect(node, dragOffsets);
       const color = getXrayColor(mode, p);
       ctx.save();
       ctx.strokeStyle = color;
@@ -476,7 +568,8 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     const maxVy = viewBR.y + pad;
 
     for (const node of nodes.values()) {
-      const rect = getNodeRect(node, dragOffsets);
+      const rect = sceneRects.get(node.id);
+      if (!rect) continue;
       if (
         rect.x + rect.w < minVx ||
         rect.x > maxVx ||
@@ -560,9 +653,8 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
 
   // 7. Live Alt+Drag Edge Preview
   if (edgePreviewWorld) {
-    const srcNode = nodes.get(edgePreviewWorld.sourceId);
-    if (srcNode) {
-      const srcRect = getNodeRect(srcNode, dragOffsets);
+    const srcRect = sceneRects.get(edgePreviewWorld.sourceId);
+    if (srcRect) {
       const from = nearestPortToPoint(
         srcRect,
         edgePreviewWorld.targetX,

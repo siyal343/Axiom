@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
@@ -11,9 +12,11 @@ use crate::graph::compiler::compile_context;
 use crate::graph::models::{
     AppSettingsDto, ApplyResult, CameraState, CompiledXray, EdgeType, GraphOp, LensKind,
     LensStreamEvent, NodePositionUpdate, NodeType, SaveSettingsInput, SearchHit,
-    SpawnConnectedResult, TestConnectionResult, WorkspaceSnapshot,
+    SpawnConnectedResult, SpawnDirection, TestConnectionResult, WorkspaceSnapshot,
 };
-use crate::graph::spatial::compute_tidy_subtree;
+use crate::graph::spatial::{
+    compute_tidy_subtree, resolve_overlaps as compute_resolve_overlaps,
+};
 use crate::graph::GraphEngine;
 use crate::ipc::{ActiveWorkspace, AppState};
 
@@ -95,6 +98,7 @@ pub fn spawn_connected_node(
     edge_type: EdgeType,
     node_type: NodeType,
     title: Option<String>,
+    direction: Option<SpawnDirection>,
     state: tauri::State<'_, AppState>,
 ) -> Result<SpawnConnectedResult, IpcError> {
     let mut workspace_guard = state
@@ -120,6 +124,7 @@ pub fn spawn_connected_node(
         edge_type,
         node_type,
         title,
+        direction,
     )?;
     if !node.context_controls.exclude_from_ai && node.content_hash != node.summary_hash {
         let _ = state.summary_tx.send(node.id.clone());
@@ -186,6 +191,43 @@ pub fn tidy_subtree(
         .ok_or_else(IpcError::workspace_not_open)?;
 
     let updates = compute_tidy_subtree(&active.engine, &root_id)?;
+    if !updates.is_empty() {
+        db::queries::apply_ops(
+            conn,
+            &mut active.engine,
+            &[GraphOp::MoveNodes {
+                moves: updates.clone(),
+            }],
+        )?;
+    }
+
+    Ok(updates)
+}
+
+#[tauri::command]
+pub fn resolve_overlaps(
+    pinned_ids: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<NodePositionUpdate>, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let mut workspace_guard = state
+        .workspace
+        .write()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    let pinned_set: HashSet<String> = pinned_ids.into_iter().collect();
+    let updates = compute_resolve_overlaps(&active.engine, &pinned_set);
     if !updates.is_empty() {
         db::queries::apply_ops(
             conn,

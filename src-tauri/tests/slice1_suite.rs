@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use rusqlite::params;
@@ -12,11 +13,12 @@ use axiom_canvas_lib::graph::compiler::compile_context;
 use axiom_canvas_lib::graph::models::{
     compute_content_hash, estimate_tokens, CameraState, ContextControls, CreatedBy, EdgeDto,
     EdgeType, EdgeWeight, GraphOp, InclusionMode, NodeDto, NodeLayout, NodeLensOrigin,
-    NodeMetadata, NodeStatus, NodeType, Severity,
+    NodeMetadata, NodeStatus, NodeType, Severity, SpawnDirection,
 };
 use axiom_canvas_lib::graph::spatial::{
-    compute_tidy_subtree, effective_height, find_free_position, DEFAULT_NODE_HEIGHT,
-    DEFAULT_NODE_WIDTH, H_GAP,
+    compute_tidy_subtree, effective_height, find_best_open_direction, find_free_position,
+    find_free_position_in_direction, resolve_overlaps, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH,
+    H_GAP, SIDE_GAP,
 };
 use axiom_canvas_lib::graph::GraphEngine;
 
@@ -585,6 +587,7 @@ fn ut_rs_11_rtree_non_overlap() {
             EdgeType::Derives,
             NodeType::Branch,
             Some(format!("Child {i}")),
+            None,
         )
         .expect("spawn sequential child");
     }
@@ -1093,4 +1096,127 @@ fn bench_500_node_compile_and_search() {
         "search_nodes exceeded 15ms budget: {:?}",
         search_elapsed
     );
+}
+
+#[test]
+fn directional_spawn_places_all_four_cardinal_directions_without_overlap() {
+    let tmp = NamedTempFile::new().expect("create temp file");
+    let mut conn = open_connection(tmp.path()).expect("open sqlite connection");
+    let mut engine = GraphEngine::default();
+
+    let center = make_node("center", NodeType::Core, "Center", "", 0.0, 0.0);
+    apply_ops(&mut conn, &mut engine, &[GraphOp::CreateNode { node: center }])
+        .expect("create center");
+
+    let expected_order = [
+        SpawnDirection::Right,
+        SpawnDirection::Bottom,
+        SpawnDirection::Left,
+        SpawnDirection::Top,
+    ];
+
+    for (idx, expected_dir) in expected_order.iter().enumerate() {
+        let center_ref = engine.nodes.get("center").expect("center exists").clone();
+        let best = find_best_open_direction(
+            &engine.spatial,
+            &center_ref,
+            DEFAULT_NODE_WIDTH,
+            DEFAULT_NODE_HEIGHT,
+        );
+        assert_eq!(best, *expected_dir);
+
+        let (x, y) = find_free_position_in_direction(
+            &engine.spatial,
+            &center_ref,
+            best,
+            DEFAULT_NODE_WIDTH,
+            DEFAULT_NODE_HEIGHT,
+        );
+
+        match best {
+            SpawnDirection::Right => assert!((x - (DEFAULT_NODE_WIDTH + H_GAP)).abs() < 1e-6),
+            SpawnDirection::Left => assert!((x - -(DEFAULT_NODE_WIDTH + H_GAP)).abs() < 1e-6),
+            SpawnDirection::Bottom => assert!((y - (DEFAULT_NODE_HEIGHT + SIDE_GAP)).abs() < 1e-6),
+            SpawnDirection::Top => assert!((y - -(DEFAULT_NODE_HEIGHT + SIDE_GAP)).abs() < 1e-6),
+        }
+
+        let child = make_node(
+            &format!("cardinal_{idx}"),
+            NodeType::Branch,
+            &format!("Cardinal {idx}"),
+            "",
+            x,
+            y,
+        );
+        apply_ops(&mut conn, &mut engine, &[GraphOp::CreateNode { node: child }])
+            .expect("insert cardinal child");
+    }
+
+    // Explicit Left spawn_connected_node steps further left without colliding.
+    let (left_node, _) = spawn_connected_node(
+        &mut conn,
+        &mut engine,
+        "center",
+        EdgeType::Derives,
+        NodeType::Branch,
+        Some("Second Left".to_owned()),
+        Some(SpawnDirection::Left),
+    )
+    .expect("spawn explicit left node");
+    assert!(left_node.layout.x < 0.0);
+
+    let all: Vec<&NodeDto> = engine.nodes.values().collect();
+    for (i, a) in all.iter().enumerate() {
+        for b in all.iter().skip(i + 1) {
+            assert!(!rects_overlap(a, b), "Nodes {} and {} overlap", a.id, b.id);
+        }
+    }
+}
+
+#[test]
+fn resolve_overlaps_keeps_pinned_node_stationary_and_separates_collisions() {
+    let tmp = NamedTempFile::new().expect("create temp file");
+    let mut conn = open_connection(tmp.path()).expect("open sqlite connection");
+    let mut engine = GraphEngine::default();
+
+    let pinned = make_node("pinned", NodeType::Core, "Pinned", "", 100.0, 100.0);
+    let crowd_a = make_node("crowd_a", NodeType::Branch, "Crowd A", "", 150.0, 120.0);
+    let crowd_b = make_node("crowd_b", NodeType::Branch, "Crowd B", "", 160.0, 130.0);
+
+    apply_ops(
+        &mut conn,
+        &mut engine,
+        &[
+            GraphOp::CreateNode { node: pinned },
+            GraphOp::CreateNode { node: crowd_a },
+            GraphOp::CreateNode { node: crowd_b },
+        ],
+    )
+    .expect("seed overlapping nodes");
+
+    let pinned_set: HashSet<String> = ["pinned".to_owned()].into_iter().collect();
+    let updates = resolve_overlaps(&engine, &pinned_set);
+    assert!(!updates.is_empty());
+    assert!(
+        updates.iter().all(|u| u.id != "pinned"),
+        "pinned node must remain stationary: {updates:?}"
+    );
+
+    apply_ops(
+        &mut conn,
+        &mut engine,
+        &[GraphOp::MoveNodes { moves: updates }],
+    )
+    .expect("apply overlap resolution");
+
+    let pinned_after = engine.nodes.get("pinned").expect("pinned present");
+    assert!((pinned_after.layout.x - 100.0).abs() < 1e-6);
+    assert!((pinned_after.layout.y - 100.0).abs() < 1e-6);
+
+    let all: Vec<&NodeDto> = engine.nodes.values().collect();
+    for (i, a) in all.iter().enumerate() {
+        for b in all.iter().skip(i + 1) {
+            assert!(!rects_overlap(a, b), "Nodes {} and {} still overlap", a.id, b.id);
+        }
+    }
 }

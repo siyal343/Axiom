@@ -14,11 +14,12 @@
   /* Borders & Hairlines */
   --border-subtle: #262b36;
   --border-strong: #3a4252;
-  --edge-default: #3f4756;
-  --edge-branch: #5b7fa6;
-  --edge-challenge: #d97706;
-  --edge-resolve: #2f855a;
-  --edge-reference: #4b5563;
+  --edge-default: #7dd3fc;
+  --edge-branch: #60a5fa;
+  --edge-synthesis: #34d399;
+  --edge-challenge: #f59e0b;
+  --edge-resolve: #4ade80;
+  --edge-reference: #a78bfa;
 
   /* Typography */
   --text-primary: #e6eaf0;
@@ -76,11 +77,12 @@
   --bg-code: #f1f3f6;
   --border-subtle: #c5cedb;
   --border-strong: #94a3b8;
-  --edge-default: #64748b;
+  --edge-default: #0284c7;
   --edge-branch: #2563eb;
+  --edge-synthesis: #059669;
   --edge-challenge: #d97706;
-  --edge-resolve: #15803d;
-  --edge-reference: #64748b;
+  --edge-resolve: #16a34a;
+  --edge-reference: #7c3aed;
   --text-primary: #111827;
   --text-secondary: #4b5563;
   --text-muted: #525c6c;
@@ -514,7 +516,7 @@ body,
 /* Floating Hover Pill */
 .hover-pill {
   position: absolute;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 18px);
   left: 0;
   max-width: 100%;
   display: inline-flex;
@@ -1535,11 +1537,219 @@ body,
 .settings-btn:active:not(:disabled),
 .perf-hud__close:active:not(:disabled),
 .canvas-controls__btn:active:not(:disabled),
-.empty-canvas-prompt__btn:active:not(:disabled) {
+.empty-canvas-prompt__btn:active:not(:disabled),
+.node-port:active:not(:disabled),
+.ai-thinking-pill__cancel:active:not(:disabled) {
   transform: scale(0.97);
 }
 
+/* Cardinal Omnidirectional Spawn Ports */
+.node-port {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-pill);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 26;
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(6px);
+  transition: transform 120ms var(--ease-out), border-color 120ms var(--ease-out), background-color 120ms var(--ease-out);
+}
+
+.node-port--top {
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.node-port--top:active:not(:disabled) {
+  transform: translateX(-50%) scale(0.95);
+}
+
+.node-port--right {
+  right: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.node-port--right:active:not(:disabled) {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.node-port--bottom {
+  bottom: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.node-port--bottom:active:not(:disabled) {
+  transform: translateX(-50%) scale(0.95);
+}
+
+.node-port--left {
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.node-port--left:active:not(:disabled) {
+  transform: translateY(-50%) scale(0.95);
+}
+
+/* Node Card Resize Handles */
+.node-card__resize-handle {
+  position: absolute;
+  touch-action: none;
+  z-index: 10;
+}
+
+.node-card__resize-handle--e {
+  top: 8px;
+  right: -4px;
+  width: 8px;
+  bottom: 14px;
+  cursor: ew-resize;
+}
+
+.node-card__resize-handle--s {
+  left: 8px;
+  bottom: -4px;
+  height: 8px;
+  right: 14px;
+  cursor: ns-resize;
+}
+
+.node-card__resize-handle--se {
+  right: 1px;
+  bottom: 1px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  border-bottom-right-radius: calc(var(--radius-card) - 1px);
+  opacity: 0;
+  background: linear-gradient(
+    135deg,
+    transparent 42%,
+    var(--border-strong) 42%,
+    var(--border-strong) 52%,
+    transparent 52%,
+    transparent 68%,
+    var(--border-strong) 68%,
+    var(--border-strong) 78%,
+    transparent 78%
+  );
+  transition: opacity 120ms var(--ease-out);
+}
+
+.node-card--focused .node-card__resize-handle--se {
+  opacity: 0.75;
+}
+
+/* AI Thinking & Streaming Indicator */
+.node-card--thinking {
+  box-shadow: 0 0 0 1.5px var(--ring-edit), var(--shadow-card);
+}
+
+.node-card__footer--thinking {
+  justify-content: flex-start;
+}
+
+.ai-thinking-pill {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 68;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-pill);
+  border: 1px solid var(--ring-edit);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(10px);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ai-thinking-pill__spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ai-thinking-pill__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ring-edit);
+  animation: ai-dot-bounce 900ms ease-in-out infinite;
+}
+
+.ai-thinking-pill__dot:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.ai-thinking-pill__dot:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes ai-dot-bounce {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.ai-thinking-pill__cancel {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-code);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: transform 120ms var(--ease-out), border-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+
 @media (hover: hover) and (pointer: fine) {
+  .node-card:hover .node-card__resize-handle--se {
+    opacity: 0.75;
+  }
+
+  .node-port:hover {
+    border-color: var(--ring-edit);
+    background: var(--bg-card-elevated);
+  }
+
+  .ai-thinking-pill__cancel:hover {
+    border-color: var(--ring-edit);
+    color: var(--text-primary);
+  }
+
   .hover-pill__btn:hover {
     background: var(--bg-card-elevated);
     color: var(--text-primary);
@@ -1593,7 +1803,8 @@ body,
   }
 
   .node-card--shaking,
-  .node-card__streaming-dot {
+  .node-card__streaming-dot,
+  .ai-thinking-pill__dot {
     animation: none;
   }
 

@@ -19,6 +19,7 @@ export type EdgeType =
   | "synthesizes"
   | "references";
 export type EdgeWeight = "full" | "summary";
+export type SpawnDirection = "right" | "left" | "top" | "bottom";
 export type InclusionMode = "pin" | "focus" | "full" | "summary" | "loophole" | "reference";
 export type ProviderKind = "openai_compat" | "anthropic" | "ollama";
 

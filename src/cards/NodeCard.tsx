@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { NodeDto } from "../ipc/types";
+import type { NodeDto, SpawnDirection } from "../ipc/types";
+import { activeRunFocusIds, activeRunStatus } from "../store/aiRunner";
 import {
   cardDomRefs,
   dragOffsets,
@@ -7,6 +8,7 @@ import {
   mutateGraphUndoable,
   nodesMap,
   queueNodeResize,
+  resizeSizes,
   spawnChild,
   unresolvedLoopholes,
 } from "../store/graphStore";
@@ -45,6 +47,8 @@ export function NodeCard({ node }: NodeCardProps) {
 
   const xrayMode = xray ? xray.node_modes[node.id] : undefined;
   const isXrayDimmed = xray !== null && xrayMode === undefined;
+  const isThinkingTarget =
+    activeRunStatus.value === "thinking" && activeRunFocusIds.value.includes(node.id);
   const showHoverPill =
     !interacting &&
     modalState.value === "navigate" &&
@@ -66,7 +70,7 @@ export function NodeCard({ node }: NodeCardProps) {
 
     let timer: ReturnType<typeof setTimeout> | null = null;
     const observer = new ResizeObserver(() => {
-      if (node.layout.collapsed) {
+      if (node.layout.collapsed || resizeSizes.has(node.id) || isInteracting.value) {
         return;
       }
       if (timer !== null) {
@@ -74,13 +78,12 @@ export function NodeCard({ node }: NodeCardProps) {
       }
       timer = setTimeout(() => {
         const currentEl = cardRef.current;
-        if (!currentEl) {
+        if (!currentEl || resizeSizes.has(node.id) || isInteracting.value) {
           return;
         }
-        const h = currentEl.offsetHeight;
-        const w = currentEl.offsetWidth || node.layout.width;
-        if (h > 0) {
-          queueNodeResize(node.id, w, h);
+        if (currentEl.scrollHeight > node.layout.height + 2) {
+          const nextW = Math.max(node.layout.width, currentEl.offsetWidth || node.layout.width);
+          queueNodeResize(node.id, nextW, currentEl.scrollHeight);
         }
       }, 90);
     });
@@ -93,7 +96,7 @@ export function NodeCard({ node }: NodeCardProps) {
       observer.disconnect();
       cardDomRefs.delete(node.id);
     };
-  }, [node.id, node.layout.collapsed, node.layout.width]);
+  }, [node.id, node.layout.collapsed, node.layout.width, node.layout.height]);
 
   useEffect(() => {
     if (!showHoverPill && moreOpen) {
@@ -102,6 +105,9 @@ export function NodeCard({ node }: NodeCardProps) {
   }, [showHoverPill, moreOpen]);
 
   const offset = dragOffsets.get(node.id);
+  const resized = resizeSizes.get(node.id);
+  const displayWidth = resized ? resized.width : node.layout.width;
+  const displayHeight = resized ? resized.height : node.layout.height;
   const tx = node.layout.x + (offset?.x ?? 0);
   const ty = node.layout.y + (offset?.y ?? 0);
 
@@ -119,6 +125,7 @@ export function NodeCard({ node }: NodeCardProps) {
   if (isFocused) classes.push("node-card--focused");
   if (isSelected) classes.push("node-card--selected");
   if (isHovered || isFocused || moreOpen) classes.push("node-card--elevated");
+  if (isThinkingTarget) classes.push("node-card--thinking");
   if (isShaking) classes.push("node-card--shaking");
   if (isXrayDimmed) classes.push("node-card--xray-dim");
 
@@ -133,10 +140,10 @@ export function NodeCard({ node }: NodeCardProps) {
     void mutateGraphUndoable(label, forward, inverse);
   };
 
-  const handleSpawnChild = (e: MouseEvent): void => {
+  const handleSpawnChild = (e: MouseEvent, dir?: SpawnDirection): void => {
     e.stopPropagation();
     const edgeType = node.type === "loophole" ? "resolves" : "derives";
-    void spawnChild(node.id, edgeType, "core").then(({ node: created }) => {
+    void spawnChild(node.id, edgeType, "core", undefined, true, dir).then(({ node: created }) => {
       enterEditMode(created);
     });
   };
@@ -164,7 +171,8 @@ export function NodeCard({ node }: NodeCardProps) {
       data-node-id={node.id}
       style={{
         transform: `translate3d(${tx}px, ${ty}px, 0)`,
-        width: `${node.layout.width}px`,
+        width: `${displayWidth}px`,
+        minHeight: node.layout.collapsed ? undefined : `${displayHeight}px`,
       }}
       onPointerEnter={() => {
         hoveredId.value = node.id;
@@ -175,6 +183,21 @@ export function NodeCard({ node }: NodeCardProps) {
         }
       }}
     >
+      {showHoverPill &&
+        (["top", "right", "bottom", "left"] as const).map((dir) => (
+          <button
+            key={dir}
+            type="button"
+            class={`node-port node-port--${dir}`}
+            aria-label={`Spawn connected node to the ${dir}`}
+            title={`Add child (${dir})`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => handleSpawnChild(e, dir)}
+          >
+            +
+          </button>
+        ))}
+
       {showHoverPill && (
         <div
           class="hover-pill"
@@ -338,11 +361,38 @@ export function NodeCard({ node }: NodeCardProps) {
         />
       )}
 
+      {isThinkingTarget && !node.layout.collapsed && (
+        <footer class="node-card__footer node-card__footer--thinking">
+          <span class="node-card__streaming-dot" aria-hidden="true" />
+          <span class="node-card__streaming-hint">Thinking…</span>
+        </footer>
+      )}
+
       {node.status === "draft" && !node.layout.collapsed && (
         <footer class="node-card__footer">
           <span class="node-card__streaming-dot" aria-hidden="true" />
           <span class="node-card__streaming-hint">Esc to stop</span>
         </footer>
+      )}
+
+      {!node.layout.collapsed && (
+        <>
+          <div
+            class="node-card__resize-handle node-card__resize-handle--e"
+            data-resize-handle="e"
+            aria-hidden="true"
+          />
+          <div
+            class="node-card__resize-handle node-card__resize-handle--s"
+            data-resize-handle="s"
+            aria-hidden="true"
+          />
+          <div
+            class="node-card__resize-handle node-card__resize-handle--se"
+            data-resize-handle="se"
+            aria-hidden="true"
+          />
+        </>
       )}
     </article>
   );

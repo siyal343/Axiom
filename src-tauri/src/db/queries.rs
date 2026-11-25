@@ -7,9 +7,12 @@ use crate::error::IpcError;
 use crate::graph::models::{
     compute_content_hash, estimate_tokens, now_epoch_ms, ApplyResult, CameraState, ContextControls,
     CreatedBy, EdgeDto, EdgeType, EdgeWeight, GraphOp, NodeDto, NodeLayout, NodeLensOrigin,
-    NodeMetadata, NodeStatus, NodeType, SearchHit, Severity,
+    NodeMetadata, NodeStatus, NodeType, SearchHit, Severity, SpawnDirection,
 };
-use crate::graph::spatial::{find_free_position, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH};
+use crate::graph::spatial::{
+    directional_slot, find_best_open_direction, find_free_position,
+    find_free_position_in_direction, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH,
+};
 use crate::graph::GraphEngine;
 
 enum EngineMutation {
@@ -441,20 +444,53 @@ pub fn spawn_connected_node(
     edge_type: EdgeType,
     node_type: NodeType,
     title: Option<String>,
+    direction: Option<SpawnDirection>,
 ) -> Result<(NodeDto, EdgeDto), IpcError> {
     let parent = engine
         .nodes
         .get(parent_id)
         .ok_or_else(|| IpcError::validation(format!("Parent node {parent_id} not found")))?;
 
-    let (x, y) = find_free_position(
-        &engine.spatial,
-        &[parent],
-        node_type,
-        DEFAULT_NODE_WIDTH,
-        DEFAULT_NODE_HEIGHT,
-        0,
-    );
+    let (x, y) = match direction {
+        Some(dir) => find_free_position_in_direction(
+            &engine.spatial,
+            parent,
+            dir,
+            DEFAULT_NODE_WIDTH,
+            DEFAULT_NODE_HEIGHT,
+        ),
+        None => {
+            let best_dir = find_best_open_direction(
+                &engine.spatial,
+                parent,
+                DEFAULT_NODE_WIDTH,
+                DEFAULT_NODE_HEIGHT,
+            );
+            let (sx, sy) =
+                directional_slot(parent, best_dir, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT);
+            if !engine
+                .spatial
+                .intersects_rect(sx, sy, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT)
+            {
+                find_free_position_in_direction(
+                    &engine.spatial,
+                    parent,
+                    best_dir,
+                    DEFAULT_NODE_WIDTH,
+                    DEFAULT_NODE_HEIGHT,
+                )
+            } else {
+                find_free_position(
+                    &engine.spatial,
+                    &[parent],
+                    node_type,
+                    DEFAULT_NODE_WIDTH,
+                    DEFAULT_NODE_HEIGHT,
+                    0,
+                )
+            }
+        }
+    };
 
     let resolved_title = match title {
         Some(t) if !t.trim().is_empty() => t,
