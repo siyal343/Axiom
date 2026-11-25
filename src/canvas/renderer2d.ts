@@ -431,12 +431,29 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
   ctx.scale(cam.zoom, cam.zoom);
 
   const activeEdgeSet = xrayState ? new Set(xrayState.active_edges) : null;
+  const viewTL = screenToWorld(0, 0, cam);
+  const viewBR = screenToWorld(width, height, cam);
+  const edgePad = 240;
+  const minEdgeVx = viewTL.x - edgePad;
+  const minEdgeVy = viewTL.y - edgePad;
+  const maxEdgeVx = viewBR.x + edgePad;
+  const maxEdgeVy = viewBR.y + edgePad;
+  const isBirdsEyeLod = cam.zoom < LOD_THRESHOLD;
+
   const sceneRects = new Map<string, NodeRect>();
-  const obstacleList: Array<{ id: string; rect: NodeRect }> = [];
+  const visibleObstacles: Array<{ id: string; rect: NodeRect }> = [];
   for (const node of nodes.values()) {
     const rect = getNodeRect(node, dragOffsets, resizeSizes);
     sceneRects.set(node.id, rect);
-    obstacleList.push({ id: node.id, rect });
+    if (
+      !isBirdsEyeLod &&
+      rect.x + rect.w >= minEdgeVx &&
+      rect.x <= maxEdgeVx &&
+      rect.y + rect.h >= minEdgeVy &&
+      rect.y <= maxEdgeVy
+    ) {
+      visibleObstacles.push({ id: node.id, rect });
+    }
   }
 
   // 3. Directed Cubic Bezier Edges (dynamic 4-side routing + obstacle deflection)
@@ -449,12 +466,25 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
       continue;
     }
 
+    const edgeMinX = Math.min(srcRect.x, dstRect.x);
+    const edgeMinY = Math.min(srcRect.y, dstRect.y);
+    const edgeMaxX = Math.max(srcRect.x + srcRect.w, dstRect.x + dstRect.w);
+    const edgeMaxY = Math.max(srcRect.y + srcRect.h, dstRect.y + dstRect.h);
+    if (
+      edgeMaxX < minEdgeVx ||
+      edgeMinX > maxEdgeVx ||
+      edgeMaxY < minEdgeVy ||
+      edgeMinY > maxEdgeVy
+    ) {
+      continue;
+    }
+
     const { x1, y1, cx1, cy1, cx2, cy2, x2, y2 } = computeDynamicEdgeCurve(
       srcRect,
       dstRect,
       srcNode.id,
       dstNode.id,
-      obstacleList,
+      visibleObstacles,
     );
 
     let stroke = p.edgeDefault;
@@ -558,9 +588,7 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
   }
 
   // 5. Bird's-Eye LOD Cards (zoom < 0.45)
-  if (cam.zoom < LOD_THRESHOLD) {
-    const viewTL = screenToWorld(0, 0, cam);
-    const viewBR = screenToWorld(width, height, cam);
+  if (isBirdsEyeLod) {
     const pad = 120;
     const minVx = viewTL.x - pad;
     const minVy = viewTL.y - pad;
