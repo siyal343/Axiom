@@ -266,6 +266,7 @@ async fn openai_sse_diverge_3x_spawns_non_overlapping_branches_and_persists() {
             lens: LensKind::Diverge,
             focus_ids: vec!["node_root".to_owned()],
             custom_prompt: None,
+            in_place: false,
             config: ModelTierConfig {
                 provider: ProviderKind::OpenaiCompat,
                 base_url: srv.base_url,
@@ -362,6 +363,7 @@ async fn anthropic_sse_red_team_checks_headers_and_challenges_direction() {
             lens: LensKind::RedTeam,
             focus_ids: vec!["node_root".to_owned()],
             custom_prompt: None,
+            in_place: false,
             config: ModelTierConfig {
                 provider: ProviderKind::Anthropic,
                 base_url: srv.base_url,
@@ -440,6 +442,7 @@ async fn ollama_ndjson_feynman_places_probe_above_and_derives_from_focus() {
             lens: LensKind::Feynman,
             focus_ids: vec!["node_root".to_owned()],
             custom_prompt: None,
+            in_place: false,
             config: ModelTierConfig {
                 provider: ProviderKind::Ollama,
                 base_url: srv.base_url,
@@ -519,6 +522,7 @@ async fn mid_stream_cancellation_persists_partial_text_and_emits_cancelled() {
             lens: LensKind::Diverge,
             focus_ids: vec!["node_root".to_owned()],
             custom_prompt: None,
+            in_place: false,
             config: ModelTierConfig {
                 provider: ProviderKind::OpenaiCompat,
                 base_url: srv.base_url,
