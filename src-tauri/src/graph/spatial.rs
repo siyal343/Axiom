@@ -362,7 +362,10 @@ pub fn compute_tidy_subtree(
         let mut children: Vec<(&NodeDto, String)> = Vec::new();
         if let Some(out_edges) = engine.outgoing.get(&u_id) {
             for edge in out_edges {
-                if !matches!(edge.edge_type, EdgeType::Derives | EdgeType::Branches) {
+                if !matches!(
+                    edge.edge_type,
+                    EdgeType::Derives | EdgeType::Branches | EdgeType::Synthesizes
+                ) {
                     continue;
                 }
                 if let Some(target) = engine.nodes.get(&edge.target_id) {
@@ -389,10 +392,11 @@ pub fn compute_tidy_subtree(
         spine_children.insert(u_id, child_ids);
     }
 
-    // Collect directly attached Probe (above) and Loophole (below) satellites per spine node.
+    // Collect directly attached Probe (above), Loophole (below), and Resolves mitigation satellites per spine node.
     let mut assigned_satellites: HashSet<String> = HashSet::new();
     let mut probes_of: HashMap<String, Vec<String>> = HashMap::new();
     let mut loopholes_of: HashMap<String, Vec<String>> = HashMap::new();
+    let mut mitigations_of: HashMap<String, Vec<String>> = HashMap::new();
 
     for u_id in &bfs_order {
         let mut probes: Vec<&NodeDto> = Vec::new();
@@ -451,6 +455,37 @@ pub fn compute_tidy_subtree(
             .filter(|n| assigned_satellites.insert(n.id.clone()))
             .map(|n| n.id.clone())
             .collect();
+
+        for lid in &loophole_ids {
+            let mut mits: Vec<&NodeDto> = Vec::new();
+            if let Some(in_edges) = engine.incoming.get(lid) {
+                for edge in in_edges {
+                    if edge.edge_type != EdgeType::Resolves {
+                        continue;
+                    }
+                    if let Some(src) = engine.nodes.get(&edge.source_id) {
+                        if !visited.contains(&src.id) && !assigned_satellites.contains(&src.id) {
+                            mits.push(src);
+                        }
+                    }
+                }
+            }
+            mits.sort_by(|a, b| {
+                a.layout
+                    .x
+                    .total_cmp(&b.layout.x)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+            let mit_ids: Vec<String> = mits
+                .into_iter()
+                .filter(|n| assigned_satellites.insert(n.id.clone()))
+                .map(|n| n.id.clone())
+                .collect();
+            if !mit_ids.is_empty() {
+                mitigations_of.insert(lid.clone(), mit_ids);
+            }
+        }
+
         loopholes_of.insert(u_id.clone(), loophole_ids);
     }
 
@@ -519,6 +554,11 @@ pub fn compute_tidy_subtree(
             moved_set.insert(id.as_str());
         }
     }
+    for ms in mitigations_of.values() {
+        for id in ms {
+            moved_set.insert(id.as_str());
+        }
+    }
 
     let external_nodes: Vec<NodeDto> = engine
         .nodes
@@ -568,7 +608,7 @@ pub fn compute_tidy_subtree(
             }
         }
 
-        // Finalize Loophole satellites strictly below u
+        // Finalize Loophole satellites strictly below u, then Resolves mitigations adjacent to each loophole
         if let (Some(ls), Some(offsets)) = (loopholes_of.get(u_id), loophole_layouts.get(u_id)) {
             let base_y = uy + u_h + SIDE_GAP;
             for (lid, &(dx, dy)) in ls.iter().zip(offsets.iter()) {
@@ -590,6 +630,50 @@ pub fn compute_tidy_subtree(
                             x: fx,
                             y: fy,
                         });
+                    }
+                }
+            }
+
+            for lid in ls {
+                let Some(mits) = mitigations_of.get(lid) else {
+                    continue;
+                };
+                let (Some(l_node), Some(&(lx, ly))) =
+                    (engine.nodes.get(lid), final_positions.get(lid))
+                else {
+                    continue;
+                };
+                let lw = l_node.layout.width;
+                let lh = effective_height(l_node);
+                let mut prev_bottom = ly + lh;
+
+                for mid in mits {
+                    if let Some(m_node) = engine.nodes.get(mid) {
+                        let mw = m_node.layout.width;
+                        let mh = effective_height(m_node);
+                        let right_x = lx + lw + 24.0;
+                        let below_y = prev_bottom + V_GAP;
+
+                        let (fx, fy) = if !scratch.intersects_rect(right_x, ly, mw, mh) {
+                            (right_x, ly)
+                        } else if !scratch.intersects_rect(lx, below_y, mw, mh) {
+                            (lx, below_y)
+                        } else {
+                            nudge_clear_directional(&scratch, 1, lx, below_y, mw, mh)
+                        };
+
+                        scratch.upsert_rect(mid.clone(), fx, fy, mw, mh);
+                        final_positions.insert(mid.clone(), (fx, fy));
+                        if (fx - m_node.layout.x).abs() > 1e-6
+                            || (fy - m_node.layout.y).abs() > 1e-6
+                        {
+                            updates.push(NodePositionUpdate {
+                                id: mid.clone(),
+                                x: fx,
+                                y: fy,
+                            });
+                        }
+                        prev_bottom = prev_bottom.max(fy + mh);
                     }
                 }
             }

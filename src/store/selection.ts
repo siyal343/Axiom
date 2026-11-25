@@ -1,5 +1,11 @@
 import { signal } from "@preact/signals";
-import type { ArtifactFormat, ArtifactScope, CompiledXray, NodeDto } from "../ipc/types";
+import type {
+  ArtifactFormat,
+  ArtifactScope,
+  CompiledXray,
+  NodeDto,
+  StaleNodeInfo,
+} from "../ipc/types";
 
 export type ModalState = "navigate" | "edit" | "command" | "chord_a" | "connect_edge";
 
@@ -34,6 +40,8 @@ export const isInteracting = signal<boolean>(false);
 export const commandPaletteOpen = signal<boolean>(false);
 export const shortcutsHelpOpen = signal<boolean>(false);
 export const connectSourceId = signal<string | null>(null);
+export const staleNodesMap = signal<ReadonlyMap<string, StaleNodeInfo>>(new Map());
+export const relatedPopoverNodeId = signal<string | null>(null);
 
 export function closeNodeContextMenu(): void {
   nodeContextMenu.value = null;
@@ -45,6 +53,7 @@ export function openArtifactExport(
 ): void {
   edgePopover.value = null;
   nodeContextMenu.value = null;
+  relatedPopoverNodeId.value = null;
   hoveredId.value = null;
   shortcutsHelpOpen.value = false;
   artifactExportFormat.value = format;
@@ -59,6 +68,7 @@ export function closeArtifactExport(): void {
 export function openCommandPalette(): void {
   edgePopover.value = null;
   nodeContextMenu.value = null;
+  relatedPopoverNodeId.value = null;
   hoveredId.value = null;
   shortcutsHelpOpen.value = false;
   artifactExportOpen.value = false;
@@ -161,6 +171,7 @@ export function enterEditMode(node: NodeDto): boolean {
   hoveredId.value = null;
   edgePopover.value = null;
   nodeContextMenu.value = null;
+  relatedPopoverNodeId.value = null;
   modalState.value = "edit";
   return true;
 }

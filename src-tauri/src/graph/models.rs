@@ -109,6 +109,8 @@ pub enum NodeLensOrigin {
     Diverge,
     Feynman,
     Synthesize,
+    Research,
+    Study,
     Custom,
 }
 
@@ -121,6 +123,8 @@ impl NodeLensOrigin {
             Self::Diverge => "diverge",
             Self::Feynman => "feynman",
             Self::Synthesize => "synthesize",
+            Self::Research => "research",
+            Self::Study => "study",
             Self::Custom => "custom",
         }
     }
@@ -133,6 +137,8 @@ impl NodeLensOrigin {
             "diverge" => Ok(Self::Diverge),
             "feynman" => Ok(Self::Feynman),
             "synthesize" => Ok(Self::Synthesize),
+            "research" => Ok(Self::Research),
+            "study" => Ok(Self::Study),
             "custom" => Ok(Self::Custom),
             other => Err(IpcError::db(format!("Invalid node lens origin: {other}"))),
         }
@@ -150,6 +156,35 @@ pub enum LensKind {
     Research,
     Study,
     Custom,
+}
+
+impl LensKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RedTeam => "red_team",
+            Self::EdgeCase => "edge_case",
+            Self::Diverge => "diverge",
+            Self::Feynman => "feynman",
+            Self::Synthesize => "synthesize",
+            Self::Research => "research",
+            Self::Study => "study",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn from_db_str(s: &str) -> Result<Self, IpcError> {
+        match s {
+            "red_team" => Ok(Self::RedTeam),
+            "edge_case" => Ok(Self::EdgeCase),
+            "diverge" => Ok(Self::Diverge),
+            "feynman" => Ok(Self::Feynman),
+            "synthesize" => Ok(Self::Synthesize),
+            "research" => Ok(Self::Research),
+            "study" => Ok(Self::Study),
+            "custom" => Ok(Self::Custom),
+            other => Err(IpcError::db(format!("Invalid lens kind: {other}"))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -324,6 +359,8 @@ pub struct WorkspaceSnapshot {
     pub edges: Vec<EdgeDto>,
     pub camera: CameraState,
     pub token_budget: u32,
+    #[serde(default)]
+    pub system_prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,6 +479,58 @@ pub struct SearchHit {
     pub snippet: String,
     pub x: f64,
     pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceSearchHit {
+    pub workspace_id: String,
+    pub flow_id: String,
+    pub flow_name: String,
+    pub hit: SearchHit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedNodeHit {
+    pub id: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub node_type: NodeType,
+    pub status: NodeStatus,
+    pub snippet: String,
+    pub score: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvenanceInput {
+    pub node_id: String,
+    pub title: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StaleReason {
+    Modified,
+    Deleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaleInputChange {
+    pub node_id: String,
+    pub title: String,
+    pub reason: StaleReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaleNodeInfo {
+    pub node_id: String,
+    pub run_id: String,
+    pub lens: LensKind,
+    pub model: Option<String>,
+    pub created_at: i64,
+    pub changed_inputs: Vec<StaleInputChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

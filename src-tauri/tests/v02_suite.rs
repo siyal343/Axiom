@@ -528,6 +528,7 @@ async fn generation_guard_aborts_stale_lens_and_summarizer_writes_and_anthropic_
             path: db_path.to_string_lossy().into_owned(),
             engine,
             token_budget: 6000,
+            system_prompt: String::new(),
         });
         *db_g = Some(conn);
     }

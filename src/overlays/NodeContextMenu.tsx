@@ -8,6 +8,7 @@ import { isTauriRuntime, tidySubtree as tidySubtreeIpc } from "../ipc/client";
 import type { GraphOp, NodeDto, NodePositionUpdate, NodeType, Severity } from "../ipc/types";
 import { executeActionTag, shouldRunTagInPlace } from "../store/aiRunner";
 import {
+  acknowledgeAndRefreshStaleNode,
   applyTidyPositions,
   duplicateNode,
   edgesMap,
@@ -29,8 +30,10 @@ import {
   enterEditMode,
   nodeContextMenu,
   openArtifactExport,
+  relatedPopoverNodeId,
   selectedIds,
   selectSingle,
+  staleNodesMap,
 } from "../store/selection";
 import { notifyIpcError, pushToast } from "./ToastStack";
 
@@ -308,6 +311,30 @@ export function NodeContextMenu() {
     openArtifactExport("adr", "subgraph");
   };
 
+  const handleFindRelated = (): void => {
+    closeNodeContextMenu();
+    relatedPopoverNodeId.value = node.id;
+  };
+
+  const staleInfo = staleNodesMap.value.get(node.id);
+
+  const handleMarkFresh = (): void => {
+    closeNodeContextMenu();
+    void acknowledgeAndRefreshStaleNode(node.id).catch(notifyIpcError);
+  };
+
+  const handleRerunStale = (): void => {
+    closeNodeContextMenu();
+    if (!staleInfo) {
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("axiom:rerun-stale", {
+        detail: { nodeId: node.id, lens: staleInfo.lens },
+      }),
+    );
+  };
+
   return (
     <div
       ref={menuRef}
@@ -355,6 +382,34 @@ export function NodeContextMenu() {
         >
           <span>Export Subgraph…</span>
         </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="node-context-menu__item"
+          onClick={handleFindRelated}
+        >
+          <span>Find Related Nodes</span>
+        </button>
+        {staleInfo && (
+          <>
+            <button
+              type="button"
+              role="menuitem"
+              class="node-context-menu__item"
+              onClick={handleMarkFresh}
+            >
+              <span>Mark Fresh</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class="node-context-menu__item"
+              onClick={handleRerunStale}
+            >
+              <span>Re-run Stale Lens</span>
+            </button>
+          </>
+        )}
       </div>
 
       <div class="node-context-menu__divider" role="separator" />

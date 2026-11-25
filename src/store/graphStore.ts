@@ -1,7 +1,14 @@
 import { signal } from "@preact/signals";
 import type { CameraTransform } from "../canvas/camera";
 import { ViewportSpatialIndex } from "../canvas/spatialIndex";
-import { applyOps, isTauriRuntime, resolveOverlaps, spawnConnectedNode } from "../ipc/client";
+import {
+  acknowledgeStaleNode,
+  applyOps,
+  getStaleNodes,
+  isTauriRuntime,
+  resolveOverlaps,
+  spawnConnectedNode,
+} from "../ipc/client";
 import type {
   ApplyResult,
   CameraState,
@@ -14,6 +21,7 @@ import type {
   NodeType,
   Severity,
   SpawnDirection,
+  StaleNodeInfo,
   WorkspaceSnapshot,
 } from "../ipc/types";
 import {
@@ -21,7 +29,7 @@ import {
   graphHistory,
   syncHistorySignals,
 } from "./history";
-import { focusId, selectSingle } from "./selection";
+import { focusId, selectSingle, staleNodesMap } from "./selection";
 import { scheduleSaveCurrentLocalFlowSnapshot } from "./workspaceCatalogStore";
 
 export interface LoopholeSummary {
@@ -61,6 +69,7 @@ export const visibleNodeIds = signal<string[]>([]);
 export const isBirdsEye = signal<boolean>(false);
 export const workspacePath = signal<string>("");
 export const tokenBudget = signal<number>(6000);
+export const flowSystemPrompt = signal<string>("");
 export const theme = signal<"dark" | "light">("dark");
 export const edgeFlowEnabled = signal<boolean>(true);
 export const unresolvedLoopholes = signal<Map<string, LoopholeSummary>>(new Map());
@@ -342,6 +351,8 @@ export function loadSnapshot(snapshot: WorkspaceSnapshot): void {
   viewportSpatialIndex.bulkLoad(snapshot.nodes);
   workspacePath.value = snapshot.path;
   tokenBudget.value = snapshot.token_budget;
+  flowSystemPrompt.value = snapshot.system_prompt ?? "";
+  staleNodesMap.value = new Map();
   graphHistory.clear();
   syncHistorySignals();
   recomputeUnresolvedLoopholes();
@@ -356,6 +367,33 @@ export function loadSnapshot(snapshot: WorkspaceSnapshot): void {
   cameraControllerRef.current?.refreshCull();
   cameraControllerRef.current?.markDirty();
   graphVersion.value += 1;
+}
+
+export async function refreshStaleNodes(): Promise<void> {
+  if (!isTauriRuntime()) {
+    return;
+  }
+  try {
+    const items = await getStaleNodes();
+    const next = new Map<string, StaleNodeInfo>();
+    for (const item of items) {
+      next.set(item.node_id, item);
+    }
+    staleNodesMap.value = next;
+  } catch {
+    // Non-fatal: stale badges remain unchanged until the next refresh.
+  }
+}
+
+export async function acknowledgeAndRefreshStaleNode(nodeId: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await acknowledgeStaleNode(nodeId);
+  }
+  if (staleNodesMap.value.has(nodeId)) {
+    const next = new Map(staleNodesMap.value);
+    next.delete(nodeId);
+    staleNodesMap.value = next;
+  }
 }
 
 export async function mutateGraph(ops: GraphOp[]): Promise<ApplyResult> {

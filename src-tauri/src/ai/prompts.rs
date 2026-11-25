@@ -245,9 +245,8 @@ pub fn lens_to_origin(lens: LensKind) -> NodeLensOrigin {
         LensKind::Diverge => NodeLensOrigin::Diverge,
         LensKind::Feynman => NodeLensOrigin::Feynman,
         LensKind::Synthesize => NodeLensOrigin::Synthesize,
-        // Map Research/Study onto existing NodeLensOrigin variants to preserve the SQLite CHECK (lens IN (...)) constraint without a schema migration.
-        LensKind::Research => NodeLensOrigin::Custom,
-        LensKind::Study => NodeLensOrigin::Feynman,
+        LensKind::Research => NodeLensOrigin::Research,
+        LensKind::Study => NodeLensOrigin::Study,
         LensKind::Custom => NodeLensOrigin::Custom,
     }
 }

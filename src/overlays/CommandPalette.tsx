@@ -7,8 +7,14 @@ import {
   parseActionTagInvocation,
   type ActionTagDef,
 } from "../input/actionTags";
-import { compileXray, isTauriRuntime, searchNodes } from "../ipc/client";
-import type { NodeStatus, NodeType, SearchHit, Severity } from "../ipc/types";
+import { compileXray, isTauriRuntime, searchNodes, searchWorkspaceFlows } from "../ipc/client";
+import type {
+  NodeStatus,
+  NodeType,
+  SearchHit,
+  Severity,
+  WorkspaceSearchHit,
+} from "../ipc/types";
 import {
   runExportJsonAction,
   runImportJsonAction,
@@ -26,13 +32,15 @@ import {
   minimapOpen,
   modalState,
   openArtifactExport,
+  relatedPopoverNodeId,
   selectedIds,
   selectSingle,
+  staleNodesMap,
   xrayPinned,
   xrayState,
 } from "../store/selection";
-import { toggleSidebar } from "../store/workspaceCatalogStore";
-import { notifyIpcError } from "./ToastStack";
+import { openFlowAndFocusNode, toggleSidebar } from "../store/workspaceCatalogStore";
+import { notifyIpcError, pushToast } from "./ToastStack";
 import { buildBrowserFallbackXray } from "./XrayHud";
 
 const FILTER_CHIPS = [
@@ -41,6 +49,7 @@ const FILTER_CHIPS = [
   "severity:critical",
   "pinned:true",
   "excluded:true",
+  "stale:true",
 ];
 
 const SEVERITY_RANK: Record<Severity, number> = {
@@ -64,10 +73,11 @@ interface PaletteCommand {
   description: string;
   keywords: string;
   badge: string;
+  keepOpen?: boolean;
   run: () => void;
 }
 
-function buildPaletteCommands(): PaletteCommand[] {
+function buildPaletteCommands(onFilterStale: () => void): PaletteCommand[] {
   const base: PaletteCommand[] = [
     {
       id: "export-adr",
@@ -221,6 +231,40 @@ function buildPaletteCommands(): PaletteCommand[] {
         perfHudOpen.value = !perfHudOpen.value;
       },
     },
+    {
+      id: "find-related-nodes",
+      label: "> Find Related Nodes",
+      description: "Find semantically related nodes for the focused node",
+      keywords: "related similar fts5 semantic neighbors graph",
+      badge: "Graph",
+      run: () => {
+        const fid = focusId.value;
+        if (!fid) {
+          pushToast("Select a focus node first", "warning");
+          return;
+        }
+        relatedPopoverNodeId.value = fid;
+      },
+    },
+    {
+      id: "filter-stale-ai-nodes",
+      label: "> Filter Stale AI Nodes",
+      description: "Filter current flow for AI-generated nodes whose inputs changed",
+      keywords: "stale outdated ai refresh modified inputs",
+      badge: "AI",
+      keepOpen: true,
+      run: onFilterStale,
+    },
+    {
+      id: "edit-flow-system-prompt",
+      label: "> Edit Flow System Prompt",
+      description: "Edit flow-specific system instructions for AI lenses",
+      keywords: "system prompt instructions flow ai settings",
+      badge: "AI",
+      run: () => {
+        openSettingsModal();
+      },
+    },
   ];
 
   if (import.meta.env.DEV) {
@@ -271,6 +315,7 @@ function searchNodesLocally(query: string, limit: number): SearchHit[] {
   let severityFilter: Severity | null = null;
   let pinnedFilter: boolean | null = null;
   let excludedFilter: boolean | null = null;
+  let staleFilter: boolean | null = null;
   const textTerms: string[] = [];
 
   for (const raw of query.trim().split(/\s+/)) {
@@ -325,6 +370,16 @@ function searchNodesLocally(query: string, limit: number): SearchHit[] {
         excludedFilter = false;
         continue;
       }
+    } else if (raw.startsWith("stale:")) {
+      const val = raw.slice(6).toLowerCase();
+      if (val === "true" || val === "1") {
+        staleFilter = true;
+        continue;
+      }
+      if (val === "false" || val === "0") {
+        staleFilter = false;
+        continue;
+      }
     }
     textTerms.push(raw.toLowerCase());
   }
@@ -336,6 +391,7 @@ function searchNodesLocally(query: string, limit: number): SearchHit[] {
     if (pinnedFilter !== null && node.context_controls.pin_global !== pinnedFilter) return false;
     if (excludedFilter !== null && node.context_controls.exclude_from_ai !== excludedFilter)
       return false;
+    if (staleFilter !== null && staleNodesMap.value.has(node.id) !== staleFilter) return false;
 
     if (textTerms.length > 0) {
       const hay = `${node.title}\n${node.content}\n${node.summary}`.toLowerCase();
@@ -369,14 +425,27 @@ function searchNodesLocally(query: string, limit: number): SearchHit[] {
 export function CommandPalette() {
   const isOpen = modalState.value === "command" && commandPaletteOpen.value;
   const [query, setQuery] = useState("");
+  const [searchScope, setSearchScope] = useState<"flow" | "all">("flow");
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [workspaceHits, setWorkspaceHits] = useState<WorkspaceSearchHit[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const trimmedStart = query.trimStart();
   const isCommandMode = trimmedStart.startsWith(">");
   const isTagMode = trimmedStart.startsWith("@");
-  const allCommands = buildPaletteCommands();
+  const hasAllPrefix = !isCommandMode && !isTagMode && /^all:/i.test(trimmedStart);
+  const effectiveScope: "flow" | "all" = hasAllPrefix ? "all" : searchScope;
+  const effectiveQuery = hasAllPrefix ? trimmedStart.slice(4).trimStart() : query;
+
+  const allCommands = buildPaletteCommands(() => {
+    setSearchScope("flow");
+    setQuery("stale:true");
+    setActiveIndex(0);
+    queueMicrotask(() => {
+      inputRef.current?.focus();
+    });
+  });
   const visibleCommands = isCommandMode ? filterPaletteCommands(allCommands, query) : [];
 
   const parsedTagInvocation = isTagMode ? parseActionTagInvocation(trimmedStart) : null;
@@ -391,7 +460,11 @@ export function CommandPalette() {
     : [];
 
   const showQuickActions =
-    !isCommandMode && !isTagMode && query.trim() === "" && hits.length === 0;
+    !isCommandMode &&
+    !isTagMode &&
+    effectiveScope === "flow" &&
+    query.trim() === "" &&
+    hits.length === 0;
   const quickActions = showQuickActions
     ? allCommands.filter((cmd) => QUICK_ACTION_IDS.has(cmd.id))
     : [];
@@ -399,14 +472,20 @@ export function CommandPalette() {
     ? visibleCommands.length
     : isTagMode
       ? visibleTags.length
-      : showQuickActions
-        ? quickActions.length
-        : hits.length;
+      : effectiveScope === "all"
+        ? isTauriRuntime()
+          ? workspaceHits.length
+          : 0
+        : showQuickActions
+          ? quickActions.length
+          : hits.length;
 
   useEffect(() => {
     if (!isOpen) {
       setQuery("");
+      setSearchScope("flow");
       setHits([]);
+      setWorkspaceHits([]);
       setActiveIndex(0);
       return;
     }
@@ -425,8 +504,33 @@ export function CommandPalette() {
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      if (isTauriRuntime()) {
-        void searchNodes(query, 30)
+      if (effectiveScope === "all") {
+        setHits([]);
+        if (!isTauriRuntime()) {
+          setWorkspaceHits([]);
+          setActiveIndex(0);
+          return;
+        }
+        void searchWorkspaceFlows(effectiveQuery, 30)
+          .then((res) => {
+            if (!cancelled) {
+              setWorkspaceHits(res);
+              setActiveIndex(0);
+            }
+          })
+          .catch(() => {
+            if (!cancelled) {
+              setWorkspaceHits([]);
+              setActiveIndex(0);
+            }
+          });
+        return;
+      }
+
+      setWorkspaceHits([]);
+      const usesClientStaleFilter = /\bstale:(true|false|1|0)\b/i.test(effectiveQuery);
+      if (isTauriRuntime() && !usesClientStaleFilter) {
+        void searchNodes(effectiveQuery, 30)
           .then((res) => {
             if (!cancelled) {
               setHits(res);
@@ -435,12 +539,12 @@ export function CommandPalette() {
           })
           .catch(() => {
             if (!cancelled) {
-              setHits(searchNodesLocally(query, 30));
+              setHits(searchNodesLocally(effectiveQuery, 30));
               setActiveIndex(0);
             }
           });
       } else {
-        setHits(searchNodesLocally(query, 30));
+        setHits(searchNodesLocally(effectiveQuery, 30));
         setActiveIndex(0);
       }
     }, 60);
@@ -449,7 +553,7 @@ export function CommandPalette() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [isOpen, isCommandMode, isTagMode, query]);
+  }, [isOpen, isCommandMode, isTagMode, effectiveScope, effectiveQuery]);
 
   if (!isOpen) {
     return null;
@@ -483,7 +587,19 @@ export function CommandPalette() {
     );
   };
 
+  const jumpToWorkspaceHit = (wsHit: WorkspaceSearchHit): void => {
+    setQuery("");
+    setWorkspaceHits([]);
+    setActiveIndex(0);
+    closeCommandPalette();
+    void openFlowAndFocusNode(wsHit.workspace_id, wsHit.flow_id, wsHit.hit.id);
+  };
+
   const executeCommand = (cmd: PaletteCommand): void => {
+    if (cmd.keepOpen) {
+      cmd.run();
+      return;
+    }
     setQuery("");
     setActiveIndex(0);
     closeCommandPalette();
@@ -572,6 +688,11 @@ export function CommandPalette() {
               if (chosen) {
                 executeTag(chosen);
               }
+            } else if (effectiveScope === "all") {
+              const chosen = workspaceHits[activeIndex];
+              if (chosen) {
+                jumpToWorkspaceHit(chosen);
+              }
             } else if (showQuickActions) {
               const chosen = quickActions[activeIndex] ?? quickActions[0];
               if (chosen) {
@@ -612,21 +733,57 @@ export function CommandPalette() {
           >
             @ Actions
           </button>
-          {!isCommandMode &&
-            !isTagMode &&
-            FILTER_CHIPS.map((chip) => {
-              const active = query.split(/\s+/).includes(chip);
-              return (
+          {!isCommandMode && !isTagMode && (
+            <>
+              <div class="palette-scope-toggle" role="group" aria-label="Search scope">
                 <button
-                  key={chip}
                   type="button"
-                  class={`command-palette__chip ${active ? "command-palette__chip--active" : ""}`}
-                  onClick={() => toggleChip(chip)}
+                  class={`palette-scope-toggle__btn ${
+                    effectiveScope === "flow" ? "palette-scope-toggle__btn--active" : ""
+                  }`}
+                  aria-pressed={effectiveScope === "flow"}
+                  onClick={() => {
+                    if (hasAllPrefix) {
+                      setQuery(effectiveQuery);
+                    }
+                    setSearchScope("flow");
+                    setActiveIndex(0);
+                    inputRef.current?.focus();
+                  }}
                 >
-                  {chip}
+                  This Flow
                 </button>
-              );
-            })}
+                <button
+                  type="button"
+                  class={`palette-scope-toggle__btn ${
+                    effectiveScope === "all" ? "palette-scope-toggle__btn--active" : ""
+                  }`}
+                  aria-pressed={effectiveScope === "all"}
+                  onClick={() => {
+                    setSearchScope("all");
+                    setActiveIndex(0);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  All Flows
+                </button>
+              </div>
+              {effectiveScope === "flow" &&
+                FILTER_CHIPS.map((chip) => {
+                  const active = query.split(/\s+/).includes(chip);
+                  return (
+                    <button
+                      key={chip}
+                      type="button"
+                      class={`command-palette__chip ${active ? "command-palette__chip--active" : ""}`}
+                      onClick={() => toggleChip(chip)}
+                    >
+                      {chip}
+                    </button>
+                  );
+                })}
+            </>
+          )}
         </div>
         <div class="command-palette__results">
           {isCommandMode ? (
@@ -688,6 +845,45 @@ export function CommandPalette() {
                   </button>
                 );
               })
+            )
+          ) : effectiveScope === "all" ? (
+            !isTauriRuntime() ? (
+              <div class="command-palette__empty">
+                Multi-flow FTS5 search runs in the Axiom desktop runtime.
+              </div>
+            ) : workspaceHits.length === 0 ? (
+              <div class="command-palette__empty">No matching nodes across flows</div>
+            ) : (
+              workspaceHits.map((wsHit, idx) => (
+                <button
+                  key={`${wsHit.workspace_id}:${wsHit.flow_id}:${wsHit.hit.id}`}
+                  type="button"
+                  class={`command-palette__item ${
+                    idx === activeIndex ? "command-palette__item--active" : ""
+                  }`}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  onClick={() => jumpToWorkspaceHit(wsHit)}
+                >
+                  <div class="command-palette__item-top">
+                    <span class="command-palette__item-title">
+                      {wsHit.hit.title || "Untitled"}
+                    </span>
+                    <div class="command-palette__item-badges">
+                      <span class="badge badge--flow">{wsHit.flow_name}</span>
+                      <span class="badge">{wsHit.hit.type}</span>
+                      {wsHit.hit.severity && (
+                        <span class={`badge badge--sev-${wsHit.hit.severity}`}>
+                          {wsHit.hit.severity.toUpperCase()}
+                        </span>
+                      )}
+                      <span class="badge">{wsHit.hit.status}</span>
+                    </div>
+                  </div>
+                  {wsHit.hit.snippet && (
+                    <div class="command-palette__item-snippet">{wsHit.hit.snippet}</div>
+                  )}
+                </button>
+              ))
             )
           ) : showQuickActions ? (
             <>

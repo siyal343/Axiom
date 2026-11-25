@@ -1,4 +1,6 @@
 import { signal } from "@preact/signals";
+import { clampZoom } from "../canvas/camera";
+import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
 import {
   createFlow,
   createWorkspace,
@@ -31,7 +33,7 @@ import {
   tokenBudget,
 } from "./graphStore";
 import { graphHistory, syncHistorySignals } from "./history";
-import { focusId } from "./selection";
+import { focusId, selectSingle } from "./selection";
 
 const CATALOG_STORAGE_KEY = "axiom_catalog_v1";
 const FLOW_STORAGE_PREFIX = "axiom_flow_";
@@ -848,4 +850,46 @@ export async function deleteFlowAction(
     notifyIpcError(err);
     return null;
   }
+}
+
+export async function openFlowAndFocusNode(
+  workspaceId: string,
+  flowId: string,
+  nodeId: string,
+): Promise<void> {
+  const current = workspaceCatalog.value;
+  const alreadyActive =
+    current !== null &&
+    current.active_workspace_id === workspaceId &&
+    current.active_flow_id === flowId;
+
+  if (!alreadyActive) {
+    const opened = await openFlowAction(workspaceId, flowId);
+    if (!opened) {
+      return;
+    }
+  }
+
+  selectSingle(nodeId);
+  const node = nodesMap.get(nodeId);
+  const controller = cameraControllerRef.current;
+  if (!node || !controller) {
+    return;
+  }
+
+  const w = node.layout.width ?? 320;
+  const h = getEffectiveNodeHeight(node);
+  const cx = node.layout.x + w / 2;
+  const cy = node.layout.y + h / 2;
+  const cam = controller.getCamera();
+  const { width, height } = controller.getViewportSize();
+  const targetZoom = clampZoom(Math.max(cam.zoom, 0.85));
+  controller.animateTo(
+    {
+      x: width / 2 - cx * targetZoom,
+      y: height / 2 - cy * targetZoom,
+      zoom: targetZoom,
+    },
+    220,
+  );
 }

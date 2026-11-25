@@ -587,7 +587,7 @@ mod tests {
         assert_eq!(lens_defaults(LensKind::Research).node_type, NodeType::Probe);
         assert_eq!(lens_defaults(LensKind::Study).title, "Study & Recall");
         assert_eq!(lens_defaults(LensKind::Study).node_type, NodeType::Probe);
-        assert_eq!(lens_to_origin(LensKind::Research), NodeLensOrigin::Custom);
-        assert_eq!(lens_to_origin(LensKind::Study), NodeLensOrigin::Feynman);
+        assert_eq!(lens_to_origin(LensKind::Research), NodeLensOrigin::Research);
+        assert_eq!(lens_to_origin(LensKind::Study), NodeLensOrigin::Study);
     }
 }

@@ -1,6 +1,7 @@
 pub mod compiler;
 pub mod exporter;
 pub mod models;
+pub mod provenance;
 pub mod spatial;
 
 use std::collections::HashMap;

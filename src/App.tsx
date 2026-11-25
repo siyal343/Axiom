@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { BBox } from "rbush";
 import {
   CanvasCameraController,
+  clampZoom,
   computeFitTransform,
   screenToWorld,
   worldToScreen,
@@ -14,13 +15,14 @@ import { getEffectiveNodeHeight } from "./canvas/spatialIndex";
 import { CardLayer } from "./cards/CardLayer";
 import { LiveEditorOverlay } from "./cards/LiveEditorOverlay";
 import { attachKeymap } from "./input/keymap";
+import { findParentTarget } from "./input/topologyNav";
 import {
   getSettings,
   isTauriRuntime,
   listenSummaryUpdated,
   saveCamera,
 } from "./ipc/client";
-import type { EdgeType, GraphOp, NodeDto } from "./ipc/types";
+import type { EdgeType, GraphOp, LensKind, NodeDto } from "./ipc/types";
 import { ArtifactExportModal } from "./overlays/ArtifactExportModal";
 import { CommandPalette } from "./overlays/CommandPalette";
 import { CustomPromptBar } from "./overlays/CustomPromptBar";
@@ -28,8 +30,10 @@ import { EdgeInspectorPill } from "./overlays/EdgeInspectorPill";
 import { MinimapOverlay } from "./overlays/MinimapOverlay";
 import { NodeContextMenu } from "./overlays/NodeContextMenu";
 import { PerfHud } from "./overlays/PerfHud";
+import { RelatedNodesPopover } from "./overlays/RelatedNodesPopover";
 import { SettingsModal } from "./overlays/SettingsModal";
 import { ShortcutsModal } from "./overlays/ShortcutsModal";
+import { SpineBreadcrumb } from "./overlays/SpineBreadcrumb";
 import { notifyIpcError, ToastStack } from "./overlays/ToastStack";
 import { WorkspaceSidebar } from "./overlays/WorkspaceSidebar";
 import { XrayHud } from "./overlays/XrayHud";
@@ -45,6 +49,7 @@ import {
   triggerLens,
 } from "./store/aiRunner";
 import {
+  acknowledgeAndRefreshStaleNode,
   cameraControllerRef,
   connectNodesWithEdge,
   dragOffsets,
@@ -54,6 +59,7 @@ import {
   isBirdsEye,
   mutateGraphUndoable,
   nodesMap,
+  refreshStaleNodes,
   resizeSizes,
   theme,
   tokenBudget,
@@ -78,7 +84,9 @@ import {
   selectedEdgeId,
   selectedIds,
   selectSingle,
+  setSelection,
   shortcutsHelpOpen,
+  staleNodesMap,
   xrayState,
 } from "./store/selection";
 import { initWorkspaceCatalog, sidebarOpen } from "./store/workspaceCatalogStore";
@@ -172,6 +180,8 @@ export function App() {
   const isSidebarOpen = sidebarOpen.value;
   const isMinimapOpen = minimapOpen.value;
   const hasXray = xrayState.value !== null;
+  const staleNodes = staleNodesMap.value;
+  const staleCount = staleNodes.size;
 
   const shouldAnimateEdges =
     flowEnabled && !birdsEye && edgesMap.size > 0 && !prefersReducedMotion;
@@ -265,6 +275,7 @@ export function App() {
           connectSourceId: connectSourceId.value,
           xrayState: xrayState.value,
           unresolvedLoopholes: unresolvedLoopholes.value,
+          staleNodeIds: new Set(staleNodesMap.value.keys()),
           marqueeWorld: overlay.marqueeWorld,
           edgePreviewWorld: overlay.edgePreviewWorld,
           themeKey: theme.value,
@@ -388,7 +399,79 @@ export function App() {
     selectedEdgeId.value,
     connectSourceId.value,
     xrayState.value,
+    staleNodes,
   ]);
+
+  useEffect(() => {
+    if (!workspaceReady || !isTauriRuntime()) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      void refreshStaleNodes();
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [workspaceReady, version]);
+
+  useEffect(() => {
+    const handleAckStale = (e: Event): void => {
+      const detail = (e as CustomEvent<{ nodeId?: string } | string>).detail;
+      const nodeId = typeof detail === "string" ? detail : detail?.nodeId;
+      if (!nodeId) {
+        return;
+      }
+      void acknowledgeAndRefreshStaleNode(nodeId).catch(notifyIpcError);
+    };
+
+    const handleRerunStale = (e: Event): void => {
+      const detail = (e as CustomEvent<{ nodeId?: string; lens?: LensKind }>).detail;
+      const nodeId = detail?.nodeId;
+      if (!nodeId) {
+        return;
+      }
+      const staleInfo = staleNodesMap.value.get(nodeId);
+      const node = nodesMap.get(nodeId);
+      const metaLens = node?.metadata.lens;
+      const lens: LensKind =
+        detail?.lens ??
+        staleInfo?.lens ??
+        (metaLens && metaLens !== "manual" ? metaLens : "red_team");
+
+      if (lens === "synthesize") {
+        const sources: string[] = [];
+        for (const edge of edgesMap.values()) {
+          if (
+            edge.target_id === nodeId &&
+            edge.type === "synthesizes" &&
+            nodesMap.has(edge.source_id)
+          ) {
+            sources.push(edge.source_id);
+          }
+        }
+        if (sources.length >= 2) {
+          setSelection(sources, sources[0]);
+          void triggerLens(lens);
+          return;
+        }
+      }
+
+      const parentId = findParentTarget(nodeId, nodesMap, edgesMap);
+      const targetId =
+        parentId ??
+        (focusId.value && focusId.value !== nodeId ? focusId.value : null) ??
+        nodeId;
+      selectSingle(targetId);
+      void triggerLens(lens);
+    };
+
+    window.addEventListener("axiom:ack-stale", handleAckStale);
+    window.addEventListener("axiom:rerun-stale", handleRerunStale);
+    return () => {
+      window.removeEventListener("axiom:ack-stale", handleAckStale);
+      window.removeEventListener("axiom:rerun-stale", handleRerunStale);
+    };
+  }, []);
 
   const viewportSize = cameraControllerRef.current?.getViewportSize() ?? {
     width: typeof window !== "undefined" ? window.innerWidth : 1280,
@@ -573,6 +656,34 @@ export function App() {
     edgePopover.value = null;
     modalState.value = "navigate";
     void connectNodesWithEdge(sourceId, targetId, edgeType).catch(notifyIpcError);
+  };
+
+  const handleJumpToFirstStale = (): void => {
+    const firstId = staleNodesMap.value.keys().next().value;
+    if (!firstId) {
+      return;
+    }
+    selectSingle(firstId);
+    const node = nodesMap.get(firstId);
+    const ctrl = cameraControllerRef.current;
+    if (!node || !ctrl) {
+      return;
+    }
+    const w = node.layout.width ?? 320;
+    const h = getEffectiveNodeHeight(node);
+    const cx = node.layout.x + w / 2;
+    const cy = node.layout.y + h / 2;
+    const cam = ctrl.getCamera();
+    const vp = ctrl.getViewportSize();
+    const targetZoom = clampZoom(Math.max(cam.zoom, 0.85));
+    ctrl.animateTo(
+      {
+        x: vp.width / 2 - cx * targetZoom,
+        y: vp.height / 2 - cy * targetZoom,
+        zoom: targetZoom,
+      },
+      220,
+    );
   };
 
   return (
@@ -820,6 +931,19 @@ export function App() {
             </button>
           </>
         )}
+        {staleCount > 0 && (
+          <>
+            <span class="canvas-controls__sep" aria-hidden="true" />
+            <button
+              type="button"
+              class="stale-alert-pill"
+              title="Jump to first stale AI node"
+              onClick={handleJumpToFirstStale}
+            >
+              ⟳ {staleCount} stale
+            </button>
+          </>
+        )}
         <span class="canvas-controls__sep" aria-hidden="true" />
         <button
           type="button"
@@ -835,6 +959,8 @@ export function App() {
       </div>
 
       <WorkspaceSidebar />
+      <SpineBreadcrumb />
+      <RelatedNodesPopover />
       <EdgeInspectorPill />
       <MinimapOverlay />
       <NodeContextMenu />

@@ -19,13 +19,16 @@ import type {
   NodePositionUpdate,
   NodeType,
   OpenFlowResult,
+  RelatedNodeHit,
   SaveSettingsInput,
   SearchHit,
   SpawnDirection,
+  StaleNodeInfo,
   SummaryUpdatedEvent,
   TestConnectionResult,
   WorkspaceCatalogDto,
   WorkspaceEntryDto,
+  WorkspaceSearchHit,
   WorkspaceSnapshot,
 } from "./types";
 
@@ -240,4 +243,30 @@ export async function deleteFlow(
   flowId: string,
 ): Promise<WorkspaceCatalogDto> {
   return invoke<WorkspaceCatalogDto>("delete_flow", { workspaceId, flowId });
+}
+
+export async function getStaleNodes(): Promise<StaleNodeInfo[]> {
+  return invoke<StaleNodeInfo[]>("get_stale_nodes", {});
+}
+
+export async function acknowledgeStaleNode(nodeId: string): Promise<void> {
+  return invoke<void>("acknowledge_stale_node", { nodeId });
+}
+
+export async function findRelatedNodes(
+  nodeId: string,
+  limit?: number,
+): Promise<RelatedNodeHit[]> {
+  return invoke<RelatedNodeHit[]>("find_related_nodes", { nodeId, limit });
+}
+
+export async function searchWorkspaceFlows(
+  query: string,
+  limit?: number,
+): Promise<WorkspaceSearchHit[]> {
+  return invoke<WorkspaceSearchHit[]>("search_workspace_flows", { query, limit });
+}
+
+export async function saveFlowSystemPrompt(prompt: string): Promise<void> {
+  return invoke<void>("save_flow_system_prompt", { prompt });
 }

@@ -6,9 +6,11 @@ use rusqlite::{params, params_from_iter, Connection, Row, Transaction, Transacti
 use crate::error::IpcError;
 use crate::graph::models::{
     compute_content_hash, estimate_tokens, now_epoch_ms, ApplyResult, CameraState, ContextControls,
-    CreatedBy, EdgeDto, EdgeType, EdgeWeight, GraphOp, NodeDto, NodeLayout, NodeLensOrigin,
-    NodeMetadata, NodeStatus, NodeType, SearchHit, Severity, SpawnDirection,
+    CreatedBy, EdgeDto, EdgeType, EdgeWeight, GraphOp, LensKind, NodeDto, NodeLayout,
+    NodeLensOrigin, NodeMetadata, NodeStatus, NodeType, ProvenanceInput, RelatedNodeHit,
+    SearchHit, Severity, SpawnDirection,
 };
+use crate::graph::provenance::compute_stale_nodes;
 use crate::graph::spatial::{
     directional_slot, find_best_open_direction, find_free_position,
     find_free_position_in_direction, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH,
@@ -589,14 +591,15 @@ pub fn spawn_connected_node(
     Ok((persisted_node, edge))
 }
 
-#[derive(Default)]
-struct SearchFilters {
-    status: Option<NodeStatus>,
-    node_type: Option<NodeType>,
-    severity: Option<Severity>,
-    pinned: Option<bool>,
-    excluded: Option<bool>,
-    fts_terms: Vec<String>,
+#[derive(Debug, Default)]
+pub struct ParsedSearchQuery {
+    pub status: Option<NodeStatus>,
+    pub node_type: Option<NodeType>,
+    pub severity: Option<Severity>,
+    pub pinned: Option<bool>,
+    pub excluded: Option<bool>,
+    pub stale_filter: Option<bool>,
+    pub fts_terms: Vec<String>,
 }
 
 fn sanitize_fts_tokens(raw: &str, out: &mut Vec<String>) {
@@ -625,8 +628,8 @@ fn parse_bool_filter(val: &str) -> Option<bool> {
     }
 }
 
-fn parse_search_query(query: &str) -> SearchFilters {
-    let mut filters = SearchFilters::default();
+pub fn parse_search_query(query: &str) -> ParsedSearchQuery {
+    let mut filters = ParsedSearchQuery::default();
 
     for token in query.split_whitespace() {
         if let Some(val) = token.strip_prefix("status:") {
@@ -656,6 +659,12 @@ fn parse_search_query(query: &str) -> SearchFilters {
         if let Some(val) = token.strip_prefix("excluded:") {
             if let Some(b) = parse_bool_filter(val) {
                 filters.excluded = Some(b);
+                continue;
+            }
+        }
+        if let Some(val) = token.strip_prefix("stale:") {
+            if let Some(b) = parse_bool_filter(val) {
+                filters.stale_filter = Some(b);
                 continue;
             }
         }
@@ -880,4 +889,204 @@ pub fn update_node_summary(
     }
 
     Ok(true)
+}
+
+pub fn save_flow_system_prompt(conn: &mut Connection, prompt: &str) -> Result<(), IpcError> {
+    conn.execute(
+        "INSERT OR REPLACE INTO workspace_meta (key, value) VALUES ('system_prompt', ?1)",
+        params![prompt],
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn upsert_ai_run_provenance(
+    conn: &Connection,
+    spawned_node_id: &str,
+    run_id: &str,
+    lens: LensKind,
+    model: Option<&str>,
+    inputs: &[ProvenanceInput],
+    prompt_tokens: u32,
+    created_at: i64,
+) -> Result<(), IpcError> {
+    let filtered: Vec<&ProvenanceInput> = inputs
+        .iter()
+        .filter(|inp| inp.node_id != spawned_node_id)
+        .collect();
+    let input_hashes_json = serde_json::to_string(&filtered)?;
+    conn.execute(
+        "INSERT INTO ai_runs (
+            spawned_node_id, run_id, lens, model, input_hashes_json, prompt_tokens, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        ON CONFLICT(spawned_node_id) DO UPDATE SET
+            run_id = excluded.run_id,
+            lens = excluded.lens,
+            model = excluded.model,
+            input_hashes_json = excluded.input_hashes_json,
+            prompt_tokens = excluded.prompt_tokens,
+            created_at = excluded.created_at",
+        params![
+            spawned_node_id,
+            run_id,
+            lens.as_str(),
+            model,
+            input_hashes_json,
+            i64::from(prompt_tokens),
+            created_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn search_nodes_with_provenance(
+    conn: &Connection,
+    engine: &GraphEngine,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<SearchHit>, IpcError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let parsed = parse_search_query(query);
+    if let Some(want_stale) = parsed.stale_filter {
+        let stale_ids: HashSet<String> = compute_stale_nodes(conn, engine)?
+            .into_iter()
+            .map(|s| s.node_id)
+            .collect();
+        let fetch_limit = u32::try_from(engine.nodes.len().max(limit as usize).max(500))
+            .unwrap_or(u32::MAX);
+        let mut hits = search_nodes(conn, query, fetch_limit)?;
+        hits.retain(|h| stale_ids.contains(&h.id) == want_stale);
+        hits.truncate(limit as usize);
+        Ok(hits)
+    } else {
+        search_nodes(conn, query, limit)
+    }
+}
+
+const RELATED_STOPWORDS: &[&str] = &[
+    "the", "and", "for", "that", "this", "with", "from", "are", "was", "were", "will", "have",
+    "has", "had", "not", "but", "can", "all", "any", "into", "use", "using", "used", "when",
+    "where", "which", "while", "who", "why", "how", "what", "their", "there", "then", "than",
+    "also", "only", "more", "most", "such", "should", "would", "could", "may", "might", "must",
+    "each", "other", "some", "about", "over", "under", "between", "after", "before", "because",
+    "does", "did", "doing", "been", "being", "its", "you", "your", "our", "they", "them",
+    "these", "those", "via", "per", "near", "xor",
+];
+
+fn tokenize_related_query(text: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = String::new();
+
+    let flush = |buf: &mut String, terms: &mut Vec<String>, seen: &mut HashSet<String>| {
+        if buf.len() >= 3 {
+            let tok = std::mem::take(buf);
+            if !RELATED_STOPWORDS.contains(&tok.as_str()) && seen.insert(tok.clone()) {
+                terms.push(tok);
+            }
+        } else {
+            buf.clear();
+        }
+    };
+
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            current.push(ch.to_ascii_lowercase());
+        } else {
+            flush(&mut current, &mut terms, &mut seen);
+            if terms.len() >= 10 {
+                return terms;
+            }
+        }
+    }
+    if terms.len() < 10 {
+        flush(&mut current, &mut terms, &mut seen);
+    }
+    terms.truncate(10);
+    terms
+}
+
+pub fn find_related_nodes(
+    conn: &Connection,
+    engine: &GraphEngine,
+    node_id: &str,
+    limit: u32,
+) -> Result<Vec<RelatedNodeHit>, IpcError> {
+    let focus_node = engine
+        .nodes
+        .get(node_id)
+        .ok_or_else(|| IpcError::validation(format!("Node {node_id} not found")))?;
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let query_terms = tokenize_related_query(&format!("{} {}", focus_node.title, focus_node.content));
+    if query_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fts_query = query_terms.join(" OR ");
+
+    let mut excluded_ids: HashSet<&str> = HashSet::new();
+    excluded_ids.insert(node_id);
+    if let Some(in_edges) = engine.incoming.get(node_id) {
+        for edge in in_edges {
+            excluded_ids.insert(edge.source_id.as_str());
+        }
+    }
+    if let Some(out_edges) = engine.outgoing.get(node_id) {
+        for edge in out_edges {
+            excluded_ids.insert(edge.target_id.as_str());
+        }
+    }
+
+    let sql_limit = i64::from(limit).saturating_add(excluded_ids.len() as i64 + 8);
+    let mut stmt = conn.prepare(
+        "SELECT n.id, n.title, n.type, n.status,
+                COALESCE(NULLIF(snippet(nodes_fts, -1, '', '', '...', 16), ''), substr(CASE WHEN n.summary != '' THEN n.summary ELSE n.content END, 1, 120)),
+                bm25(nodes_fts, 4.0, 1.0, 2.0) AS rank_score,
+                n.x, n.y
+         FROM nodes_fts
+         JOIN nodes n ON n.rowid = nodes_fts.rowid
+         WHERE nodes_fts MATCH ?1 AND n.status != 'dismissed'
+         ORDER BY rank_score ASC, n.updated_at DESC
+         LIMIT ?2",
+    )?;
+
+    let rows = stmt.query_map(params![fts_query, sql_limit], |row| {
+        let type_str: String = row.get(2)?;
+        let status_str: String = row.get(3)?;
+        let node_type = NodeType::from_db_str(&type_str).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        let status = NodeStatus::from_db_str(&status_str).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        let bm25_raw: f64 = row.get(5)?;
+        Ok(RelatedNodeHit {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            node_type,
+            status,
+            snippet: row.get(4)?,
+            score: (-bm25_raw).max(0.0),
+            x: row.get(6)?,
+            y: row.get(7)?,
+        })
+    })?;
+
+    let mut out = Vec::with_capacity(limit as usize);
+    for row in rows {
+        let hit = row?;
+        if excluded_ids.contains(hit.id.as_str()) {
+            continue;
+        }
+        out.push(hit);
+        if out.len() >= limit as usize {
+            break;
+        }
+    }
+
+    Ok(out)
 }

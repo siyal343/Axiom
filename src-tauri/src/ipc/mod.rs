@@ -18,6 +18,7 @@ pub struct ActiveWorkspace {
     pub path: String,
     pub engine: GraphEngine,
     pub token_budget: u32,
+    pub system_prompt: String,
 }
 
 pub struct AppState {

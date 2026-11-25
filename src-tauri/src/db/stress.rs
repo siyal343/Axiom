@@ -352,6 +352,14 @@ pub fn seed_stress_500_into_workspace(
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(DEFAULT_TOKEN_BUDGET);
 
+    let system_prompt = conn
+        .query_row(
+            "SELECT value FROM workspace_meta WHERE key = 'system_prompt'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap_or_default();
+
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute("DELETE FROM edges", [])?;
     tx.execute("DELETE FROM nodes", [])?;
@@ -386,5 +394,6 @@ pub fn seed_stress_500_into_workspace(
         edges,
         camera,
         token_budget,
+        system_prompt,
     })
 }

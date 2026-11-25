@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
+use rusqlite::{Connection, OpenFlags};
 use tokio_util::sync::CancellationToken;
 
 use crate::ai;
@@ -12,9 +14,11 @@ use crate::graph::compiler::compile_context;
 use crate::graph::models::{
     AppSettingsDto, ApplyResult, ArtifactFormat, ArtifactScope, CameraState, CompiledArtifact,
     CompiledXray, EdgeType, GraphOp, LensKind, LensStreamEvent, NodePositionUpdate, NodeType,
-    OpenFlowResult, SaveSettingsInput, SearchHit, SpawnConnectedResult, SpawnDirection,
-    TestConnectionResult, WorkspaceCatalogDto, WorkspaceEntryDto, WorkspaceSnapshot,
+    OpenFlowResult, RelatedNodeHit, SaveSettingsInput, SearchHit, SpawnConnectedResult,
+    SpawnDirection, StaleNodeInfo, TestConnectionResult, WorkspaceCatalogDto, WorkspaceEntryDto,
+    WorkspaceSearchHit, WorkspaceSnapshot,
 };
+use crate::graph::provenance::{acknowledge_stale_node as ack_stale_node_db, compute_stale_nodes};
 use crate::graph::spatial::{
     compute_tidy_subtree, resolve_overlaps as compute_resolve_overlaps,
 };
@@ -75,6 +79,7 @@ fn open_workspace_internal(
             path: path_str,
             engine,
             token_budget: snapshot.token_budget,
+            system_prompt: snapshot.system_prompt.clone(),
         });
         *db_guard = Some(conn);
     }
@@ -326,6 +331,27 @@ pub fn search_nodes(
     limit: Option<u32>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SearchHit>, IpcError> {
+    let max_hits = limit.unwrap_or(30);
+    let parsed = db::queries::parse_search_query(&query);
+    if parsed.stale_filter.is_some() {
+        // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+        let workspace_guard = state
+            .workspace
+            .read()
+            .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+        let db_guard = state
+            .db
+            .lock()
+            .map_err(|_| IpcError::db("Database lock poisoned"))?;
+        let active = workspace_guard
+            .as_ref()
+            .ok_or_else(IpcError::workspace_not_open)?;
+        let conn = db_guard
+            .as_ref()
+            .ok_or_else(IpcError::workspace_not_open)?;
+        return db::queries::search_nodes_with_provenance(conn, &active.engine, &query, max_hits);
+    }
+
     let db_guard = state
         .db
         .lock()
@@ -334,7 +360,303 @@ pub fn search_nodes(
         .as_ref()
         .ok_or_else(IpcError::workspace_not_open)?;
 
-    db::queries::search_nodes(conn, &query, limit.unwrap_or(30))
+    db::queries::search_nodes(conn, &query, max_hits)
+}
+
+#[tauri::command]
+pub fn find_related_nodes(
+    node_id: String,
+    limit: Option<u32>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<RelatedNodeHit>, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let workspace_guard = state
+        .workspace
+        .read()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    db::queries::find_related_nodes(conn, &active.engine, &node_id, limit.unwrap_or(10))
+}
+
+fn append_sibling_flow_hits(
+    active_ws: &WorkspaceEntryDto,
+    active_flow_id: &str,
+    searched_active: bool,
+    active_path: Option<&str>,
+    query: &str,
+    max_hits: usize,
+    results: &mut Vec<WorkspaceSearchHit>,
+) {
+    let mut sibling_flows: Vec<_> = active_ws
+        .flows
+        .iter()
+        .filter(|f| !(searched_active && f.id == active_flow_id))
+        .collect();
+    sibling_flows.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    for flow in sibling_flows {
+        if results.len() >= max_hits {
+            break;
+        }
+        if searched_active && active_path == Some(flow.db_path.as_str()) {
+            continue;
+        }
+        let db_path = Path::new(&flow.db_path);
+        if !db_path.exists() {
+            continue;
+        }
+        let Ok(ro_conn) = Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) else {
+            continue;
+        };
+        let _ = ro_conn.busy_timeout(Duration::from_millis(1000));
+        let remaining = u32::try_from(max_hits - results.len()).unwrap_or(u32::MAX);
+        if let Ok(hits) = db::queries::search_nodes(&ro_conn, query, remaining) {
+            for hit in hits {
+                results.push(WorkspaceSearchHit {
+                    workspace_id: active_ws.id.clone(),
+                    flow_id: flow.id.clone(),
+                    flow_name: flow.name.clone(),
+                    hit,
+                });
+                if results.len() >= max_hits {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+pub fn search_workspace_flows_in_catalog(
+    catalog: &WorkspaceCatalogDto,
+    active_conn: Option<&Connection>,
+    active_engine: Option<&GraphEngine>,
+    active_path: Option<&str>,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<WorkspaceSearchHit>, IpcError> {
+    let max_hits = limit as usize;
+    if max_hits == 0 {
+        return Ok(Vec::new());
+    }
+
+    let Some(active_ws) = catalog
+        .workspaces
+        .iter()
+        .find(|w| w.id == catalog.active_workspace_id)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut results: Vec<WorkspaceSearchHit> = Vec::new();
+    let mut searched_active = false;
+
+    if let Some(active_flow) = active_ws
+        .flows
+        .iter()
+        .find(|f| f.id == catalog.active_flow_id)
+    {
+        if let Some(conn) = active_conn {
+            let hits = if let Some(engine) = active_engine {
+                db::queries::search_nodes_with_provenance(conn, engine, query, limit)?
+            } else {
+                db::queries::search_nodes(conn, query, limit)?
+            };
+            for hit in hits {
+                results.push(WorkspaceSearchHit {
+                    workspace_id: active_ws.id.clone(),
+                    flow_id: active_flow.id.clone(),
+                    flow_name: active_flow.name.clone(),
+                    hit,
+                });
+                if results.len() >= max_hits {
+                    return Ok(results);
+                }
+            }
+            searched_active = true;
+        }
+    }
+
+    append_sibling_flow_hits(
+        active_ws,
+        &catalog.active_flow_id,
+        searched_active,
+        active_path,
+        query,
+        max_hits,
+        &mut results,
+    );
+
+    results.truncate(max_hits);
+    Ok(results)
+}
+
+#[tauri::command]
+pub fn search_workspace_flows(
+    query: String,
+    limit: Option<u32>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<WorkspaceSearchHit>, IpcError> {
+    let max_hits = limit.unwrap_or(30);
+    if max_hits == 0 {
+        return Ok(Vec::new());
+    }
+    let catalog = state.workspaces.load_or_init()?;
+    let Some(active_ws) = catalog
+        .workspaces
+        .iter()
+        .find(|w| w.id == catalog.active_workspace_id)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut results: Vec<WorkspaceSearchHit> = Vec::new();
+    let mut searched_active = false;
+    let mut active_path_opt: Option<String> = None;
+
+    {
+        // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+        let workspace_guard = state
+            .workspace
+            .read()
+            .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+        let db_guard = state
+            .db
+            .lock()
+            .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+        if let (Some(active), Some(conn)) = (workspace_guard.as_ref(), db_guard.as_ref()) {
+            active_path_opt = Some(active.path.clone());
+            if let Some(active_flow) = active_ws
+                .flows
+                .iter()
+                .find(|f| f.id == catalog.active_flow_id)
+            {
+                let hits = db::queries::search_nodes_with_provenance(
+                    conn,
+                    &active.engine,
+                    &query,
+                    max_hits,
+                )?;
+                for hit in hits {
+                    results.push(WorkspaceSearchHit {
+                        workspace_id: active_ws.id.clone(),
+                        flow_id: active_flow.id.clone(),
+                        flow_name: active_flow.name.clone(),
+                        hit,
+                    });
+                    if results.len() >= max_hits as usize {
+                        return Ok(results);
+                    }
+                }
+                searched_active = true;
+            }
+        }
+    }
+
+    append_sibling_flow_hits(
+        active_ws,
+        &catalog.active_flow_id,
+        searched_active,
+        active_path_opt.as_deref(),
+        &query,
+        max_hits as usize,
+        &mut results,
+    );
+
+    results.truncate(max_hits as usize);
+    Ok(results)
+}
+
+#[tauri::command]
+pub fn save_flow_system_prompt(
+    prompt: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let mut workspace_guard = state
+        .workspace
+        .write()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    db::queries::save_flow_system_prompt(conn, &prompt)?;
+    active.system_prompt = prompt;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_stale_nodes(state: tauri::State<'_, AppState>) -> Result<Vec<StaleNodeInfo>, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let workspace_guard = state
+        .workspace
+        .read()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    compute_stale_nodes(conn, &active.engine)
+}
+
+#[tauri::command]
+pub fn acknowledge_stale_node(
+    node_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let workspace_guard = state
+        .workspace
+        .read()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    ack_stale_node_db(conn, &active.engine, &node_id)
 }
 
 #[tauri::command]
@@ -473,6 +795,7 @@ pub fn import_json(
         path: snapshot.path.clone(),
         engine,
         token_budget: snapshot.token_budget,
+        system_prompt: snapshot.system_prompt.clone(),
     });
     *db_guard = Some(conn);
 

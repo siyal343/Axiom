@@ -15,7 +15,7 @@ use crate::graph::compiler::compile_context;
 use crate::graph::models::{
     compute_content_hash, estimate_tokens, now_epoch_ms, ContextControls, CreatedBy, EdgeDto,
     EdgeType, EdgeWeight, GraphOp, LensKind, LensStreamEvent, ModelTierConfig, NodeDto,
-    NodeLayout, NodeMetadata, NodeStatus,
+    NodeLayout, NodeMetadata, NodeStatus, ProvenanceInput,
 };
 use crate::graph::spatial::{find_free_position, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH};
 use crate::ipc::ActiveWorkspace;
@@ -23,6 +23,9 @@ use crate::ipc::ActiveWorkspace;
 #[derive(Debug, Clone)]
 pub struct PreparedLensRun {
     pub compiled_prompt: String,
+    pub flow_system_prompt: String,
+    pub provenance_inputs: Vec<ProvenanceInput>,
+    pub prompt_tokens: u32,
 }
 
 pub struct LensRunParams {
@@ -171,6 +174,9 @@ pub fn prepare_lens_context(
     let compiled = compile_context(&active.engine, focus_ids, token_budget);
     Ok(PreparedLensRun {
         compiled_prompt: compiled.prompt_text,
+        flow_system_prompt: active.system_prompt.clone(),
+        provenance_inputs: compiled.provenance_inputs,
+        prompt_tokens: compiled.xray.total_tokens,
     })
 }
 
@@ -199,8 +205,8 @@ pub async fn execute_lens_run(
         ),
     };
 
-    let compiled_prompt = match context_result {
-        Ok(prepared) => prepared.compiled_prompt,
+    let prepared = match context_result {
+        Ok(prepared) => prepared,
         Err(err) => {
             if let Ok(mut runs) = active_runs.lock() {
                 runs.remove(&params.run_id);
@@ -213,6 +219,10 @@ pub async fn execute_lens_run(
             return Err(err);
         }
     };
+    let compiled_prompt = prepared.compiled_prompt;
+    let flow_system_prompt = prepared.flow_system_prompt;
+    let provenance_inputs = prepared.provenance_inputs;
+    let prompt_tokens = prepared.prompt_tokens;
 
     if workspace_generation.load(Ordering::SeqCst) != params.expected_generation {
         if let Ok(mut runs) = active_runs.lock() {
@@ -231,6 +241,12 @@ pub async fn execute_lens_run(
         system_prompt.push_str(
             "\n\nIN-PLACE MODE: Emit ONE @@NODE block with a concise 3-7 word title=\"...\" summarizing the question and answer, containing only the answer body.",
         );
+    }
+    let trimmed_flow_prompt = flow_system_prompt.trim();
+    if !trimmed_flow_prompt.is_empty() {
+        system_prompt.push_str(&format!(
+            "\n\n[FLOW SYSTEM INSTRUCTIONS]\n{trimmed_flow_prompt}"
+        ));
     }
     let extra_instruction = params.custom_prompt.as_deref().unwrap_or("").trim();
     let user_prompt = if extra_instruction.is_empty() {
@@ -518,6 +534,16 @@ pub async fn execute_lens_run(
                     },
                 ],
             )?;
+            let _ = db::queries::upsert_ai_run_provenance(
+                conn,
+                &nid,
+                &params.run_id,
+                params.lens,
+                Some(params.config.model.as_str()),
+                &provenance_inputs,
+                prompt_tokens,
+                now_epoch_ms(),
+            );
             res.updated_nodes.into_iter().find(|n| n.id == nid)
         };
 

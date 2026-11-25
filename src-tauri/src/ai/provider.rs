@@ -15,6 +15,48 @@ pub struct LlmStreamRequest {
     pub api_key: Option<String>,
 }
 
+pub fn is_reasoning_openai_model(model: &str) -> bool {
+    let trimmed = model.trim();
+    let bare = trimmed
+        .rsplit_once('/')
+        .map(|(_, name)| name)
+        .unwrap_or(trimmed);
+    let lower = bare.to_ascii_lowercase();
+    let matches_prefix = |prefix: &str| {
+        lower == prefix
+            || lower
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('-') || rest.starts_with('.'))
+    };
+    matches_prefix("o1")
+        || matches_prefix("o3")
+        || matches_prefix("gpt-5")
+        || lower.starts_with("o4-")
+}
+
+pub fn build_openai_compat_body(req: &LlmStreamRequest) -> serde_json::Value {
+    let messages = json!([
+        { "role": "system", "content": req.system_prompt },
+        { "role": "user", "content": req.user_prompt },
+    ]);
+    if is_reasoning_openai_model(&req.config.model) {
+        json!({
+            "model": req.config.model,
+            "stream": true,
+            "max_completion_tokens": req.config.max_tokens,
+            "messages": messages,
+        })
+    } else {
+        json!({
+            "model": req.config.model,
+            "stream": true,
+            "temperature": req.config.temperature,
+            "max_tokens": req.config.max_tokens,
+            "messages": messages,
+        })
+    }
+}
+
 fn map_reqwest_error(err: reqwest::Error) -> IpcError {
     IpcError::provider_network(err.without_url().to_string())
 }
@@ -136,19 +178,11 @@ pub async fn stream_completion(
     let builder = match req.config.provider {
         ProviderKind::OpenaiCompat => {
             let url = format!("{base}/chat/completions");
+            let body = build_openai_compat_body(&req);
             let mut b = client
                 .post(url)
                 .header("Content-Type", "application/json")
-                .json(&json!({
-                    "model": req.config.model,
-                    "stream": true,
-                    "temperature": req.config.temperature,
-                    "max_tokens": req.config.max_tokens,
-                    "messages": [
-                        { "role": "system", "content": req.system_prompt },
-                        { "role": "user", "content": req.user_prompt },
-                    ]
-                }));
+                .json(&body);
             if let Some(key) = key_trimmed {
                 b = b.header("Authorization", format!("Bearer {key}"));
             }

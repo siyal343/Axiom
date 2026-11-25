@@ -8,6 +8,8 @@ export type NodeLensOrigin =
   | "diverge"
   | "feynman"
   | "synthesize"
+  | "research"
+  | "study"
   | "custom";
 export type LensKind =
   | "red_team"
@@ -90,6 +92,7 @@ export interface WorkspaceSnapshot {
   edges: EdgeDto[];
   camera: CameraState;
   token_budget: number;
+  system_prompt?: string;
 }
 
 export interface NodePositionUpdate {
@@ -250,4 +253,39 @@ export interface WorkspaceCatalogDto {
 export interface OpenFlowResult {
   catalog: WorkspaceCatalogDto;
   snapshot: WorkspaceSnapshot;
+}
+
+export type StaleReason = "modified" | "deleted";
+
+export interface StaleInputChange {
+  node_id: string;
+  title: string;
+  reason: StaleReason;
+}
+
+export interface StaleNodeInfo {
+  node_id: string;
+  run_id: string;
+  lens: LensKind;
+  model: string | null;
+  created_at: number;
+  changed_inputs: StaleInputChange[];
+}
+
+export interface WorkspaceSearchHit {
+  workspace_id: string;
+  flow_id: string;
+  flow_name: string;
+  hit: SearchHit;
+}
+
+export interface RelatedNodeHit {
+  id: string;
+  title: string;
+  type: NodeType;
+  status: NodeStatus;
+  snippet: string;
+  score: number;
+  x: number;
+  y: number;
 }

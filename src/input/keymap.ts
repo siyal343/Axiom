@@ -63,6 +63,7 @@ import {
   minimapOpen,
   modalState,
   openCommandPalette,
+  relatedPopoverNodeId,
   selectedEdgeId,
   selectedIds,
   selectSingle,
@@ -1089,6 +1090,7 @@ export function attachKeymap(
     closeOverlays: () => {
       edgePopover.value = null;
       closeNodeContextMenu();
+      relatedPopoverNodeId.value = null;
       shortcutsHelpOpen.value = false;
       closeCommandPalette();
       closeCustomPromptBar();

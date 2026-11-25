@@ -26,6 +26,7 @@ import {
   lockedShakeId,
   modalState,
   selectedIds,
+  staleNodesMap,
   xrayState,
 } from "../store/selection";
 import { getRenderedMarkdown, renderMarkdownToSanitizedHtml } from "./markdownCache";
@@ -40,6 +41,7 @@ export function NodeCard({ node }: NodeCardProps) {
   const latestLayoutRef = useRef(node.layout);
   latestLayoutRef.current = node.layout;
   const [moreOpen, setMoreOpen] = useState(false);
+  const [staleOpen, setStaleOpen] = useState(false);
 
   const isFocused = focusId.value === node.id;
   const isSelected = selectedIds.value.has(node.id);
@@ -48,6 +50,7 @@ export function NodeCard({ node }: NodeCardProps) {
   const interacting = isInteracting.value;
   const xray = xrayState.value;
   const loopholeInfo = unresolvedLoopholes.value.get(node.id);
+  const staleInfo = staleNodesMap.value.get(node.id);
 
   const xrayMode = xray ? xray.node_modes[node.id] : undefined;
   const isXrayDimmed = xray !== null && xrayMode === undefined;
@@ -114,6 +117,12 @@ export function NodeCard({ node }: NodeCardProps) {
     }
   }, [showHoverPill, moreOpen]);
 
+  useEffect(() => {
+    if (!staleInfo && staleOpen) {
+      setStaleOpen(false);
+    }
+  }, [staleInfo, staleOpen]);
+
   const offset = dragOffsets.get(node.id);
   const resized = resizeSizes.get(node.id);
   const displayWidth = resized ? resized.width : node.layout.width;
@@ -137,7 +146,8 @@ export function NodeCard({ node }: NodeCardProps) {
   if (node.layout.collapsed) classes.push("node-card--collapsed");
   if (isFocused) classes.push("node-card--focused");
   if (isSelected) classes.push("node-card--selected");
-  if (isHovered || isFocused || moreOpen) classes.push("node-card--elevated");
+  if (isHovered || isFocused || moreOpen || staleOpen) classes.push("node-card--elevated");
+  if (staleInfo) classes.push("node-card--stale");
   if (isThinkingTarget) classes.push("node-card--thinking");
   if (isShaking) classes.push("node-card--shaking");
   if (isXrayDimmed) classes.push("node-card--xray-dim");
@@ -177,6 +187,16 @@ export function NodeCard({ node }: NodeCardProps) {
     e.stopPropagation();
     applyMetaPatch("Collapse node", { collapsed: !node.layout.collapsed });
   };
+
+  const staleTitle =
+    staleInfo && staleInfo.changed_inputs.length > 0
+      ? `Upstream changed: ${staleInfo.changed_inputs
+          .map(
+            (change) =>
+              `${change.reason === "deleted" ? "Deleted" : "Modified"}: ${change.title || change.node_id}`,
+          )
+          .join(", ")}`
+      : "Upstream inputs changed";
 
   return (
     <article
@@ -370,8 +390,78 @@ export function NodeCard({ node }: NodeCardProps) {
               ⚠ {loopholeInfo.count}
             </span>
           )}
+          {staleInfo && (
+            <button
+              type="button"
+              class="node-badge node-badge--stale"
+              title={staleTitle}
+              aria-expanded={staleOpen}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setStaleOpen((v) => !v);
+              }}
+            >
+              STALE
+            </button>
+          )}
         </div>
       </header>
+
+      {staleInfo && staleOpen && (
+        <div
+          class="stale-popover"
+          role="dialog"
+          aria-label="Stale AI node inputs"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div class="stale-popover__header">Upstream inputs changed</div>
+          <ul class="stale-popover__list">
+            {staleInfo.changed_inputs.map((change) => (
+              <li
+                key={`${change.reason}:${change.node_id}`}
+                class="stale-popover__item"
+              >
+                {change.reason === "deleted" ? "Deleted" : "Modified"}:{" "}
+                {change.title || "Untitled"}
+              </li>
+            ))}
+          </ul>
+          <div class="stale-popover__actions">
+            <button
+              type="button"
+              class="stale-popover__btn stale-popover__btn--primary"
+              onClick={(e) => {
+                e.stopPropagation();
+                setStaleOpen(false);
+                window.dispatchEvent(
+                  new CustomEvent("axiom:rerun-stale", {
+                    detail: { nodeId: node.id, lens: staleInfo.lens },
+                  }),
+                );
+              }}
+            >
+              Re-run
+            </button>
+            <button
+              type="button"
+              class="stale-popover__btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setStaleOpen(false);
+                window.dispatchEvent(
+                  new CustomEvent("axiom:ack-stale", {
+                    detail: { nodeId: node.id },
+                  }),
+                );
+              }}
+            >
+              Mark Fresh
+            </button>
+          </div>
+        </div>
+      )}
 
       {!node.layout.collapsed && (
         <div

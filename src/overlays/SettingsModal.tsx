@@ -3,6 +3,7 @@ import {
   getSettings,
   isTauriRuntime,
   parseIpcError,
+  saveFlowSystemPrompt,
   saveSettings,
   testProviderConnection,
 } from "../ipc/client";
@@ -14,7 +15,7 @@ import type {
   TestConnectionResult,
 } from "../ipc/types";
 import { closeSettingsModal, settingsModalOpen } from "../store/aiRunner";
-import { theme, tokenBudget } from "../store/graphStore";
+import { flowSystemPrompt, theme, tokenBudget } from "../store/graphStore";
 import { modalState } from "../store/selection";
 import { pushToast } from "./ToastStack";
 
@@ -251,6 +252,7 @@ export function SettingsModal() {
   );
   const [autoSummarize, setAutoSummarize] = useState<boolean>(true);
   const [selectedTheme, setSelectedTheme] = useState<"dark" | "light">("dark");
+  const [systemPromptDraft, setSystemPromptDraft] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [testingTier, setTestingTier] = useState<"reasoning" | "utility" | null>(null);
   const [testResults, setTestResults] = useState<{
@@ -265,6 +267,7 @@ export function SettingsModal() {
     setReasoningKey(null);
     setUtilityKey(null);
     setTestResults({ reasoning: null, utility: null });
+    setSystemPromptDraft(flowSystemPrompt.value);
 
     if (!isTauriRuntime()) {
       setDefaultBudget(tokenBudget.value);
@@ -338,6 +341,7 @@ export function SettingsModal() {
     if (!isTauriRuntime()) {
       theme.value = selectedTheme;
       tokenBudget.value = committedBudget;
+      flowSystemPrompt.value = systemPromptDraft;
       pushToast("Settings updated (local preview)", "info");
       if (closeAfter) {
         closeSettingsModal();
@@ -350,6 +354,10 @@ export function SettingsModal() {
       const saved = await saveSettings(
         buildInput(committedBudget, committedReasoningMax, committedUtilityMax),
       );
+      if (systemPromptDraft !== flowSystemPrompt.value) {
+        await saveFlowSystemPrompt(systemPromptDraft);
+        flowSystemPrompt.value = systemPromptDraft;
+      }
       setReasoning(saved.reasoning);
       setUtility(saved.utility);
       setReasoningMaxTokensDraft(String(saved.reasoning.max_tokens));
@@ -517,6 +525,17 @@ export function SettingsModal() {
                   onChange={(e) => setAutoSummarize(e.currentTarget.checked)}
                 />
                 <span>Auto-summarize updated nodes in background (1500 ms debounce)</span>
+              </label>
+
+              <label class="settings-field settings-field--wide">
+                <span class="settings-field__label">Flow System Instructions</span>
+                <textarea
+                  class="settings-textarea"
+                  rows={4}
+                  placeholder="Optional system instructions applied to all AI lenses in this flow..."
+                  value={systemPromptDraft}
+                  onInput={(e) => setSystemPromptDraft(e.currentTarget.value)}
+                />
               </label>
             </div>
           </section>

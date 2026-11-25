@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use crate::graph::models::{
     estimate_tokens, CompiledXray, EdgeType, EdgeWeight, InclusionMode, NodeDto, NodeStatus,
-    Severity,
+    ProvenanceInput, Severity,
 };
 use crate::graph::GraphEngine;
 
@@ -11,6 +11,7 @@ use crate::graph::GraphEngine;
 pub struct CompiledContext {
     pub prompt_text: String,
     pub xray: CompiledXray,
+    pub provenance_inputs: Vec<ProvenanceInput>,
 }
 
 pub(crate) fn is_ancestor_edge(t: EdgeType) -> bool {
@@ -391,6 +392,18 @@ pub fn compile_context(
     let mut active_edge_list: Vec<String> = active_edges.into_iter().collect();
     active_edge_list.sort();
 
+    let mut provenance_inputs: Vec<ProvenanceInput> = node_modes
+        .keys()
+        .filter_map(|id| {
+            engine.nodes.get(id).map(|n| ProvenanceInput {
+                node_id: n.id.clone(),
+                title: n.title.clone(),
+                content_hash: n.content_hash.clone(),
+            })
+        })
+        .collect();
+    provenance_inputs.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+
     let prompt_text = sections.join("\n\n---\n\n");
     let prompt_preview = prompt_text.clone();
 
@@ -405,6 +418,7 @@ pub fn compile_context(
             active_edges: active_edge_list,
             prompt_preview,
         },
+        provenance_inputs,
     }
 }
 

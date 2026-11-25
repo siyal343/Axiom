@@ -302,6 +302,7 @@ impl StagedImport {
                     last_focus_id: None,
                 },
                 token_budget: 6000,
+                system_prompt: String::new(),
             },
         );
         std::mem::forget(self);
@@ -343,7 +344,7 @@ pub fn stage_import_json(
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         let meta_pairs = [
-            ("schema_version", "1".to_owned()),
+            ("schema_version", "2".to_owned()),
             ("camera_x", doc.meta.camera.x.to_string()),
             ("camera_y", doc.meta.camera.y.to_string()),
             ("camera_zoom", doc.meta.camera.zoom.to_string()),
@@ -386,6 +387,7 @@ pub fn stage_import_json(
             edges: doc.edges,
             camera: doc.meta.camera,
             token_budget: doc.meta.token_budget,
+            system_prompt: String::new(),
         },
     })
 }

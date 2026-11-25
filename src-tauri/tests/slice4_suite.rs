@@ -213,6 +213,7 @@ fn setup_workspace(nodes: Vec<NodeDto>) -> WorkspaceFixture {
         path: tmp.path().to_string_lossy().into_owned(),
         engine,
         token_budget: 6000,
+        system_prompt: String::new(),
     })));
     let db = Arc::new(Mutex::new(Some(conn)));
     WorkspaceFixture { _tmp: tmp, ws, db }

@@ -66,6 +66,13 @@ const toneCache = new Map<string, NodeToneInfo>();
 const MAX_TONE_CACHE = 2000;
 
 function computeNodeTone(node: NodeDto): NodeToneInfo {
+  if (node.metadata.lens === "research") {
+    return NODE_TONES.research;
+  }
+  if (node.metadata.lens === "study") {
+    return NODE_TONES.study;
+  }
+
   if (node.content.includes("@")) {
     const extracted = extractActionTagFromContent(node.content);
     if (extracted) {

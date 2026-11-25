@@ -179,6 +179,7 @@ pub fn hydrate_or_seed_workspace(
         .get("token_budget")
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(6000);
+    let system_prompt = meta.get("system_prompt").cloned().unwrap_or_default();
 
     if nodes.is_empty() {
         let now = now_epoch_ms();
@@ -270,6 +271,7 @@ pub fn hydrate_or_seed_workspace(
             last_focus_id,
         },
         token_budget,
+        system_prompt,
     })
 }
 

@@ -42,6 +42,7 @@ export interface RenderSceneInput {
   connectSourceId?: string | null;
   xrayState: CompiledXray | null;
   unresolvedLoopholes: Map<string, LoopholeSummary>;
+  staleNodeIds?: ReadonlySet<string>;
   marqueeWorld: MarqueeRect | null;
   edgePreviewWorld: EdgePreview | null;
   themeKey: "dark" | "light";
@@ -574,6 +575,7 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     connectSourceId = null,
     xrayState,
     unresolvedLoopholes,
+    staleNodeIds,
     marqueeWorld,
     edgePreviewWorld,
     themeKey,
@@ -887,6 +889,14 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
         ctx.fillStyle = p.xrayPin;
         ctx.beginPath();
         ctx.arc(rect.x + rect.w - 28, rect.y + 14, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Stale AI node indicator dot
+      if (staleNodeIds?.has(node.id)) {
+        ctx.fillStyle = "#f59e0b";
+        ctx.beginPath();
+        ctx.arc(rect.x + rect.w - 42, rect.y + 14, 4.5, 0, Math.PI * 2);
         ctx.fill();
       }
 
