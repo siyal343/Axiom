@@ -448,7 +448,6 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
   const minEdgeVy = viewTL.y - edgePad;
   const maxEdgeVx = viewBR.x + edgePad;
   const maxEdgeVy = viewBR.y + edgePad;
-  const isBirdsEyeLod = cam.zoom < LOD_THRESHOLD;
 
   const sceneRects = new Map<string, NodeRect>();
   const visibleObstacles: Array<{ id: string; rect: NodeRect }> = [];
