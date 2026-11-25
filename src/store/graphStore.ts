@@ -36,6 +36,7 @@ export interface CameraControllerHandle {
   getCamera: () => CameraState;
   getViewportSize: () => { width: number; height: number };
   animateTo: (targetCam: CameraTransform, durationMs?: number) => void;
+  setContinuousAnimation?: (enabled: boolean) => void;
   subscribeFrame?: (listener: (cam: CameraTransform) => void) => () => void;
   zoomByStep?: (factor: number) => void;
   resetZoom?: () => void;
@@ -60,6 +61,7 @@ export const isBirdsEye = signal<boolean>(false);
 export const workspacePath = signal<string>("");
 export const tokenBudget = signal<number>(6000);
 export const theme = signal<"dark" | "light">("dark");
+export const edgeFlowEnabled = signal<boolean>(true);
 export const unresolvedLoopholes = signal<Map<string, LoopholeSummary>>(new Map());
 
 export const cameraControllerRef: { current: CameraControllerHandle | null } = {
@@ -686,6 +688,53 @@ export async function spawnChild(
   cameraControllerRef.current?.refreshCull();
   cameraControllerRef.current?.markDirty();
   return spawned;
+}
+
+export async function duplicateNode(nodeId: string): Promise<NodeDto | null> {
+  const source = nodesMap.get(nodeId);
+  if (!source) {
+    return null;
+  }
+
+  const now = Date.now();
+  const id = `node_dup_${now}_${Math.random().toString(36).slice(2, 8)}`;
+  const copyTitle = `${source.title} (Copy)`;
+  const duplicated: NodeDto = {
+    id,
+    type: source.type,
+    status: source.status === "locked" ? "active" : source.status,
+    title: copyTitle,
+    content: source.content,
+    summary: source.summary,
+    content_hash: `${copyTitle.length}:${source.content.length}:${now}`,
+    summary_hash: source.summary_hash,
+    metadata: {
+      severity: source.metadata.severity,
+      lens: "manual",
+      created_by: "user",
+      model: null,
+      token_count: source.metadata.token_count,
+    },
+    context_controls: {
+      pin_global: source.context_controls.pin_global,
+      exclude_from_ai: source.context_controls.exclude_from_ai,
+    },
+    layout: {
+      x: source.layout.x + 36,
+      y: source.layout.y + 36,
+      width: source.layout.width,
+      height: source.layout.height,
+      collapsed: source.layout.collapsed,
+    },
+    created_at: now,
+    updated_at: now,
+  };
+
+  const { forward, inverse } = buildCreateNodeWithInverse(duplicated);
+  await mutateGraphUndoable("Duplicate node", forward, inverse);
+  selectSingle(duplicated.id);
+  await resolveAndAnimateOverlaps([duplicated.id]);
+  return nodesMap.get(duplicated.id) ?? duplicated;
 }
 
 const pendingResizes = new Map<string, NodeSizeUpdate>();

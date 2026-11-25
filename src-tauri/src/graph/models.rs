@@ -147,6 +147,8 @@ pub enum LensKind {
     Diverge,
     Feynman,
     Synthesize,
+    Research,
+    Study,
     Custom,
 }
 
@@ -489,6 +491,37 @@ pub struct TestConnectionResult {
     pub ok: bool,
     pub latency_ms: u64,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowEntryDto {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub template: String,
+    pub db_path: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceEntryDto {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub flows: Vec<FlowEntryDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceCatalogDto {
+    pub workspaces: Vec<WorkspaceEntryDto>,
+    pub active_workspace_id: String,
+    pub active_flow_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenFlowResult {
+    pub catalog: WorkspaceCatalogDto,
+    pub snapshot: WorkspaceSnapshot,
 }
 
 pub fn estimate_tokens(text: &str) -> u32 {

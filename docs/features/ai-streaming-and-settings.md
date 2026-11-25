@@ -44,7 +44,12 @@ API keys are stored through `keyring::Entry::new("dev.axiom.canvas", KEY_NAME)` 
 
 ## Lens prompts and streaming runner
 
-`src-tauri/src/ai/prompts.rs` defines `BASE_SYSTEM_PROMPT`, six specialized lens prompts (`LENS_RED_TEAM`, `LENS_EDGE_CASE`, `LENS_DIVERGE`, `LENS_FEYNMAN`, `LENS_SYNTHESIZE`, and `LENS_CUSTOM`), and `UTILITY_SUMMARY_PROMPT`, along with `lens_prompt`, `lens_defaults`, and `lens_to_origin`.
+`src-tauri/src/ai/prompts.rs` defines `BASE_SYSTEM_PROMPT` (tuned for systems engineering, scientific research, and deep study), eight specialized lens prompts (`LENS_RED_TEAM`, `LENS_EDGE_CASE`, `LENS_DIVERGE`, `LENS_FEYNMAN`, `LENS_SYNTHESIZE`, `LENS_RESEARCH`, `LENS_STUDY`, and `LENS_CUSTOM`), and `UTILITY_SUMMARY_PROMPT`, along with `lens_prompt`, `lens_defaults`, and `lens_to_origin`.
+
+- **Research lens (`A` then `L`):** `LensKind::Research` (`LENS_RESEARCH`) emits `2` to `3` structured `probe` and `branch` cards (`Core Findings & Claims`, `Methodology & Evidence Gaps`, and `Open Research Questions`) and maps to `NodeLensOrigin::Custom` in `lens_to_origin` to preserve the SQLite `CHECK (lens IN ...)` constraint without a schema migration.
+- **Study lens (`A` then `Q`):** `LensKind::Study` (`LENS_STUDY`) emits `1` `probe` card containing **Core Intuition**, **Key Equations & Definitions** in KaTeX, a **Worked Example**, and an **Active-Recall Quiz**, mapping to `NodeLensOrigin::Feynman` in `lens_to_origin`.
+- **Loophole triage (`A` then `T`):** Invokes `startLoopholeTriage` in `src/store/aiRunner.ts` to focus and pan to the highest-severity `active` loophole connected to the focused card (or anywhere in `nodesMap`) and display the triage banner.
+- **Universal user instruction attachment:** In `execute_lens_run` (`src-tauri/src/ai/runner.rs`), whenever `params.custom_prompt` is non-empty for any `LensKind`, the runner appends `\n\n---\n\n[USER INSTRUCTION]\n{extra_instruction}` to the compiled prompt so inline instructions steer any lens.
 
 ### Execution lifecycle
 
@@ -68,6 +73,25 @@ When you invoke `run_lens` from `triggerLens` (`src/store/aiRunner.ts`), the bac
 - **Utility LLM compression:** For longer notes, the worker calls `stream_completion` on the `utility` tier with `UTILITY_SUMMARY_PROMPT` under a `20`-second timeout.
 - **Staleness guard and silent update:** `update_node_summary` in `src-tauri/src/db/queries.rs` verifies `content_hash == expected_content_hash` in memory and executes `UPDATE nodes SET summary = ?1, summary_hash = ?2, updated_at = ?3 WHERE id = ?4 AND content_hash = ?5` inside an immediate transaction (firing `nodes_au` to update `nodes_fts`). If the row updated, the backend emits `"axiom://summary-updated"` (`SummaryUpdatedEvent`), and `applySummaryUpdate` in `aiRunner.ts` updates `nodesMap` silently without bumping `graphVersion` or triggering card layout changes.
 
-## Custom prompt bar
+## Action tags and custom prompt bar
 
-Pressing `A` then `Space` in Navigate Mode (or calling `triggerLens("custom")` without a prompt string) opens **Custom AI Prompt** (`src/overlays/CustomPromptBar.tsx`) in `"command"` modal state. The bar anchors beneath the focused card (clamped inside viewport bounds, or centered at `50%` width and `65%` height when no card is focused). Entering an instruction and pressing `Enter` or clicking **Run** closes the bar and launches `triggerLens("custom", trimmed)`; pressing `Escape` cancels back to `"navigate"`.
+`src/input/actionTags.ts` defines `ACTION_TAGS`, a shared registry of nine `@tag` directives (`@custom`, `@feynman`, `@redteam`, `@edgecase`, `@diverge`, `@synthesize`, `@research`, `@study`, and `@triage`) with alias resolution (`filterActionTags`, `parseActionTagInvocation`, and fence-aware `extractActionTagFromContent`) routed through `executeActionTag` in `src/store/aiRunner.ts`.
+
+| Tag | Aliases | Dispatched behavior |
+| --- | --- | --- |
+| `@custom` | `prompt`, `ask` | Runs `triggerLens("custom", argument)` |
+| `@feynman` | `firstprinciples`, `explain` | Runs `triggerLens("feynman", argument)` |
+| `@redteam` | `red-team`, `critique`, `challenge` | Runs `triggerLens("red_team", argument)` |
+| `@edgecase` | `edge-case`, `edgecases`, `boundary` | Runs `triggerLens("edge_case", argument)` |
+| `@diverge` | `branches`, `options` | Runs `triggerLens("diverge", argument)` |
+| `@synthesize` | `synth`, `decide` | Runs `triggerLens("synthesize", argument)` |
+| `@research` | `lit`, `cite`, `sources` | Runs `triggerLens("research", argument)` |
+| `@study` | `quiz`, `recall`, `flashcards` | Runs `triggerLens("study", argument)` |
+| `@triage` | `loopholes` | Runs `startLoopholeTriage()` |
+
+You can invoke `@tag` actions from four UI surfaces:
+
+- **`LiveEditorOverlay` (`src/cards/LiveEditorOverlay.tsx`):** Typing `@` opens `.editor-tag-menu` autocomplete. When `extractActionTagFromContent` finds a directive outside ```` ``` ```` or `~~~` fenced code blocks, the footer shows **Run `@tag`** and `Ctrl/Cmd+Enter` saves the card and executes the directive immediately.
+- **`CommandPalette` (`src/overlays/CommandPalette.tsx`):** Typing `@` or clicking **@ Actions** enters tag action mode, filtering `ACTION_TAGS` and passing trailing inline text (such as `@feynman entropy` or `@custom compare Raft vs Paxos`) as the directive argument before closing the palette and running `executeActionTag`.
+- **`CustomPromptBar` (`src/overlays/CustomPromptBar.tsx`):** Pressing `A` then `Space` in Navigate Mode (or calling `triggerLens("custom")` without a prompt string) opens **Custom AI Prompt** anchored beneath the focused card (or centered at `50%` width and `65%` height when no card is focused). On submit, `parseActionTagInvocation` checks for a leading `@tag` before falling back to `triggerLens("custom", trimmed)`; pressing `Escape` cancels back to `"navigate"`.
+- **`NodeContextMenu` (`src/overlays/NodeContextMenu.tsx`):** Right-clicking any card exposes all nine `@tag` items directly for single-click execution on that node.

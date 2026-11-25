@@ -150,3 +150,13 @@ Card headers begin on their own line with `@@NODE` followed by optional `key=val
 
 - **Code-fence tracking:** Inside a card (`ParserState::InNode`), `update_fence_state` tracks triple-or-longer backtick (`` ` ``) and tilde (`~`) fenced blocks. While inside a fence, lines matching `@@NODE` or `@@END` are treated as literal card body text rather than framing delimiters.
 - **Protocol-violation fallback:** If a stream stays in `ParserState::Preamble` for at least `120` bytes or at least two newlines without starting with `@` (or ends in `finish()` with non-empty preamble text), `NodeStreamParser` emits `SpawnNode` using the supplied `LensDefaults` and streams all prose as `TokenDelta` events so no output is lost.
+
+## Multi-workspace catalog and flow templates
+
+`WorkspaceCatalogStore` in `src-tauri/src/workspaces.rs` manages multiple project workspaces and per-topic flows on top of isolated SQLite databases:
+
+- **Atomic catalog storage:** `WorkspaceCatalogStore` persists `WorkspaceCatalogDto` to `~/.axiom/catalog.json` (with `with_root_dir` for unit tests) using a temporary `.tmp` sibling file, `sync_all()`, and atomic rename.
+- **First-run preservation:** When no `catalog.json` exists, `load_or_init` creates **Default Workspace** with **Main Flow** pointing to `~/.axiom/default.sqlite` so prior user workspaces remain intact. Added flows write isolated SQLite files to `~/.axiom/workspaces/<workspace_id>/<flow_id>.sqlite`.
+- **Workspace and flow CRUD:** Exposed IPC commands (`list_workspace_catalog`, `create_workspace`, `rename_workspace`, `delete_workspace`, `create_flow`, `open_flow`, `rename_flow`, and `delete_flow`) share `open_workspace_internal` in `src-tauri/src/ipc/commands.rs`, locking `state.workspace` before `state.db`. Deleting a flow removes its `.sqlite`, `-wal`, and `-shm` files; deleting the last workspace is rejected.
+- **Template seeding (`seed_flow_template`):** In `src-tauri/src/db/mod.rs`, `seed_flow_template` initializes empty flow databases for `"blank"` (`New Topic`), `"research"` (`Research Question` connected to `Literature & Evidence` and `Hypotheses & Gaps`), `"study"` (`Topic to Master` connected to `First-Principles Breakdown` and `Active Recall Questions`), and `"engineering"` (delegating to `hydrate_or_seed_workspace` with `System Architecture`).
+- **Browser fallback:** Outside Tauri, `src/store/workspaceCatalogStore.ts` mirrors the catalog under `localStorage` key `"axiom_catalog_v1"` and flow snapshots under `"axiom_flow_<id>"` (with an in-memory `Map` fallback), saving the outgoing flow snapshot and clearing `graphHistory` on every flow switch.

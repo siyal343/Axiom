@@ -11,8 +11,9 @@ use crate::error::IpcError;
 use crate::graph::compiler::compile_context;
 use crate::graph::models::{
     AppSettingsDto, ApplyResult, CameraState, CompiledXray, EdgeType, GraphOp, LensKind,
-    LensStreamEvent, NodePositionUpdate, NodeType, SaveSettingsInput, SearchHit,
-    SpawnConnectedResult, SpawnDirection, TestConnectionResult, WorkspaceSnapshot,
+    LensStreamEvent, NodePositionUpdate, NodeType, OpenFlowResult, SaveSettingsInput, SearchHit,
+    SpawnConnectedResult, SpawnDirection, TestConnectionResult, WorkspaceCatalogDto,
+    WorkspaceEntryDto, WorkspaceSnapshot,
 };
 use crate::graph::spatial::{
     compute_tidy_subtree, resolve_overlaps as compute_resolve_overlaps,
@@ -20,20 +21,18 @@ use crate::graph::spatial::{
 use crate::graph::GraphEngine;
 use crate::ipc::{ActiveWorkspace, AppState};
 
-#[tauri::command]
-pub fn open_workspace(
-    path: String,
-    state: tauri::State<'_, AppState>,
+fn open_workspace_internal(
+    resolved_path: PathBuf,
+    template_opt: Option<&str>,
+    state: &AppState,
 ) -> Result<WorkspaceSnapshot, IpcError> {
-    let resolved_path = if path.trim().is_empty() {
-        db::default_workspace_path()?
-    } else {
-        PathBuf::from(path.trim())
-    };
     let path_str = resolved_path.to_string_lossy().into_owned();
 
     let mut conn = db::open_connection(&resolved_path)?;
-    let mut snapshot = db::hydrate_or_seed_workspace(&mut conn, &path_str)?;
+    let mut snapshot = match template_opt {
+        Some(tpl) => db::seed_flow_template(&mut conn, &path_str, tpl)?,
+        None => db::hydrate_or_seed_workspace(&mut conn, &path_str)?,
+    };
     let mut engine = GraphEngine::from_snapshot(&snapshot.nodes, &snapshot.edges);
 
     if (cfg!(debug_assertions) || cfg!(test))
@@ -60,6 +59,148 @@ pub fn open_workspace(
     *db_guard = Some(conn);
 
     Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn open_workspace(
+    path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceSnapshot, IpcError> {
+    let resolved_path = if path.trim().is_empty() {
+        db::default_workspace_path()?
+    } else {
+        PathBuf::from(path.trim())
+    };
+    open_workspace_internal(resolved_path, None, &state)
+}
+
+#[tauri::command]
+pub fn list_workspace_catalog(
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceCatalogDto, IpcError> {
+    state.workspaces.load_or_init()
+}
+
+#[tauri::command]
+pub fn create_workspace(
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceEntryDto, IpcError> {
+    state.workspaces.create_workspace(&name)
+}
+
+#[tauri::command]
+pub fn rename_workspace(
+    workspace_id: String,
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceCatalogDto, IpcError> {
+    state.workspaces.rename_workspace(&workspace_id, &name)
+}
+
+#[tauri::command]
+pub fn delete_workspace(
+    workspace_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceCatalogDto, IpcError> {
+    {
+        // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+        let mut workspace_guard = state
+            .workspace
+            .write()
+            .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+        let mut db_guard = state
+            .db
+            .lock()
+            .map_err(|_| IpcError::db("Database lock poisoned"))?;
+        let catalog_before = state.workspaces.load_or_init()?;
+        let active_path = workspace_guard.as_ref().map(|w| w.path.clone());
+        let matches_deleted = catalog_before
+            .workspaces
+            .iter()
+            .find(|w| w.id == workspace_id)
+            .is_some_and(|w| {
+                active_path
+                    .as_deref()
+                    .is_some_and(|p| w.flows.iter().any(|f| f.db_path == p))
+            });
+        if matches_deleted {
+            // Release SQLite handle before deleting files on Windows.
+            *db_guard = None;
+            *workspace_guard = None;
+        }
+    }
+
+    state.workspaces.delete_workspace(&workspace_id)
+}
+
+#[tauri::command]
+pub fn create_flow(
+    workspace_id: String,
+    name: String,
+    template: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<OpenFlowResult, IpcError> {
+    let (catalog, flow) = state
+        .workspaces
+        .create_flow(&workspace_id, &name, &template)?;
+    let snapshot =
+        open_workspace_internal(PathBuf::from(&flow.db_path), Some(&flow.template), &state)?;
+    Ok(OpenFlowResult { catalog, snapshot })
+}
+
+#[tauri::command]
+pub fn open_flow(
+    workspace_id: String,
+    flow_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<OpenFlowResult, IpcError> {
+    let (catalog, flow) = state.workspaces.set_active(&workspace_id, &flow_id)?;
+    let snapshot =
+        open_workspace_internal(PathBuf::from(&flow.db_path), Some(&flow.template), &state)?;
+    Ok(OpenFlowResult { catalog, snapshot })
+}
+
+#[tauri::command]
+pub fn rename_flow(
+    workspace_id: String,
+    flow_id: String,
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceCatalogDto, IpcError> {
+    state.workspaces.rename_flow(&workspace_id, &flow_id, &name)
+}
+
+#[tauri::command]
+pub fn delete_flow(
+    workspace_id: String,
+    flow_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceCatalogDto, IpcError> {
+    {
+        let mut workspace_guard = state
+            .workspace
+            .write()
+            .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+        let mut db_guard = state
+            .db
+            .lock()
+            .map_err(|_| IpcError::db("Database lock poisoned"))?;
+        let catalog_before = state.workspaces.load_or_init()?;
+        let active_path = workspace_guard.as_ref().map(|w| w.path.clone());
+        let matches_deleted = catalog_before
+            .workspaces
+            .iter()
+            .find(|w| w.id == workspace_id)
+            .and_then(|w| w.flows.iter().find(|f| f.id == flow_id))
+            .is_some_and(|f| active_path.as_deref() == Some(f.db_path.as_str()));
+        if matches_deleted {
+            *db_guard = None;
+            *workspace_guard = None;
+        }
+    }
+
+    state.workspaces.delete_flow(&workspace_id, &flow_id)
 }
 
 #[tauri::command]

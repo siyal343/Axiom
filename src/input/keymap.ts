@@ -26,6 +26,7 @@ import {
   closeSettingsModal,
   dismissTriageBanner,
   openSettingsModal,
+  startLoopholeTriage,
   triggerLens,
 } from "../store/aiRunner";
 import {
@@ -50,6 +51,7 @@ import {
 } from "../store/history";
 import {
   closeCommandPalette,
+  closeNodeContextMenu,
   connectSourceId,
   edgePopover,
   enterEditMode,
@@ -64,6 +66,7 @@ import {
   xrayState,
   type ModalState,
 } from "../store/selection";
+import { toggleSidebar } from "../store/workspaceCatalogStore";
 import {
   collectSubtreeIds,
   findFirstChildTarget,
@@ -97,6 +100,7 @@ export interface KeymapDeps {
   applyTidy?: (prevMoves: NodePositionUpdate[], nextMoves: NodePositionUpdate[]) => void;
   openCommandPalette: () => void;
   openSettings?: () => void;
+  toggleSidebar?: () => void;
   zoomIn?: () => void;
   zoomOut?: () => void;
   resetZoom?: () => void;
@@ -105,6 +109,7 @@ export interface KeymapDeps {
   setConnectSourceId?: (id: string | null) => void;
   openEdgePopoverFor: (sourceId: string, targetId: string) => void;
   onTriggerLens: (lens: LensKind) => void;
+  onStartTriage?: () => boolean;
   onCancelActiveRun?: () => boolean;
   pushToast: (message: string, variant?: ToastVariant) => void;
   getCamera: () => CameraState;
@@ -137,7 +142,9 @@ function isInteractiveButtonTarget(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
     (target.tagName === "BUTTON" ||
-      target.closest(".hover-pill, .edge-popover, .multi-select-pill, .canvas-controls") !== null)
+      target.closest(
+        ".hover-pill, .edge-popover, .multi-select-pill, .canvas-controls, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu",
+      ) !== null)
   );
 }
 
@@ -300,6 +307,15 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
       } else if (lower === "f") {
         resetToNavigate();
         deps.onTriggerLens("feynman");
+      } else if (lower === "q") {
+        resetToNavigate();
+        deps.onTriggerLens("study");
+      } else if (lower === "l") {
+        resetToNavigate();
+        deps.onTriggerLens("research");
+      } else if (lower === "t") {
+        resetToNavigate();
+        deps.onStartTriage?.();
       } else if (lower === "s") {
         const count = deps.getSelectedIds().size;
         resetToNavigate();
@@ -370,6 +386,11 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
     if (mod && lower === "k") {
       e.preventDefault();
       deps.openCommandPalette();
+      return;
+    }
+    if (mod && !e.shiftKey && !e.altKey && lower === "b") {
+      e.preventDefault();
+      deps.toggleSidebar?.();
       return;
     }
     if (mod && e.key === ",") {
@@ -845,6 +866,7 @@ export function attachKeymap(
     },
     openCommandPalette,
     openSettings: openSettingsModal,
+    toggleSidebar,
     zoomIn: () => {
       cameraControllerRef.current?.zoomByStep?.(1.15);
     },
@@ -859,6 +881,7 @@ export function attachKeymap(
     },
     closeOverlays: () => {
       edgePopover.value = null;
+      closeNodeContextMenu();
       shortcutsHelpOpen.value = false;
       closeCommandPalette();
       closeCustomPromptBar();
@@ -868,6 +891,7 @@ export function attachKeymap(
         modalState.value = "navigate";
       }
     },
+    onStartTriage: startLoopholeTriage,
     onCancelActiveRun: cancelActiveRun,
     setConnectSourceId: (id) => {
       connectSourceId.value = id;

@@ -21,13 +21,15 @@ import {
   focusId,
   isInteracting,
   modalState,
+  nodeContextMenu,
   selectedIds,
   selectSingle,
   setSelection,
   toggleSelect,
 } from "../store/selection";
-import { screenToWorld, type CanvasCameraController } from "./camera";
+import { clampZoom, screenToWorld, type CanvasCameraController } from "./camera";
 import type { EdgePreview, MarqueeRect } from "./renderer2d";
+import { getEffectiveNodeHeight } from "./spatialIndex";
 
 const GRID_SNAP_PX = 12;
 const DRAG_THRESHOLD_PX = 4;
@@ -83,7 +85,7 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   }
   return Boolean(
     target.closest(
-      "button, input, textarea, select, a, .cm-editor, .live-editor-overlay, .hover-pill, .edge-popover, .multi-select-pill",
+      "button, input, textarea, select, a, .cm-editor, .live-editor-overlay, .hover-pill, .edge-popover, .multi-select-pill, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu",
     ),
   );
 }
@@ -135,6 +137,10 @@ export function attachCanvasPointer(
   };
 
   const onPointerDown = (e: PointerEvent): void => {
+    const downTarget = e.target instanceof Element ? e.target : null;
+    if (!downTarget?.closest(".node-context-menu")) {
+      nodeContextMenu.value = null;
+    }
     if (modalState.value === "edit" || modalState.value === "command") {
       return;
     }
@@ -526,9 +532,58 @@ export function attachCanvasPointer(
       return;
     }
     const node = nodesMap.get(nodeId);
-    if (node) {
+    if (!node) {
+      return;
+    }
+    nodeContextMenu.value = null;
+    selectSingle(node.id);
+
+    const cam = camera.getCamera();
+    const viewport = camera.getViewportSize();
+    const targetZoom = clampZoom(Math.max(cam.zoom, 1.15));
+    const nodeH = getEffectiveNodeHeight(node);
+    const centerX = node.layout.x + node.layout.width * 0.5;
+    const centerY = node.layout.y + nodeH * 0.5;
+    camera.animateTo(
+      {
+        x: viewport.width * 0.5 - centerX * targetZoom,
+        y: viewport.height * 0.5 - centerY * targetZoom,
+        zoom: targetZoom,
+      },
+      220,
+    );
+
+    if (node.metadata.created_by === "user") {
       enterEditMode(node);
     }
+  };
+
+  const onContextMenu = (e: MouseEvent): void => {
+    if (modalState.value !== "navigate") {
+      return;
+    }
+    const targetEl = e.target instanceof Element ? e.target : null;
+    if (targetEl?.closest(".workspace-sidebar, .sidebar-toggle-bar, .node-context-menu")) {
+      return;
+    }
+    const cardEl = targetEl?.closest<HTMLElement>("[data-node-id]");
+    const nodeId = cardEl?.dataset.nodeId;
+    if (!nodeId || !nodesMap.has(nodeId)) {
+      nodeContextMenu.value = null;
+      return;
+    }
+    e.preventDefault();
+    edgePopover.value = null;
+    if (!selectedIds.value.has(nodeId)) {
+      selectSingle(nodeId);
+    } else {
+      focusId.value = nodeId;
+    }
+    nodeContextMenu.value = {
+      nodeId,
+      x: e.clientX,
+      y: e.clientY,
+    };
   };
 
   const onWheel = (e: WheelEvent): void => {
@@ -575,6 +630,7 @@ export function attachCanvasPointer(
   shellEl.addEventListener("pointerup", finishGesture);
   shellEl.addEventListener("pointercancel", finishGesture);
   shellEl.addEventListener("dblclick", onDblClick);
+  shellEl.addEventListener("contextmenu", onContextMenu);
   shellEl.addEventListener("wheel", onWheel, { passive: false });
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
@@ -586,6 +642,7 @@ export function attachCanvasPointer(
     shellEl.removeEventListener("pointerup", finishGesture);
     shellEl.removeEventListener("pointercancel", finishGesture);
     shellEl.removeEventListener("dblclick", onDblClick);
+    shellEl.removeEventListener("contextmenu", onContextMenu);
     shellEl.removeEventListener("wheel", onWheel);
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);

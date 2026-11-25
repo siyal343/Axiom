@@ -9,7 +9,15 @@ export type NodeLensOrigin =
   | "feynman"
   | "synthesize"
   | "custom";
-export type LensKind = "red_team" | "edge_case" | "diverge" | "feynman" | "synthesize" | "custom";
+export type LensKind =
+  | "red_team"
+  | "edge_case"
+  | "diverge"
+  | "feynman"
+  | "synthesize"
+  | "custom"
+  | "research"
+  | "study";
 export type CreatedBy = "user" | "ai";
 export type EdgeType =
   | "derives"
@@ -197,4 +205,33 @@ export interface IpcError {
     | "PROVIDER_NETWORK"
     | "RUN_NOT_FOUND";
   message: string;
+}
+
+export type FlowTemplate = "blank" | "research" | "study" | "engineering";
+
+export interface FlowEntryDto {
+  id: string;
+  workspace_id: string;
+  name: string;
+  template: FlowTemplate;
+  db_path: string;
+  updated_at: number;
+}
+
+export interface WorkspaceEntryDto {
+  id: string;
+  name: string;
+  created_at: number;
+  flows: FlowEntryDto[];
+}
+
+export interface WorkspaceCatalogDto {
+  workspaces: WorkspaceEntryDto[];
+  active_workspace_id: string;
+  active_flow_id: string;
+}
+
+export interface OpenFlowResult {
+  catalog: WorkspaceCatalogDto;
+  snapshot: WorkspaceSnapshot;
 }

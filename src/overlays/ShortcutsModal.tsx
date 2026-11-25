@@ -10,6 +10,8 @@ const NAV_EDIT_ROWS: ShortcutRow[] = [
   { keys: "H / J / K / L or Arrows", action: "Traverse parent, sibling, or child" },
   { keys: "Shift + J / K", action: "Multi-select siblings" },
   { keys: "Enter", action: "Edit focused node" },
+  { keys: "Double-click", action: "Center zoom; edit user nodes" },
+  { keys: "Right-click", action: "Open node context menu" },
   { keys: "Tab", action: "Create child node and edit" },
   { keys: "Shift + Enter", action: "Create sibling branch and edit" },
   { keys: "N", action: "Create free core node" },
@@ -27,13 +29,16 @@ const GRAPH_CONTEXT_ROWS: ShortcutRow[] = [
 
 const AI_LENS_ROWS: ShortcutRow[] = [
   { keys: "A → R / E / D / F", action: "Red-Team, Edge Case, Diverge, Feynman" },
+  { keys: "A → Q / L / T", action: "Study & Recall, Research Map, or Triage" },
   { keys: "A → S", action: "Synthesize 2+ selected nodes" },
   { keys: "A → Space", action: "Custom AI prompt on focused node" },
+  { keys: "@tag in Editor / Ctrl+K", action: "Run @Feynman, @Study, @Research, @RedTeam, @Triage" },
   { keys: "Shift + R / D", action: "Mark loophole resolved or dismissed" },
 ];
 
 const WORKSPACE_ROWS: ShortcutRow[] = [
-  { keys: "Ctrl/Cmd + K", action: "Search nodes or run > actions" },
+  { keys: "Ctrl/Cmd + K", action: "Search nodes, > commands, or @ actions" },
+  { keys: "Ctrl/Cmd + B", action: "Toggle Workspaces & Flows sidebar" },
   { keys: "Ctrl/Cmd + ,", action: "Open AI & Workspace Settings" },
   { keys: "Ctrl/Cmd + = / - / 0", action: "Zoom in, zoom out, reset 100%" },
   { keys: "F / F F", action: "Fit selection or fit entire graph" },

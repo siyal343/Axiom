@@ -106,10 +106,23 @@ export class CanvasCameraController implements CameraControllerHandle {
   private rafId: number | null = null;
   private animRafId: number | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private continuousAnimation = false;
+  private disposed = false;
 
   private lastCullX = Number.NaN;
   private lastCullY = Number.NaN;
   private lastCullZoom = Number.NaN;
+
+  private readonly onVisibilityChange = (): void => {
+    if (
+      this.continuousAnimation &&
+      !this.disposed &&
+      typeof document !== "undefined" &&
+      !document.hidden
+    ) {
+      this.markDirty();
+    }
+  };
 
   constructor(options: CameraControllerOptions) {
     this.canvas = options.canvas;
@@ -125,6 +138,19 @@ export class CanvasCameraController implements CameraControllerHandle {
         }
       : { x: 0, y: 0, zoom: 1.0, last_focus_id: null };
     isBirdsEye.value = this.cam.zoom < LOD_THRESHOLD;
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", this.onVisibilityChange);
+    }
+  }
+
+  setContinuousAnimation(enabled: boolean): void {
+    if (this.continuousAnimation === enabled) {
+      return;
+    }
+    this.continuousAnimation = enabled;
+    if (enabled && !this.disposed && (typeof document === "undefined" || !document.hidden)) {
+      this.markDirty();
+    }
   }
 
   setCardLayerEl(el: HTMLElement | null): void {
@@ -323,6 +349,14 @@ export class CanvasCameraController implements CameraControllerHandle {
       const activeIntervalMs = intervalMs > 0 && intervalMs <= 250 ? intervalMs : 0;
       this.onFrameSample(drawMs, activeIntervalMs);
     }
+
+    if (
+      this.continuousAnimation &&
+      !this.disposed &&
+      (typeof document === "undefined" || !document.hidden)
+    ) {
+      this.markDirty();
+    }
   }
 
   private scheduleSaveCamera(): void {
@@ -346,6 +380,11 @@ export class CanvasCameraController implements CameraControllerHandle {
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.continuousAnimation = false;
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    }
     this.frameListeners.clear();
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);

@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graph::GraphEngine;
 use crate::settings::SettingsStore;
+use crate::workspaces::WorkspaceCatalogStore;
 
 pub struct ActiveWorkspace {
     pub path: String,
@@ -26,6 +27,7 @@ pub struct AppState {
     pub summary_tx: mpsc::UnboundedSender<String>,
     pub http_client: reqwest::Client,
     pub settings: Arc<SettingsStore>,
+    pub workspaces: Arc<WorkspaceCatalogStore>,
     pub seed_stress_on_open: Arc<AtomicBool>,
 }
 
@@ -39,6 +41,9 @@ impl AppState {
         let settings = Arc::new(SettingsStore::new().unwrap_or_else(|_| {
             SettingsStore::with_config_path(PathBuf::from("axiom-settings.json"), false)
         }));
+        let workspaces = Arc::new(WorkspaceCatalogStore::new().unwrap_or_else(|_| {
+            WorkspaceCatalogStore::with_root_dir(PathBuf::from(".axiom"))
+        }));
         (
             Self {
                 workspace: Arc::new(RwLock::new(None)),
@@ -47,6 +52,7 @@ impl AppState {
                 summary_tx,
                 http_client,
                 settings,
+                workspaces,
                 seed_stress_on_open: Arc::new(AtomicBool::new(false)),
             },
             summary_rx,

@@ -6,17 +6,19 @@ Axiom renders the infinite workspace using a three-layer pipeline designed to ke
 
 `src/App.tsx` mounts three stacked layers inside `.axiom-canvas-shell`:
 
-1. **Layer 1 — Full-viewport Canvas2D (`.canvas-layer`):** Drawn by `renderCanvas2d` in `src/canvas/renderer2d.ts` with device-pixel-ratio scaling. Renders the background fill, procedural dot grid (base `24` px world step that doubles when screen spacing drops under `10` px and fades out under `0.50x` zoom), dynamic 4-side cubic Bezier edges with obstacle deflection and vivid semantic colors (`--edge-default`, `--edge-branch`, `--edge-synthesis`, `--edge-challenge`, `--edge-resolve`, `--edge-reference`), `Hold V` X-Ray halos, Bird's-Eye level-of-detail (LOD) cards under `0.45x` zoom, marquee box-select rectangles, and live `Alt+Drag` edge previews.
+1. **Layer 1 — Full-viewport Canvas2D (`.canvas-layer`):** Drawn by `renderCanvas2d` in `src/canvas/renderer2d.ts` with device-pixel-ratio scaling. Renders the background fill, procedural dot grid (base `24` px world step that doubles when screen spacing drops under `10` px and fades out under `0.50x` zoom), dynamic 4-side cubic Bezier edges with obstacle deflection, animated directional connection pulses, `Hold V` X-Ray halos, Bird's-Eye level-of-detail (LOD) cards under `0.45x` zoom, marquee box-select rectangles, and live `Alt+Drag` edge previews.
 2. **Layer 2 — GPU-transformed static cards (`CardLayer` in `src/cards/CardLayer.tsx`):** Positions `.card-layer` with `transform: translate3d(x, y, 0) scale(zoom)` (`transform-origin: 0 0`) and renders only the viewport-culled `NodeCard` elements listed in `visibleNodeIds`.
-3. **Layer 3 — Single live editor and ephemeral pills:** `LiveEditorOverlay` (`src/cards/LiveEditorOverlay.tsx`) mounts when `modalState` equals `"edit"`, accompanied by floating `.multi-select-pill` and `.edge-popover` controls in `src/App.tsx`.
+3. **Layer 3 — Single live editor and ephemeral pills:** `LiveEditorOverlay` (`src/cards/LiveEditorOverlay.tsx`) mounts when `modalState` equals `"edit"`, accompanied by `.node-context-menu`, `.workspace-sidebar`, `.multi-select-pill`, and `.edge-popover` controls.
 
 ### Dynamic edge routing and visual emphasis
 
 Every edge in `renderCanvas2d` uses `computeDynamicEdgeCurve` and `nearestPortPair` rather than fixed left-to-right anchors:
 
+- **Viewport-culled obstacles and edges:** Before drawing edges, `renderCanvas2d` expands the world viewport by `240` px (`edgePad`). It skips edges whose combined `(srcRect, dstRect)` bounding box falls outside those bounds and restricts obstacle deflection checks (`visibleObstacles`) to on-screen nodes when `cam.zoom >= 0.45`.
 - **4-side port selection:** `nearestPortPair` evaluates all `16` cardinal port pairs between source and target rectangles, scoring Euclidean distance plus an alignment penalty whenever the connecting vector opposes a port's outward normal `(nx, ny)`. As cards move `360°` around each other, edges transition cleanly to the facing sides.
-- **Obstacle bow deflection:** When an edge's direct midpoint falls within `12` px of any third node's bounding box (`id !== srcId && id !== dstId`), `computeDynamicEdgeCurve` shifts the cubic Bezier control points perpendicularly around the nearest obstacle edge so connections stay visible instead of tunneling behind cards.
+- **Obstacle bow deflection:** When an edge's direct midpoint falls within `12` px of any visible third node's bounding box (`id !== srcId && id !== dstId`), `computeDynamicEdgeCurve` shifts the cubic Bezier control points perpendicularly around the nearest obstacle edge so connections stay visible instead of tunneling behind cards.
 - **Semantic styling and incident glow:** Base strokes use `2.0` px width (`2.25` px for `challenges`, `1.75` px for `references`) with round caps and `8.5` px arrowheads. Edges incident to `focusId`, `hoveredId`, or any actively dragged or resized card increase to `2.75` px width with a matching colored glow (`shadowBlur = 8`).
+- **Animated directional connection flow:** When `animateEdges` is true, `renderCanvas2d` draws marching dashes (`lineDashOffset` driven by `animTimeMs`) from source to target along each non-dimmed edge and draws a `3.2` px traveling directional orb along emphasized incident edges. `App.tsx` disables `CanvasCameraController.setContinuousAnimation` automatically in Bird's-Eye LOD (`cam.zoom < 0.45`), when `edgesMap.size === 0`, when `prefers-reduced-motion: reduce` matches, or when you toggle **Pause connection flow** / **Play connection flow** in `.canvas-controls`.
 
 ## Decoupled camera loop
 
@@ -54,11 +56,26 @@ Mutable graph collections (`nodesMap`, `edgesMap`, `cardDomRefs`, and `dragOffse
 | Drag empty canvas past `4` px | Draws a marquee selection box (`overlay.marqueeWorld`) and selects intersecting cards using `viewportSpatialIndex.queryRect` on release |
 | Click empty canvas | Clears selection (unless `Shift` is held) |
 | `Alt+Drag` from card | Draws a live dashed Bezier preview (`overlay.edgePreviewWorld`) and opens the **References** / **Resolves** / **Derives** edge popover when released over another node |
-| Double-click card | Enters Edit Mode on unlocked nodes (`enterEditMode`); see [Keyboard navigation and overlays](keyboard-navigation-and-overlays.md) for `Enter` and keyboard bindings |
+| Double-click card | Single-selects the card and smoothly center-zooms onto it (`Math.max(cam.zoom, 1.15)` over `220` ms); enters Edit Mode only when `node.metadata.created_by` equals `"user"` and keeps AI-created (`"ai"`) cards in Navigate Mode for inspection |
+| Right-click card | Opens `.node-context-menu` (`src/overlays/NodeContextMenu.tsx`) at cursor coordinates clamped inside viewport bounds |
+
+Right-clicking any card in Navigate Mode opens `.node-context-menu` with keyboard navigation (`ArrowUp`, `ArrowDown`, `Home`, `End`, `Escape`) and groups actions into four categories:
+
+- **Card edits:** **Edit**, **Copy Text**, **Duplicate** (creates a user-owned copy nearby and resolves overlaps), and **Add Child**.
+- **Node mode toggles:** **Pin Global** / **Unpin Global**, **Exclude from AI** / **Include in AI**, **Fold** / **Unfold**, **Lock** / **Unlock**, **Tidy Subtree**, plus **Resolve Loophole** / **Reopen Loophole** and **Dismiss Loophole** / **Restore Loophole** on loophole cards.
+- **Action tags:** All nine `@tag` actions (`@custom`, `@feynman`, `@redteam`, `@edgecase`, `@diverge`, `@synthesize`, `@research`, `@study`, `@triage`).
+- **Removal:** **Delete** (`Del`).
 
 When a card is hovered or single-focused in Navigate Mode, `NodeCard` renders four cardinal `+` port buttons (`.node-port--top`, `.node-port--right`, `.node-port--bottom`, `.node-port--left`) alongside `.hover-pill`, spawning a connected child in the selected `SpawnDirection` and opening Edit Mode.
 
 After pointer drags, manual resizes, `queueNodeResize` card growth, and finalized AI lens nodes, `resolveAndAnimateOverlaps` in `src/store/graphStore.ts` queries `resolve_overlaps` (or `resolveOverlapsLocally` outside Tauri) with the moved or grown cards pinned and animates displaced neighbors smoothly over `180` ms (`applyTidyPositions`).
+
+## Workspaces and flows sidebar
+
+`WorkspaceSidebar` (`src/overlays/WorkspaceSidebar.tsx`) renders a collapsible left drawer (`#workspace-sidebar`) paired with a top-left toggle pill (`.sidebar-toggle-bar`) displaying the active `<Workspace> / <Flow>` label:
+
+- **Toggle and focus safety:** Press `Ctrl+B` (`Cmd+B` on macOS), select **> Toggle Sidebar** in the Command Palette, or click `.sidebar-toggle-bar` to open or close the drawer. The sidebar stops `pointerdown` and `wheel` propagation so canvas pan and zoom stay unaffected, and sets `inert` and `aria-hidden="true"` when closed.
+- **Multi-flow organization:** Each collapsible workspace group lists its flows with template badges (**Design** for `engineering`, **Research** for `research`, **Study** for `study`, and **Blank** for `blank`). Inline micro-forms handle creating workspaces, creating flows with template selection, renaming entries, and confirming deletions without browser `window.prompt` or `window.confirm` dialogs.
 
 ## Static Markdown, math, and sanitization cache
 
@@ -69,7 +86,7 @@ In Navigate Mode, `NodeCard` renders static HTML through `src/cards/markdownCach
 3. **HTML sanitization:** After restoring KaTeX placeholders, the full HTML output passes through `DOMPurify.sanitize` with `DOMPURIFY_CONFIG` (allowing MathML elements plus `class` and `style` attributes) to strip `<script>`, inline event handlers, and `javascript:` URLs before `NodeCard` injects it.
 4. **Content-hash LRU cache:** `getRenderedMarkdown` caches sanitized HTML keyed by `content_hash` in an LRU `Map` capped at `MAX_CACHE_ENTRIES` (`600` entries).
 
-`NodeCard` attaches a `ResizeObserver` (`90` ms debounce) to expanded cards while not actively dragging or resizing. When rendered `scrollHeight` exceeds `node.layout.height + 2`, it calls `queueNodeResize` in `src/store/graphStore.ts`, which ignores jitter within `4` px, batches `resize_nodes` updates after `160` ms, and runs `resolveAndAnimateOverlaps` if the card grew.
+`NodeCard` attaches a `ResizeObserver` (`90` ms debounce, keyed on `[node.id, node.layout.collapsed]`) to expanded cards while not actively dragging or resizing. When rendered `offsetHeight` exceeds `node.layout.height + 2` (ignoring absolute-positioned ports, handles, and pills), it calls `queueNodeResize` in `src/store/graphStore.ts`, which ignores jitter within `4` px, batches `resize_nodes` updates after `160` ms, and runs `resolveAndAnimateOverlaps` if the card grew.
 
 ## One Live Editor architecture
 
@@ -77,5 +94,6 @@ Axiom enforces the invariant that zero CodeMirror instances exist in the DOM out
 
 - In Navigate Mode (`modalState === "navigate"`), `LiveEditorOverlay` returns `null`, leaving `0` `.cm-editor` elements in the DOM.
 - When you trigger `enterEditMode(node)` on a `locked` node, `src/store/selection.ts` aborts editing and triggers a `240` ms `lockedShakeId` animation.
-- On an unlocked node, `enterEditMode` sets `modalState` to `"edit"` and `LiveEditorOverlay` mounts one `LiveEditorInstance` (`role="dialog"`, `aria-label="Edit node"`) positioned through `computeOverlayRect`, synchronized on camera frames through `subscribeFrame`, with a title `<input>` and a CodeMirror 6 `EditorView` (`@codemirror/lang-markdown`, `@codemirror/commands` default and history keymaps, line wrapping, and monochrome theme). Initial focus defers to `requestAnimationFrame`, selecting the title `<input>` for empty newly created nodes (`"New Concept"` or `"New Node"`) or focusing the CodeMirror body otherwise.
-- Pressing `Escape` inside Edit Mode saves changed text through `mutateGraphUndoable` (pre-warming `getRenderedMarkdown`), calls `exitEditMode()`, and destroys the `EditorView` (`view.destroy()`), returning the `.cm-editor` count to zero. Pressing `Ctrl/Cmd+Enter` commits edits the same way and transitions directly into `chord_a` mode on the saved node (`commitAndExit(true)`).
+- On an unlocked node, `enterEditMode` sets `modalState` to `"edit"` and `LiveEditorOverlay` mounts one `LiveEditorInstance` (`role="dialog"`, `aria-label="Edit node"`) positioned through `computeOverlayRect`, synchronized on camera frames through `subscribeFrame`, with a title `<input>` and a CodeMirror 6 `EditorView` (`@codemirror/lang-markdown`, `@codemirror/commands` default and history keymaps, line wrapping, and monochrome theme). Initial focus defers to `requestAnimationFrame`, selecting the title `<input>` for empty starter titles (`"New Concept"` or `"New Node"`) or focusing the CodeMirror body otherwise.
+- Typing `@` before the cursor inside the CodeMirror body opens `.editor-tag-menu` (`role="listbox"`) powered by `filterActionTags`. Use `ArrowUp`, `ArrowDown`, `Enter`, `Tab`, or click an item to insert the tag. Whenever `extractActionTagFromContent` detects an `@tag` line outside fenced code blocks, the footer displays a **Run `@tag`** button.
+- Pressing `Escape` inside Edit Mode saves changed text through `mutateGraphUndoable` (pre-warming `getRenderedMarkdown`), calls `exitEditMode()`, and destroys the `EditorView` (`view.destroy()`), returning the `.cm-editor` count to zero. Pressing `Ctrl/Cmd+Enter` commits edits, exits Edit Mode, preserves selection on the edited node, and runs any detected `@tag` directive (or opens `chord_a` when no `@tag` is present).

@@ -10,6 +10,12 @@ export interface EdgePopoverState {
   y: number;
 }
 
+export interface NodeContextMenuState {
+  nodeId: string;
+  x: number;
+  y: number;
+}
+
 export const modalState = signal<ModalState>("navigate");
 export const focusId = signal<string | null>(null);
 export const selectedIds = signal<ReadonlySet<string>>(new Set());
@@ -17,13 +23,19 @@ export const hoveredId = signal<string | null>(null);
 export const xrayState = signal<CompiledXray | null>(null);
 export const lockedShakeId = signal<string | null>(null);
 export const edgePopover = signal<EdgePopoverState | null>(null);
+export const nodeContextMenu = signal<NodeContextMenuState | null>(null);
 export const isInteracting = signal<boolean>(false);
 export const commandPaletteOpen = signal<boolean>(false);
 export const shortcutsHelpOpen = signal<boolean>(false);
 export const connectSourceId = signal<string | null>(null);
 
+export function closeNodeContextMenu(): void {
+  nodeContextMenu.value = null;
+}
+
 export function openCommandPalette(): void {
   edgePopover.value = null;
+  nodeContextMenu.value = null;
   hoveredId.value = null;
   shortcutsHelpOpen.value = false;
   commandPaletteOpen.value = true;
@@ -108,6 +120,7 @@ export function enterEditMode(node: NodeDto): boolean {
   selectedIds.value = new Set([node.id]);
   hoveredId.value = null;
   edgePopover.value = null;
+  nodeContextMenu.value = null;
   modalState.value = "edit";
   return true;
 }

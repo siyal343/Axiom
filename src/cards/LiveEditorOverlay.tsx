@@ -4,9 +4,16 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { type CameraTransform, worldToScreen } from "../canvas/camera";
+import {
+  extractActionTagFromContent,
+  filterActionTags,
+  type ActionTagDef,
+  type ExtractedActionTag,
+} from "../input/actionTags";
+import { executeActionTag } from "../store/aiRunner";
 import { cameraControllerRef, mutateGraphUndoable, nodesMap } from "../store/graphStore";
 import { buildUpdateTextWithInverse } from "../store/history";
-import { exitEditMode, focusId, modalState } from "../store/selection";
+import { exitEditMode, focusId, modalState, selectSingle } from "../store/selection";
 import { getRenderedMarkdown } from "./markdownCache";
 
 const monochromeEditorTheme = EditorView.theme({
@@ -96,6 +103,12 @@ interface LiveEditorInstanceProps {
   worldH: number;
 }
 
+interface TagAutocompleteState {
+  from: number;
+  to: number;
+  items: ActionTagDef[];
+}
+
 function LiveEditorInstance({
   nodeId,
   initialTitle,
@@ -106,16 +119,41 @@ function LiveEditorInstance({
   worldH,
 }: LiveEditorInstanceProps) {
   const [title, setTitle] = useState(initialTitle);
+  const [tagMenu, setTagMenu] = useState<TagAutocompleteState | null>(null);
+  const [tagActiveIndex, setTagActiveIndex] = useState(0);
+  const [detectedTag, setDetectedTag] = useState<ExtractedActionTag | null>(() =>
+    extractActionTagFromContent(initialContent),
+  );
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLInputElement | null>(null);
   const cmHostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const titleValRef = useRef(initialTitle);
   const committedRef = useRef(false);
+  const tagMenuRef = useRef<TagAutocompleteState | null>(null);
+  const tagActiveIndexRef = useRef(0);
 
   titleValRef.current = title;
+  tagMenuRef.current = tagMenu;
+  tagActiveIndexRef.current = tagActiveIndex;
 
-  const commitAndExit = (openChordAfter = false): void => {
+  const insertTag = (def: ActionTagDef): void => {
+    const view = viewRef.current;
+    const menu = tagMenuRef.current;
+    if (!view || !menu) {
+      return;
+    }
+    const insertion = `${def.tag} `;
+    view.dispatch({
+      changes: { from: menu.from, to: menu.to, insert: insertion },
+      selection: { anchor: menu.from + insertion.length },
+    });
+    view.focus();
+    setTagMenu(null);
+    setTagActiveIndex(0);
+  };
+
+  const commitAndExit = (afterAction: "none" | "run_or_chord" = "none"): void => {
     if (committedRef.current) {
       return;
     }
@@ -123,20 +161,28 @@ function LiveEditorInstance({
     const nextTitle = titleValRef.current;
     const nextContent = viewRef.current ? viewRef.current.state.doc.toString() : initialContent;
 
+    let savePromise: Promise<unknown> = Promise.resolve();
     if (nextTitle !== initialTitle || nextContent !== initialContent) {
       // Pre-warm static markdown cache and persist atomically.
       const current = nodesMap.get(nodeId);
       if (current) {
         getRenderedMarkdown(current.content_hash, nextContent);
         const { forward, inverse } = buildUpdateTextWithInverse(current, nextTitle, nextContent);
-        void mutateGraphUndoable("Edit node text", forward, inverse);
+        savePromise = mutateGraphUndoable("Edit node text", forward, inverse);
       }
     }
 
     exitEditMode();
-    if (openChordAfter) {
-      focusId.value = nodeId;
-      modalState.value = "chord_a";
+    if (afterAction === "run_or_chord") {
+      selectSingle(nodeId);
+      const latestDetected = extractActionTagFromContent(nextContent);
+      if (latestDetected) {
+        void savePromise.then(() =>
+          executeActionTag(latestDetected.action, latestDetected.argument),
+        );
+      } else {
+        modalState.value = "chord_a";
+      }
     }
   };
 
@@ -154,6 +200,48 @@ function LiveEditorInstance({
         EditorView.lineWrapping,
         monochromeEditorTheme,
         keymap.of([...defaultKeymap, ...historyKeymap]),
+        EditorView.updateListener.of((update) => {
+          if (!update.docChanged && !update.selectionSet) {
+            return;
+          }
+          if (update.docChanged) {
+            setDetectedTag(extractActionTagFromContent(update.state.doc.toString()));
+          }
+
+          const sel = update.state.selection.main;
+          if (!sel.empty) {
+            if (tagMenuRef.current !== null) {
+              setTagMenu(null);
+              setTagActiveIndex(0);
+            }
+            return;
+          }
+
+          const line = update.state.doc.lineAt(sel.head);
+          const beforeCursor = line.text.slice(0, sel.head - line.from);
+          const match = beforeCursor.match(/(?:^|\s)@([a-zA-Z0-9_-]*)$/);
+          if (!match) {
+            if (tagMenuRef.current !== null) {
+              setTagMenu(null);
+              setTagActiveIndex(0);
+            }
+            return;
+          }
+
+          const tokenQuery = match[1] ?? "";
+          const filtered = filterActionTags(tokenQuery);
+          if (filtered.length === 0) {
+            if (tagMenuRef.current !== null) {
+              setTagMenu(null);
+              setTagActiveIndex(0);
+            }
+            return;
+          }
+
+          const tokenFrom = sel.head - tokenQuery.length - 1;
+          setTagMenu({ from: tokenFrom, to: sel.head, items: filtered });
+          setTagActiveIndex(0);
+        }),
       ],
     });
 
@@ -189,11 +277,40 @@ function LiveEditorInstance({
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        commitAndExit(false);
-      } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        commitAndExit("none");
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
-        commitAndExit(true);
+        commitAndExit("run_or_chord");
+        return;
+      }
+
+      const activeMenu = tagMenuRef.current;
+      if (
+        activeMenu &&
+        activeMenu.items.length > 0 &&
+        document.activeElement !== titleRef.current
+      ) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          e.stopPropagation();
+          setTagActiveIndex((prev) => (prev + 1) % activeMenu.items.length);
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          e.stopPropagation();
+          setTagActiveIndex(
+            (prev) => (prev - 1 + activeMenu.items.length) % activeMenu.items.length,
+          );
+        } else if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.altKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          const chosen = activeMenu.items[tagActiveIndexRef.current] ?? activeMenu.items[0];
+          if (chosen) {
+            insertTag(chosen);
+          }
+        }
       }
     };
 
@@ -265,7 +382,43 @@ function LiveEditorInstance({
         }}
       />
       <div ref={cmHostRef} class="live-editor-overlay__body" />
-      <div class="live-editor-overlay__hint">Esc save &amp; exit · Ctrl/Cmd+Enter commit</div>
+      {tagMenu && tagMenu.items.length > 0 && (
+        <div class="editor-tag-menu" role="listbox" aria-label="Action tags">
+          {tagMenu.items.map((def, idx) => (
+            <button
+              key={def.tag}
+              type="button"
+              role="option"
+              aria-selected={idx === tagActiveIndex}
+              class={`editor-tag-menu__item ${
+                idx === tagActiveIndex ? "editor-tag-menu__item--active" : ""
+              }`}
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setTagActiveIndex(idx)}
+              onClick={() => insertTag(def)}
+            >
+              <span class="editor-tag-menu__tag">{def.tag}</span>
+              <span class="editor-tag-menu__desc">{def.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div class="live-editor-overlay__hint">
+        <span>
+          Esc save &amp; exit · Ctrl/Cmd+Enter{" "}
+          {detectedTag ? `run ${detectedTag.action.tag}` : "AI lens"}
+        </span>
+        {detectedTag && (
+          <button
+            type="button"
+            class="live-editor-overlay__run-btn"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => commitAndExit("run_or_chord")}
+          >
+            Run {detectedTag.action.tag}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

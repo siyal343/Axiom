@@ -273,6 +273,166 @@ pub fn hydrate_or_seed_workspace(
     })
 }
 
+fn make_template_node(
+    node_type: NodeType,
+    title: &str,
+    content: &str,
+    x: f64,
+    y: f64,
+    now: i64,
+) -> NodeDto {
+    let content_hash = compute_content_hash(title, content);
+    let token_count = estimate_tokens(&format!("{title}\n{content}"));
+    NodeDto {
+        id: format!("node_{}", ulid::Ulid::new()),
+        node_type,
+        status: NodeStatus::Active,
+        title: title.to_owned(),
+        content: content.to_owned(),
+        summary: String::new(),
+        content_hash,
+        summary_hash: String::new(),
+        metadata: NodeMetadata {
+            severity: None,
+            lens: NodeLensOrigin::Manual,
+            created_by: CreatedBy::User,
+            model: None,
+            token_count,
+        },
+        context_controls: ContextControls {
+            pin_global: false,
+            exclude_from_ai: false,
+        },
+        layout: NodeLayout {
+            x,
+            y,
+            width: 320.0,
+            height: 180.0,
+            collapsed: false,
+        },
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn make_template_edge(
+    source_id: &str,
+    target_id: &str,
+    edge_type: EdgeType,
+    now: i64,
+) -> EdgeDto {
+    EdgeDto {
+        id: format!("edge_{}", ulid::Ulid::new()),
+        source_id: source_id.to_owned(),
+        target_id: target_id.to_owned(),
+        edge_type,
+        weight: EdgeWeight::Summary,
+        created_at: now,
+    }
+}
+
+pub fn seed_flow_template(
+    conn: &mut Connection,
+    path_str: &str,
+    template: &str,
+) -> Result<WorkspaceSnapshot, IpcError> {
+    let existing_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get(0))?;
+    let normalized = template.trim().to_ascii_lowercase();
+    if existing_count > 0 || normalized == "engineering" {
+        return hydrate_or_seed_workspace(conn, path_str);
+    }
+
+    let now = now_epoch_ms();
+    let (nodes, edges): (Vec<NodeDto>, Vec<EdgeDto>) = match normalized.as_str() {
+        "blank" => {
+            let starter = make_template_node(NodeType::Core, "New Topic", "", 0.0, 0.0, now);
+            (vec![starter], Vec::new())
+        }
+        "research" => {
+            let root = make_template_node(
+                NodeType::Core,
+                "Research Question",
+                "Define the central hypothesis, measurable variables, and scope.",
+                0.0,
+                0.0,
+                now,
+            );
+            let lit = make_template_node(
+                NodeType::Probe,
+                "Literature & Evidence",
+                "Key prior studies, datasets, and baseline empirical bounds.",
+                420.0,
+                -110.0,
+                now,
+            );
+            let gaps = make_template_node(
+                NodeType::Branch,
+                "Hypotheses & Gaps",
+                "Competing mechanisms, confounders, and open experimental tests.",
+                420.0,
+                120.0,
+                now,
+            );
+            let e1 = make_template_edge(&root.id, &lit.id, EdgeType::Derives, now);
+            let e2 = make_template_edge(&root.id, &gaps.id, EdgeType::Branches, now);
+            (vec![root, lit, gaps], vec![e1, e2])
+        }
+        "study" => {
+            let root = make_template_node(
+                NodeType::Core,
+                "Topic to Master",
+                "State the concept in one sentence and list what you want to predict or derive.",
+                0.0,
+                0.0,
+                now,
+            );
+            let breakdown = make_template_node(
+                NodeType::Probe,
+                "First-Principles Breakdown",
+                "Core laws, KaTeX definitions, and intuitive causal mechanisms.",
+                420.0,
+                -110.0,
+                now,
+            );
+            let recall = make_template_node(
+                NodeType::Probe,
+                "Active Recall Questions",
+                "Self-test prompts, worked derivations, and common edge-case traps.",
+                420.0,
+                120.0,
+                now,
+            );
+            let e1 = make_template_edge(&root.id, &breakdown.id, EdgeType::Derives, now);
+            let e2 = make_template_edge(&root.id, &recall.id, EdgeType::Derives, now);
+            (vec![root, breakdown, recall], vec![e1, e2])
+        }
+        _ => return hydrate_or_seed_workspace(conn, path_str),
+    };
+
+    let focus_id = nodes.first().map(|n| n.id.clone());
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for node in &nodes {
+        queries::insert_node_tx(&tx, node)?;
+    }
+    for edge in &edges {
+        queries::insert_edge_tx(&tx, edge)?;
+    }
+    if let Some(ref fid) = focus_id {
+        tx.execute(
+            "INSERT OR REPLACE INTO workspace_meta (key, value) VALUES ('last_focus_id', ?1)",
+            params![fid],
+        )?;
+    }
+    tx.commit()?;
+
+    let mut snap = hydrate_or_seed_workspace(conn, path_str)?;
+    if snap.camera.last_focus_id.is_none() {
+        snap.camera.last_focus_id = focus_id;
+    }
+    Ok(snap)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

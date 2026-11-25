@@ -148,4 +148,62 @@ describe("CommandPalette > Action Mode & PerfHud", () => {
     expect(settingsModalOpen.value).toBe(true);
     expect(modalState.value).toBe("command");
   });
+
+  it("supports @ tag action mode filtering, inline prompt arguments, and clean execution", async () => {
+    render(<CommandPalette />, container);
+
+    openCommandPalette();
+    await flushUi();
+
+    const input = container.querySelector<HTMLInputElement>(".command-palette__input");
+    expect(input).not.toBeNull();
+    if (!input) return;
+
+    // Typing '@' shows all 9 @tag actions.
+    input.value = "@";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushUi();
+
+    const allTagText = Array.from(container.querySelectorAll(".command-palette__item--cmd"))
+      .map((el) => el.textContent ?? "")
+      .join("\n");
+    for (const expectedTag of [
+      "@custom",
+      "@feynman",
+      "@study",
+      "@research",
+      "@redteam",
+      "@edgecase",
+      "@diverge",
+      "@synthesize",
+      "@triage",
+    ]) {
+      expect(allTagText).toContain(expectedTag);
+    }
+
+    // Typing '@study' filters cleanly to @study.
+    input.value = "@study";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushUi();
+
+    const studyItems = Array.from(container.querySelectorAll(".command-palette__item--cmd"));
+    expect(studyItems).toHaveLength(1);
+    expect(studyItems[0]?.textContent).toContain("@study");
+
+    // Typing '@feynman entropy' preserves inline prompt argument and executes on Enter without throwing.
+    input.value = "@feynman entropy";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushUi();
+
+    const feynmanItems = Array.from(container.querySelectorAll(".command-palette__item--cmd"));
+    expect(feynmanItems).toHaveLength(1);
+    expect(feynmanItems[0]?.textContent).toContain("@feynman");
+    expect(feynmanItems[0]?.textContent).toContain('Prompt: "entropy"');
+
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushUi();
+
+    expect(commandPaletteOpen.value).toBe(false);
+    expect(modalState.value).toBe("navigate");
+  });
 });

@@ -1,13 +1,13 @@
 use crate::ai::parser::LensDefaults;
 use crate::graph::models::{EdgeType, LensKind, NodeLensOrigin, NodeType, Severity};
 
-pub const BASE_SYSTEM_PROMPT: &str = r#"You are an adversarial-grade systems design and engineering thinking partner embedded inside a directed spatial canvas.
+pub const BASE_SYSTEM_PROMPT: &str = r#"You are a rigorous systems engineering, scientific research, and first-principles study thinking partner embedded inside a directed spatial canvas. Adapt your domain depth to the topic—whether software/hardware architecture, scientific inquiry, or deep conceptual mastery.
 
 CONTEXT TAGS YOU WILL RECEIVE:
 - [GLOBAL CONSTRAINTS]: Hard invariants pinned by the user. Never violate them without explicitly flagging a contradiction.
-- [BACKGROUND ANCESTORS]: Prior design lineage (may be compressed to summaries).
-- [DIRECT PARENTS & INPUTS]: Immediate upstream specifications or competing branches.
-- [UNRESOLVED LOOPHOLES]: Known active flaws already flagged. Do NOT duplicate these.
+- [BACKGROUND ANCESTORS]: Prior lineage and established foundations (may be compressed to summaries).
+- [DIRECT PARENTS & INPUTS]: Immediate upstream specifications, claims, or competing branches.
+- [UNRESOLVED LOOPHOLES]: Known active flaws or open questions already flagged. Do NOT duplicate these.
 - [REFERENCED CONTEXT]: Optional cross-linked summaries for awareness.
 - [FOCUS NODE]: The target node(s) for this operation.
 
@@ -17,8 +17,8 @@ STRICT OUTPUT PROTOCOL:
    @@NODE type=<type> edge=<edge> [severity=<sev>] title="<concise 3-7 word title>"
    and close with:
    @@END
-3. Write dense, concrete, scannable Markdown inside each card (target <= 150 words per card unless a table or derivation requires more). Use LaTeX ($...$ / $$...$$) for math and fenced blocks for code.
-4. State explicit assumptions, concrete numbers, and failure mechanisms—never generic advice or filler."#;
+3. Write dense, concrete, scannable Markdown inside each card (target <= 150 words per card unless a table, derivation, or worked example requires more). Use LaTeX ($...$ / $$...$$) for math/equations and fenced blocks for code.
+4. State explicit assumptions, concrete numbers, and verifiable mechanisms or evidence gaps—never generic advice or filler."#;
 
 pub const LENS_RED_TEAM: &str = r#"LENS: RED-TEAM (ADVERSARIAL DESIGN REVIEW)
 Act as a hostile principal engineer trying to break the [FOCUS NODE] under real-world operating conditions.
@@ -115,6 +115,50 @@ Emit exactly ONE block:
 - **Open Risks:** <Remaining assumptions to validate next>
 @@END"#;
 
+pub const LENS_RESEARCH: &str = r#"LENS: RESEARCH BRIEF (SCIENTIFIC & LITERATURE SYNTHESIS)
+Analyze the [FOCUS NODE] as a senior research scientist: surface core findings/claims, methodological limits or evidence gaps, and testable follow-up research questions.
+
+TASK:
+Ground every point in explicit mechanisms, empirical bounds, or experimental assumptions rather than vague summaries.
+
+OUTPUT FORMAT:
+Emit 2 to 3 separate blocks using:
+@@NODE type=probe edge=derives title="Core Findings & Claims"
+- **Primary Claim / Result:** <Concrete finding, law, or observed relationship>
+- **Supporting Mechanism:** <Why the effect holds and under what boundary conditions>
+@@END
+@@NODE type=branch edge=derives title="Methodology & Evidence Gaps"
+- **Methodological Assumptions:** <Key sample, measurement, or model assumptions>
+- **Evidence Gaps / Confounders:** <Missing controls, unverified regimes, or conflicting observations>
+@@END
+@@NODE type=probe edge=derives title="Open Research Questions"
+1. **Question:** <Testable hypothesis or next experiment> — *Discriminating signal:* <what observation separates competing explanations>
+2. **Question:** <Second high-leverage inquiry>
+@@END"#;
+
+pub const LENS_STUDY: &str = r#"LENS: STUDY & ACTIVE RECALL (DEEP MASTERY)
+Transform the [FOCUS NODE] into a crystal-clear study guide with core intuition, formal equations/definitions in KaTeX, a concrete worked example, and active-recall quiz questions with concise answers.
+
+TASK:
+Build genuine predictive understanding so the learner can solve novel problems without rote memorization.
+
+OUTPUT FORMAT:
+Emit exactly ONE block:
+@@NODE type=probe edge=derives title="Study & Recall: <core topic>"
+**Core Intuition:** <2-3 sentence physical or conceptual picture explaining the key idea>
+
+**Key Equations & Definitions:**
+<Formal definitions and relations in KaTeX `$...$` / `$$...$$`>
+
+**Worked Example:**
+<Step-by-step numerical or concrete trace>
+
+**Active-Recall Quiz:**
+1. **Q:** <Diagnostic question> — **A:** <Concise 1-sentence answer>
+2. **Q:** <Transfer/edge-case question> — **A:** <Concise 1-sentence answer>
+3. **Q:** <Mechanism why-question> — **A:** <Concise 1-sentence answer>
+@@END"#;
+
 pub const LENS_CUSTOM: &str = r#"LENS: CUSTOM DIRECTED OPERATION
 Fulfill the [USER INSTRUCTION] strictly within the context of [FOCUS NODE] and [GLOBAL CONSTRAINTS].
 
@@ -135,6 +179,8 @@ pub fn lens_prompt(lens: LensKind) -> &'static str {
         LensKind::Diverge => LENS_DIVERGE,
         LensKind::Feynman => LENS_FEYNMAN,
         LensKind::Synthesize => LENS_SYNTHESIZE,
+        LensKind::Research => LENS_RESEARCH,
+        LensKind::Study => LENS_STUDY,
         LensKind::Custom => LENS_CUSTOM,
     }
 }
@@ -171,6 +217,18 @@ pub fn lens_defaults(lens: LensKind) -> LensDefaults {
             severity: None,
             title: "Synthesis Decision".to_owned(),
         },
+        LensKind::Research => LensDefaults {
+            node_type: NodeType::Probe,
+            edge_type: EdgeType::Derives,
+            severity: None,
+            title: "Research Brief".to_owned(),
+        },
+        LensKind::Study => LensDefaults {
+            node_type: NodeType::Probe,
+            edge_type: EdgeType::Derives,
+            severity: None,
+            title: "Study & Recall".to_owned(),
+        },
         LensKind::Custom => LensDefaults {
             node_type: NodeType::Core,
             edge_type: EdgeType::Derives,
@@ -187,6 +245,9 @@ pub fn lens_to_origin(lens: LensKind) -> NodeLensOrigin {
         LensKind::Diverge => NodeLensOrigin::Diverge,
         LensKind::Feynman => NodeLensOrigin::Feynman,
         LensKind::Synthesize => NodeLensOrigin::Synthesize,
+        // Map Research/Study onto existing NodeLensOrigin variants to preserve the SQLite CHECK (lens IN (...)) constraint without a schema migration.
+        LensKind::Research => NodeLensOrigin::Custom,
+        LensKind::Study => NodeLensOrigin::Feynman,
         LensKind::Custom => NodeLensOrigin::Custom,
     }
 }

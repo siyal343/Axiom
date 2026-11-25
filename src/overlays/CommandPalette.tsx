@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { clampZoom } from "../canvas/camera";
 import { perfHudOpen } from "../canvas/perfMetrics";
 import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
+import {
+  filterActionTags,
+  parseActionTagInvocation,
+  type ActionTagDef,
+} from "../input/actionTags";
 import { isTauriRuntime, searchNodes } from "../ipc/client";
 import type { NodeStatus, NodeType, SearchHit, Severity } from "../ipc/types";
 import {
@@ -12,7 +17,7 @@ import {
   runSeedStress500Action,
   runToggleThemeAction,
 } from "../ipc/workspaceActions";
-import { openSettingsModal } from "../store/aiRunner";
+import { executeActionTag, openSettingsModal } from "../store/aiRunner";
 import { cameraControllerRef, nodesMap } from "../store/graphStore";
 import {
   closeCommandPalette,
@@ -20,6 +25,7 @@ import {
   modalState,
   selectSingle,
 } from "../store/selection";
+import { toggleSidebar } from "../store/workspaceCatalogStore";
 
 const FILTER_CHIPS = [
   "status:active",
@@ -113,6 +119,16 @@ function buildPaletteCommands(): PaletteCommand[] {
       badge: "Preferences",
       run: () => {
         openSettingsModal();
+      },
+    },
+    {
+      id: "toggle-sidebar",
+      label: "> Toggle Sidebar",
+      description: "Show or hide the workspaces and flows sidebar (Ctrl/Cmd+B)",
+      keywords: "sidebar workspaces flows drawer navigation",
+      badge: "Workspace",
+      run: () => {
+        toggleSidebar();
       },
     },
     {
@@ -277,18 +293,35 @@ export function CommandPalette() {
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const isCommandMode = query.trimStart().startsWith(">");
+  const trimmedStart = query.trimStart();
+  const isCommandMode = trimmedStart.startsWith(">");
+  const isTagMode = trimmedStart.startsWith("@");
   const allCommands = buildPaletteCommands();
   const visibleCommands = isCommandMode ? filterPaletteCommands(allCommands, query) : [];
-  const showQuickActions = !isCommandMode && query.trim() === "" && hits.length === 0;
+
+  const parsedTagInvocation = isTagMode ? parseActionTagInvocation(trimmedStart) : null;
+  const afterAt = isTagMode ? trimmedStart.slice(1) : "";
+  const atSpaceIdx = afterAt.search(/\s/);
+  const tagTokenQuery = atSpaceIdx === -1 ? afterAt : afterAt.slice(0, atSpaceIdx);
+  const inlineTagArg = atSpaceIdx === -1 ? "" : afterAt.slice(atSpaceIdx).trim();
+  const visibleTags: ActionTagDef[] = isTagMode
+    ? parsedTagInvocation
+      ? [parsedTagInvocation.action]
+      : filterActionTags(tagTokenQuery)
+    : [];
+
+  const showQuickActions =
+    !isCommandMode && !isTagMode && query.trim() === "" && hits.length === 0;
   const quickActions = showQuickActions
     ? allCommands.filter((cmd) => QUICK_ACTION_IDS.has(cmd.id))
     : [];
   const itemCount = isCommandMode
     ? visibleCommands.length
-    : showQuickActions
-      ? quickActions.length
-      : hits.length;
+    : isTagMode
+      ? visibleTags.length
+      : showQuickActions
+        ? quickActions.length
+        : hits.length;
 
   useEffect(() => {
     if (!isOpen) {
@@ -306,7 +339,7 @@ export function CommandPalette() {
     if (!isOpen) {
       return;
     }
-    if (isCommandMode) {
+    if (isCommandMode || isTagMode) {
       setActiveIndex(0);
       return;
     }
@@ -336,7 +369,7 @@ export function CommandPalette() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [isOpen, isCommandMode, query]);
+  }, [isOpen, isCommandMode, isTagMode, query]);
 
   if (!isOpen) {
     return null;
@@ -377,6 +410,17 @@ export function CommandPalette() {
     cmd.run();
   };
 
+  const executeTag = (action: ActionTagDef): void => {
+    const arg =
+      parsedTagInvocation && parsedTagInvocation.action.tag === action.tag
+        ? parsedTagInvocation.argument
+        : inlineTagArg;
+    setQuery("");
+    setActiveIndex(0);
+    closeCommandPalette();
+    void executeActionTag(action, arg.length > 0 ? arg : undefined);
+  };
+
   const toggleCommandsMode = (): void => {
     if (isCommandMode) {
       setQuery("");
@@ -387,8 +431,18 @@ export function CommandPalette() {
     inputRef.current?.focus();
   };
 
+  const toggleTagMode = (): void => {
+    if (isTagMode) {
+      setQuery("");
+    } else {
+      setQuery("@");
+    }
+    setActiveIndex(0);
+    inputRef.current?.focus();
+  };
+
   const toggleChip = (chip: string): void => {
-    const baseQuery = isCommandMode ? "" : query;
+    const baseQuery = isCommandMode || isTagMode ? "" : query;
     const tokens = baseQuery.trim().split(/\s+/).filter(Boolean);
     const exists = tokens.includes(chip);
     const next = exists ? tokens.filter((t) => t !== chip) : [chip, ...tokens];
@@ -430,6 +484,11 @@ export function CommandPalette() {
               if (chosen) {
                 executeCommand(chosen);
               }
+            } else if (isTagMode) {
+              const chosen = visibleTags[activeIndex] ?? visibleTags[0];
+              if (chosen) {
+                executeTag(chosen);
+              }
             } else if (showQuickActions) {
               const chosen = quickActions[activeIndex] ?? quickActions[0];
               if (chosen) {
@@ -448,7 +507,7 @@ export function CommandPalette() {
           ref={inputRef}
           type="text"
           class="command-palette__input"
-          placeholder="Search nodes or type > for workspace actions..."
+          placeholder="Search nodes, type > for commands, or @ for AI/Study actions..."
           value={query}
           onInput={(e) => {
             setQuery(e.currentTarget.value);
@@ -463,7 +522,15 @@ export function CommandPalette() {
           >
             &gt; Commands
           </button>
+          <button
+            type="button"
+            class={`command-palette__chip ${isTagMode ? "command-palette__chip--active" : ""}`}
+            onClick={toggleTagMode}
+          >
+            @ Actions
+          </button>
           {!isCommandMode &&
+            !isTagMode &&
             FILTER_CHIPS.map((chip) => {
               const active = query.split(/\s+/).includes(chip);
               return (
@@ -502,6 +569,42 @@ export function CommandPalette() {
                   <div class="command-palette__item-snippet">{cmd.description}</div>
                 </button>
               ))
+            )
+          ) : isTagMode ? (
+            visibleTags.length === 0 ? (
+              <div class="command-palette__empty">No matching @actions</div>
+            ) : (
+              visibleTags.map((action, idx) => {
+                const activeArg =
+                  parsedTagInvocation && parsedTagInvocation.action.tag === action.tag
+                    ? parsedTagInvocation.argument
+                    : inlineTagArg;
+                return (
+                  <button
+                    key={action.tag}
+                    type="button"
+                    class={`command-palette__item command-palette__item--cmd ${
+                      idx === activeIndex ? "command-palette__item--active" : ""
+                    }`}
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    onClick={() => executeTag(action)}
+                  >
+                    <div class="command-palette__item-top">
+                      <span class="command-palette__item-title">
+                        {action.tag} · {action.label}
+                      </span>
+                      <div class="command-palette__item-badges">
+                        <span class="badge">
+                          {action.kind === "triage" ? "Triage" : "AI Action"}
+                        </span>
+                      </div>
+                    </div>
+                    <div class="command-palette__item-snippet">
+                      {activeArg ? `Prompt: "${activeArg}"` : action.description}
+                    </div>
+                  </button>
+                );
+              })
             )
           ) : showQuickActions ? (
             <>

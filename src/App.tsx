@@ -11,16 +11,17 @@ import {
   getSettings,
   isTauriRuntime,
   listenSummaryUpdated,
-  openWorkspace,
   saveCamera,
 } from "./ipc/client";
-import type { EdgeDto, EdgeType, GraphOp, LensKind, NodeDto } from "./ipc/types";
+import type { EdgeDto, EdgeType, GraphOp, NodeDto } from "./ipc/types";
 import { CommandPalette } from "./overlays/CommandPalette";
 import { CustomPromptBar } from "./overlays/CustomPromptBar";
+import { NodeContextMenu } from "./overlays/NodeContextMenu";
 import { PerfHud } from "./overlays/PerfHud";
 import { SettingsModal } from "./overlays/SettingsModal";
 import { ShortcutsModal } from "./overlays/ShortcutsModal";
 import { notifyIpcError, ToastStack } from "./overlays/ToastStack";
+import { WorkspaceSidebar } from "./overlays/WorkspaceSidebar";
 import { XrayHud } from "./overlays/XrayHud";
 import {
   activeRunLens,
@@ -28,16 +29,17 @@ import {
   activeRunStatus,
   applySummaryUpdate,
   cancelActiveRun,
+  LENS_LABELS,
   triageBanner,
   triggerLens,
 } from "./store/aiRunner";
 import {
   cameraControllerRef,
   dragOffsets,
+  edgeFlowEnabled,
   edgesMap,
   graphVersion,
   isBirdsEye,
-  loadSnapshot,
   mutateGraphUndoable,
   nodesMap,
   resizeSizes,
@@ -60,15 +62,7 @@ import {
   shortcutsHelpOpen,
   xrayState,
 } from "./store/selection";
-
-const LENS_LABELS: Record<LensKind, string> = {
-  red_team: "Red-Team",
-  edge_case: "Edge Cases",
-  diverge: "Diverge",
-  feynman: "Feynman",
-  synthesize: "Synthesize",
-  custom: "Custom Prompt",
-};
+import { initWorkspaceCatalog } from "./store/workspaceCatalogStore";
 
 export function App() {
   const shellRef = useRef<HTMLElement | null>(null);
@@ -76,11 +70,17 @@ export function App() {
   const zoomLabelRef = useRef<HTMLButtonElement | null>(null);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState<boolean>(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false,
+  );
 
   const version = graphVersion.value;
   const currentSelected = selectedIds.value;
   const activePopover = edgePopover.value;
   const birdsEye = isBirdsEye.value;
+  const flowEnabled = edgeFlowEnabled.value;
   const interacting = isInteracting.value;
   const currentModal = modalState.value;
   const activeTriage = triageBanner.value;
@@ -88,10 +88,34 @@ export function App() {
   const runLens = activeRunLens.value;
   const runSpawnedCount = activeRunSpawnedCount.value;
 
+  const shouldAnimateEdges =
+    flowEnabled && !birdsEye && edgesMap.size > 0 && !prefersReducedMotion;
+  const shouldAnimateEdgesRef = useRef(shouldAnimateEdges);
+  shouldAnimateEdgesRef.current = shouldAnimateEdges;
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = (evt: MediaQueryListEvent): void => {
+      setPrefersReducedMotion(evt.matches);
+    };
+    mq.addEventListener("change", onChange);
+    return () => {
+      mq.removeEventListener("change", onChange);
+    };
+  }, []);
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme.value);
     cameraControllerRef.current?.markDirty();
   }, [theme.value]);
+
+  useEffect(() => {
+    cameraControllerRef.current?.setContinuousAnimation?.(shouldAnimateEdges);
+    cameraControllerRef.current?.markDirty();
+  }, [shouldAnimateEdges]);
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -125,6 +149,8 @@ export function App() {
           marqueeWorld: overlay.marqueeWorld,
           edgePreviewWorld: overlay.edgePreviewWorld,
           themeKey: theme.value,
+          animTimeMs: typeof performance !== "undefined" ? performance.now() : 0,
+          animateEdges: shouldAnimateEdgesRef.current,
         });
       },
       onViewportCull: (bounds, _zoom, nextBirdsEye) => {
@@ -196,23 +222,26 @@ export function App() {
           unlisten();
         }
       });
-
-      openWorkspace("")
-        .then((ws) => {
-          if (!active) {
-            return;
-          }
-          loadSnapshot(ws);
-          setWorkspaceReady(true);
-        })
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : JSON.stringify(err);
-          console.error("Failed to open default workspace:", err);
-          if (active) {
-            setLoadError(message);
-          }
-        });
     }
+
+    initWorkspaceCatalog()
+      .then((catalog) => {
+        if (!active) {
+          return;
+        }
+        if (catalog) {
+          setWorkspaceReady(true);
+        } else {
+          setLoadError("Failed to initialize workspace catalog");
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : JSON.stringify(err);
+        console.error("Failed to initialize workspace catalog:", err);
+        if (active) {
+          setLoadError(message);
+        }
+      });
 
     return () => {
       active = false;
@@ -409,7 +438,7 @@ export function App() {
 
       {currentModal === "chord_a" && (
         <div class="chord-hint-pill" role="status">
-          R Red-Team · E Edge Cases · D Diverge 3x · F Feynman · S Synthesize · Space Prompt
+          R Red-Team · E Edge Cases · D Diverge 3x · F Feynman · Q Study · L Research · T Triage · S Synthesize · Space Prompt
         </div>
       )}
 
@@ -504,6 +533,18 @@ export function App() {
         <button
           type="button"
           class="canvas-controls__btn"
+          title={flowEnabled ? "Pause connection flow" : "Play connection flow"}
+          aria-label={flowEnabled ? "Pause connection flow" : "Play connection flow"}
+          onClick={() => {
+            edgeFlowEnabled.value = !edgeFlowEnabled.value;
+          }}
+        >
+          {flowEnabled ? "⏸" : "▶"}
+        </button>
+        <span class="canvas-controls__sep" aria-hidden="true" />
+        <button
+          type="button"
+          class="canvas-controls__btn"
           title="Keyboard shortcuts (?)"
           aria-label="Keyboard shortcuts"
           onClick={() => {
@@ -514,6 +555,8 @@ export function App() {
         </button>
       </div>
 
+      <WorkspaceSidebar />
+      <NodeContextMenu />
       <XrayHud />
       <PerfHud />
       <CommandPalette />

@@ -4,6 +4,7 @@ pub mod error;
 pub mod graph;
 pub mod ipc;
 pub mod settings;
+pub mod workspaces;
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -44,6 +45,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ipc::commands::open_workspace,
+            ipc::commands::list_workspace_catalog,
+            ipc::commands::create_workspace,
+            ipc::commands::rename_workspace,
+            ipc::commands::delete_workspace,
+            ipc::commands::create_flow,
+            ipc::commands::open_flow,
+            ipc::commands::rename_flow,
+            ipc::commands::delete_flow,
             ipc::commands::apply_ops,
             ipc::commands::spawn_connected_node,
             ipc::commands::compile_xray,

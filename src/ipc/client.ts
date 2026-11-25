@@ -7,6 +7,7 @@ import type {
   CompiledXray,
   EdgeDto,
   EdgeType,
+  FlowTemplate,
   GraphOp,
   IpcError,
   LensKind,
@@ -14,11 +15,14 @@ import type {
   NodeDto,
   NodePositionUpdate,
   NodeType,
+  OpenFlowResult,
   SaveSettingsInput,
   SearchHit,
   SpawnDirection,
   SummaryUpdatedEvent,
   TestConnectionResult,
+  WorkspaceCatalogDto,
+  WorkspaceEntryDto,
   WorkspaceSnapshot,
 } from "./types";
 
@@ -168,4 +172,53 @@ export async function listenSummaryUpdated(
   return listen<SummaryUpdatedEvent>("axiom://summary-updated", (evt) => {
     handler(evt.payload);
   });
+}
+
+export async function listWorkspaceCatalog(): Promise<WorkspaceCatalogDto> {
+  return invoke<WorkspaceCatalogDto>("list_workspace_catalog", {});
+}
+
+export async function createWorkspace(name: string): Promise<WorkspaceEntryDto> {
+  return invoke<WorkspaceEntryDto>("create_workspace", { name });
+}
+
+export async function renameWorkspace(
+  workspaceId: string,
+  name: string,
+): Promise<WorkspaceCatalogDto> {
+  return invoke<WorkspaceCatalogDto>("rename_workspace", { workspaceId, name });
+}
+
+export async function deleteWorkspace(workspaceId: string): Promise<WorkspaceCatalogDto> {
+  return invoke<WorkspaceCatalogDto>("delete_workspace", { workspaceId });
+}
+
+export async function createFlow(
+  workspaceId: string,
+  name: string,
+  template: FlowTemplate,
+): Promise<OpenFlowResult> {
+  return invoke<OpenFlowResult>("create_flow", { workspaceId, name, template });
+}
+
+export async function openFlow(
+  workspaceId: string,
+  flowId: string,
+): Promise<OpenFlowResult> {
+  return invoke<OpenFlowResult>("open_flow", { workspaceId, flowId });
+}
+
+export async function renameFlow(
+  workspaceId: string,
+  flowId: string,
+  name: string,
+): Promise<WorkspaceCatalogDto> {
+  return invoke<WorkspaceCatalogDto>("rename_flow", { workspaceId, flowId, name });
+}
+
+export async function deleteFlow(
+  workspaceId: string,
+  flowId: string,
+): Promise<WorkspaceCatalogDto> {
+  return invoke<WorkspaceCatalogDto>("delete_flow", { workspaceId, flowId });
 }

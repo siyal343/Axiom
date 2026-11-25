@@ -1,6 +1,7 @@
 import { signal } from "@preact/signals";
 import { worldToScreen } from "../canvas/camera";
 import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
+import type { ActionTagDef } from "../input/actionTags";
 import {
   cancelRun as cancelRunIpc,
   isTauriRuntime,
@@ -13,6 +14,7 @@ import type {
   LensKind,
   LensStreamEvent,
   NodeDto,
+  Severity,
   SummaryUpdatedEvent,
 } from "../ipc/types";
 import { pushToast } from "../overlays/ToastStack";
@@ -36,6 +38,17 @@ import {
   selectSingle,
   shortcutsHelpOpen,
 } from "./selection";
+
+export const LENS_LABELS: Record<LensKind, string> = {
+  red_team: "Red-Team",
+  edge_case: "Edge Cases",
+  diverge: "Diverge",
+  feynman: "Feynman",
+  synthesize: "Synthesize",
+  custom: "Custom Prompt",
+  research: "Research Map",
+  study: "Study & Recall",
+};
 
 export const activeRunId = signal<string | null>(null);
 export const activeRunLens = signal<LensKind | null>(null);
@@ -392,4 +405,83 @@ export function applySummaryUpdate(evt: SummaryUpdatedEvent): void {
     summary: evt.summary,
     summary_hash: evt.summary_hash,
   });
+}
+
+function severityRank(severity: Severity | null): number {
+  switch (severity) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+export function startLoopholeTriage(): boolean {
+  const currentFocus = focusId.value;
+  const linkedLoopholes: NodeDto[] = [];
+  const allLoopholes: NodeDto[] = [];
+
+  const linkedIds = new Set<string>();
+  if (currentFocus !== null) {
+    for (const edge of edgesMap.values()) {
+      if (edge.target_id === currentFocus || edge.source_id === currentFocus) {
+        linkedIds.add(edge.source_id);
+        linkedIds.add(edge.target_id);
+      }
+    }
+    linkedIds.add(currentFocus);
+  }
+
+  for (const node of nodesMap.values()) {
+    if (node.type === "loophole" && node.status === "active") {
+      allLoopholes.push(node);
+      if (currentFocus !== null && linkedIds.has(node.id)) {
+        linkedLoopholes.push(node);
+      }
+    }
+  }
+
+  const candidates = linkedLoopholes.length > 0 ? linkedLoopholes : allLoopholes;
+  if (candidates.length === 0) {
+    pushToast("No unresolved loopholes to triage", "info");
+    return false;
+  }
+
+  candidates.sort((a, b) => {
+    const sevDiff = severityRank(b.metadata.severity) - severityRank(a.metadata.severity);
+    if (sevDiff !== 0) {
+      return sevDiff;
+    }
+    return a.created_at - b.created_at;
+  });
+
+  const target = candidates[0];
+  if (!target) {
+    return false;
+  }
+
+  selectSingle(target.id);
+  ensureNodeInView(target.id);
+  showTriageBanner();
+  return true;
+}
+
+export async function executeActionTag(action: ActionTagDef, argument?: string): Promise<void> {
+  if (action.kind === "triage") {
+    startLoopholeTriage();
+    return;
+  }
+
+  const trimmed = argument?.trim() ?? "";
+  if (action.lens === "custom" && trimmed.length === 0) {
+    await triggerLens("custom");
+    return;
+  }
+  await triggerLens(action.lens, trimmed.length > 0 ? trimmed : undefined);
 }

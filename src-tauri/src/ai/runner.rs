@@ -107,11 +107,11 @@ pub async fn execute_lens_run(
     };
 
     let system_prompt = format!("{BASE_SYSTEM_PROMPT}\n\n{}", lens_prompt(params.lens));
-    let user_prompt = if params.lens == LensKind::Custom {
-        let instruction = params.custom_prompt.as_deref().unwrap_or("").trim();
-        format!("{compiled_prompt}\n\n---\n\n[USER INSTRUCTION]\n{instruction}")
-    } else {
+    let extra_instruction = params.custom_prompt.as_deref().unwrap_or("").trim();
+    let user_prompt = if extra_instruction.is_empty() {
         compiled_prompt
+    } else {
+        format!("{compiled_prompt}\n\n---\n\n[USER INSTRUCTION]\n{extra_instruction}")
     };
 
     let mut parser = NodeStreamParser::new(lens_defaults(params.lens));

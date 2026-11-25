@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { worldToScreen } from "../canvas/camera";
 import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
-import { closeCustomPromptBar, customPromptOpen, triggerLens } from "../store/aiRunner";
+import { parseActionTagInvocation } from "../input/actionTags";
+import {
+  closeCustomPromptBar,
+  customPromptOpen,
+  executeActionTag,
+  triggerLens,
+} from "../store/aiRunner";
 import { cameraControllerRef, nodesMap } from "../store/graphStore";
 import { focusId, modalState } from "../store/selection";
 
@@ -53,6 +59,11 @@ export function CustomPromptBar() {
       return;
     }
     closeCustomPromptBar();
+    const parsed = parseActionTagInvocation(trimmed);
+    if (parsed) {
+      void executeActionTag(parsed.action, parsed.argument);
+      return;
+    }
     void triggerLens("custom", trimmed);
   };
 
@@ -70,7 +81,7 @@ export function CustomPromptBar() {
         type="text"
         class="custom-prompt-bar__input"
         value={prompt}
-        placeholder="Ask AI about this node... (Enter run · Esc cancel)"
+        placeholder="Ask AI or type @Feynman, @Study, @Research, @RedTeam, @Triage..."
         onInput={(e) => setPrompt(e.currentTarget.value)}
         onKeyDown={(e) => {
           if (e.key === "Escape") {

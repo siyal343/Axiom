@@ -39,6 +39,8 @@ export interface RenderSceneInput {
   marqueeWorld: MarqueeRect | null;
   edgePreviewWorld: EdgePreview | null;
   themeKey: "dark" | "light";
+  animTimeMs?: number;
+  animateEdges?: boolean;
 }
 
 interface ThemePalette {
@@ -374,6 +376,11 @@ function getXrayColor(mode: InclusionMode, p: ThemePalette): string {
   }
 }
 
+function cubicBezierAt(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const u = 1 - t;
+  return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+}
+
 export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderSceneInput): void {
   const {
     cam,
@@ -391,8 +398,11 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     marqueeWorld,
     edgePreviewWorld,
     themeKey,
+    animTimeMs = 0,
+    animateEdges = false,
   } = scene;
   const p = getPalette(themeKey);
+  const isBirdsEyeLod = cam.zoom < LOD_THRESHOLD;
 
   // 1. Background fill
   ctx.fillStyle = p.bgCanvas;
@@ -566,6 +576,37 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     ctx.setLineDash([]);
     drawArrowhead(ctx, x2, y2, cx2, cy2, 8.5);
     ctx.restore();
+
+    const isDimmedByXray = Boolean(activeEdgeSet && !activeEdgeSet.has(edge.id));
+    if (animateEdges && !isBirdsEyeLod && !isDimmedByXray && alpha > 0.35) {
+      const flowPhase = (animTimeMs * 0.028) % 24;
+      ctx.save();
+      ctx.globalAlpha = isIncidentEmphasized ? 0.44 : 0.24;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = isIncidentEmphasized ? 1.8 : 1.35;
+      ctx.lineCap = "round";
+      ctx.setLineDash([5, 19]);
+      ctx.lineDashOffset = -flowPhase;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.bezierCurveTo(cx1, cy1, cx2, cy2, x2, y2);
+      ctx.stroke();
+
+      if (isIncidentEmphasized) {
+        const t = ((animTimeMs * 0.00055) % 1 + 1) % 1;
+        const orbX = cubicBezierAt(x1, cx1, cx2, x2, t);
+        const orbY = cubicBezierAt(y1, cy1, cy2, y2, t);
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.96;
+        ctx.fillStyle = stroke;
+        ctx.shadowColor = stroke;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(orbX, orbY, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
   }
 
   // 4. Hold-V X-Ray Halos
