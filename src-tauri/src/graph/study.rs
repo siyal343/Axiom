@@ -148,7 +148,7 @@ fn strip_ci_prefix<'a>(s: &'a str, prefixes: &[&str]) -> Option<&'a str> {
     None
 }
 
-fn strip_qa_marker<'a>(line: &'a str, is_question: bool) -> Option<&'a str> {
+fn strip_qa_marker(line: &str, is_question: bool) -> Option<&str> {
     let clean = strip_list_prefix(line);
     let prefixes: &[&str] = if is_question {
         &[
