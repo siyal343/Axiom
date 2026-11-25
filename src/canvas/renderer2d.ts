@@ -43,6 +43,8 @@ export interface RenderSceneInput {
   xrayState: CompiledXray | null;
   unresolvedLoopholes: Map<string, LoopholeSummary>;
   staleNodeIds?: ReadonlySet<string>;
+  spotlightIds?: ReadonlySet<string> | null;
+  outOfSyncRefIds?: ReadonlySet<string>;
   marqueeWorld: MarqueeRect | null;
   edgePreviewWorld: EdgePreview | null;
   themeKey: "dark" | "light";
@@ -576,6 +578,8 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     xrayState,
     unresolvedLoopholes,
     staleNodeIds,
+    spotlightIds = null,
+    outOfSyncRefIds,
     marqueeWorld,
     edgePreviewWorld,
     themeKey,
@@ -584,6 +588,8 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
   } = scene;
   const p = getPalette(themeKey);
   const isBirdsEyeLod = cam.zoom < LOD_THRESHOLD;
+  const hasSpotlight =
+    spotlightIds !== null && spotlightIds !== undefined && spotlightIds.size > 0 && xrayState === null;
 
   // 1. Background fill
   ctx.fillStyle = p.bgCanvas;
@@ -727,6 +733,9 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
       Boolean(resizeSizes?.has(srcNode.id)) ||
       Boolean(resizeSizes?.has(dstNode.id));
 
+    const isSpotlightDimmedEdge =
+      hasSpotlight && !(spotlightIds.has(srcNode.id) && spotlightIds.has(dstNode.id));
+
     if (activeEdgeSet) {
       if (activeEdgeSet.has(edge.id)) {
         lineWidth = 2.75;
@@ -734,6 +743,8 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
       } else {
         alpha = 0.12;
       }
+    } else if (isSpotlightDimmedEdge) {
+      alpha *= 0.18;
     } else if (isIncidentEmphasized) {
       lineWidth = 2.75;
     }
@@ -755,7 +766,9 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
     if (
       isSelectedEdge ||
       isHoveredEdge ||
-      (isIncidentEmphasized && (!activeEdgeSet || activeEdgeSet.has(edge.id)))
+      (isIncidentEmphasized &&
+        !isSpotlightDimmedEdge &&
+        (!activeEdgeSet || activeEdgeSet.has(edge.id)))
     ) {
       ctx.shadowColor = stroke;
       ctx.shadowBlur = isSelectedEdge ? 10 : isHoveredEdge ? 7 : 8;
@@ -862,7 +875,9 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
         node.type === "loophole" && (node.status === "resolved" || node.status === "dismissed");
 
       ctx.save();
-      if (isMutedLoophole) {
+      if (hasSpotlight && !spotlightIds.has(node.id)) {
+        ctx.globalAlpha = 0.22;
+      } else if (isMutedLoophole) {
         ctx.globalAlpha = 0.48;
       } else if (node.context_controls.exclude_from_ai) {
         ctx.globalAlpha = 0.65;
@@ -897,6 +912,14 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
         ctx.fillStyle = "#f59e0b";
         ctx.beginPath();
         ctx.arc(rect.x + rect.w - 42, rect.y + 14, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Out-of-sync external ref indicator dot
+      if (outOfSyncRefIds?.has(node.id)) {
+        ctx.fillStyle = "#06b6d4";
+        ctx.beginPath();
+        ctx.arc(rect.x + rect.w - 56, rect.y + 14, 4.5, 0, Math.PI * 2);
         ctx.fill();
       }
 

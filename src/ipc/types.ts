@@ -336,3 +336,49 @@ export interface ImportOutlineResult {
   created_nodes: NodeDto[];
   created_edges: EdgeDto[];
 }
+
+export type ExternalRefStatusKind = "synced" | "out_of_sync" | "source_missing";
+
+export interface ExternalRefInfo {
+  local_node_id: string;
+  source_workspace_id: string;
+  source_flow_id: string;
+  source_flow_name: string;
+  source_node_id: string;
+  synced_hash: string;
+  synced_at: number;
+  status: ExternalRefStatusKind;
+  source_title: string | null;
+}
+
+export interface PullExternalRefResult {
+  node: NodeDto;
+  edge: EdgeDto | null;
+  external_ref: ExternalRefInfo;
+}
+
+export interface CheckpointSummary {
+  id: string;
+  name: string;
+  note: string;
+  node_count: number;
+  edge_count: number;
+  created_at: number;
+}
+
+export interface CheckpointNodeChange {
+  node_id: string;
+  title: string;
+  type: NodeType;
+  changes: string[];
+}
+
+export interface CheckpointDiff {
+  checkpoint_id: string;
+  checkpoint_name: string;
+  added_nodes: CheckpointNodeChange[];
+  removed_nodes: CheckpointNodeChange[];
+  modified_nodes: CheckpointNodeChange[];
+  added_edges_count: number;
+  removed_edges_count: number;
+}

@@ -30,13 +30,16 @@ import {
 import {
   closeNodeContextMenu,
   enterEditMode,
+  externalRefsMap,
   nodeContextMenu,
   openArtifactExport,
   openOutlineImportModal,
   relatedPopoverNodeId,
   selectedIds,
   selectSingle,
+  spotlightRootId,
   staleNodesMap,
+  toggleSpotlight,
 } from "../store/selection";
 import { notifyIpcError, pushToast } from "./ToastStack";
 
@@ -331,6 +334,48 @@ export function NodeContextMenu() {
   };
 
   const staleInfo = staleNodesMap.value.get(node.id);
+  const extRefInfo = externalRefsMap.value.get(node.id);
+  const isSpotlightRoot = spotlightRootId.value === node.id;
+
+  const handleToggleSpotlight = (): void => {
+    closeNodeContextMenu();
+    toggleSpotlight(node.id);
+  };
+
+  const handleSyncExtRef = (): void => {
+    closeNodeContextMenu();
+    window.dispatchEvent(
+      new CustomEvent("axiom:sync-extref", {
+        detail: { nodeId: node.id },
+      }),
+    );
+  };
+
+  const handleOpenSourceFlow = (): void => {
+    closeNodeContextMenu();
+    if (!extRefInfo) {
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("axiom:open-extref", {
+        detail: {
+          nodeId: node.id,
+          sourceWorkspaceId: extRefInfo.source_workspace_id,
+          sourceFlowId: extRefInfo.source_flow_id,
+          sourceNodeId: extRefInfo.source_node_id,
+        },
+      }),
+    );
+  };
+
+  const handleDetachExtRef = (): void => {
+    closeNodeContextMenu();
+    window.dispatchEvent(
+      new CustomEvent("axiom:detach-extref", {
+        detail: { nodeId: node.id },
+      }),
+    );
+  };
 
   const handleMarkFresh = (): void => {
     closeNodeContextMenu();
@@ -412,6 +457,43 @@ export function NodeContextMenu() {
         >
           <span>Import Outline Here…</span>
         </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="node-context-menu__item"
+          onClick={handleToggleSpotlight}
+        >
+          <span>{isSpotlightRoot ? "Exit Focus Spotlight" : "Focus Spotlight"}</span>
+          <kbd>Shift+F</kbd>
+        </button>
+        {extRefInfo && (
+          <>
+            <button
+              type="button"
+              role="menuitem"
+              class="node-context-menu__item"
+              onClick={handleSyncExtRef}
+            >
+              <span>Pull Latest from Source</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class="node-context-menu__item"
+              onClick={handleOpenSourceFlow}
+            >
+              <span>Open Source Flow</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class="node-context-menu__item"
+              onClick={handleDetachExtRef}
+            >
+              <span>Detach External Link</span>
+            </button>
+          </>
+        )}
         {staleInfo && (
           <>
             <button

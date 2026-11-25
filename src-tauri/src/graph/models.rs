@@ -697,6 +697,64 @@ pub struct OpenFlowResult {
     pub snapshot: WorkspaceSnapshot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalRefStatusKind {
+    Synced,
+    OutOfSync,
+    SourceMissing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalRefInfo {
+    pub local_node_id: String,
+    pub source_workspace_id: String,
+    pub source_flow_id: String,
+    pub source_flow_name: String,
+    pub source_node_id: String,
+    pub synced_hash: String,
+    pub synced_at: i64,
+    pub status: ExternalRefStatusKind,
+    pub source_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullExternalRefResult {
+    pub node: NodeDto,
+    pub edge: Option<EdgeDto>,
+    pub external_ref: ExternalRefInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointSummary {
+    pub id: String,
+    pub name: String,
+    pub note: String,
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointNodeChange {
+    pub node_id: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub node_type: NodeType,
+    pub changes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointDiff {
+    pub checkpoint_id: String,
+    pub checkpoint_name: String,
+    pub added_nodes: Vec<CheckpointNodeChange>,
+    pub removed_nodes: Vec<CheckpointNodeChange>,
+    pub modified_nodes: Vec<CheckpointNodeChange>,
+    pub added_edges_count: usize,
+    pub removed_edges_count: usize,
+}
+
 pub fn estimate_tokens(text: &str) -> u32 {
     if text.is_empty() {
         0

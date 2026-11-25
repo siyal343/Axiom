@@ -10,14 +10,14 @@ PRAGMA busy_timeout = 5000;
 PRAGMA temp_store = MEMORY;
 "#;
 
-const SCHEMA_V2_SQL: &str = r#"
+const SCHEMA_V3_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS workspace_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 
 INSERT OR IGNORE INTO workspace_meta (key, value) VALUES
-    ('schema_version', '2'),
+    ('schema_version', '3'),
     ('system_prompt', ''),
     ('camera_x', '0.0'),
     ('camera_y', '0.0'),
@@ -79,6 +79,27 @@ CREATE TABLE IF NOT EXISTS ai_runs (
     input_hashes_json TEXT NOT NULL,
     prompt_tokens     INTEGER NOT NULL DEFAULT 0,
     created_at        INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS external_refs (
+    local_node_id       TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+    source_workspace_id TEXT NOT NULL,
+    source_flow_id      TEXT NOT NULL,
+    source_flow_name    TEXT NOT NULL,
+    source_db_path      TEXT NOT NULL,
+    source_node_id      TEXT NOT NULL,
+    synced_hash         TEXT NOT NULL,
+    synced_at           INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    note          TEXT NOT NULL DEFAULT '',
+    snapshot_json TEXT NOT NULL,
+    node_count    INTEGER NOT NULL DEFAULT 0,
+    edge_count    INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_edges_source  ON edges(source_id);
@@ -203,8 +224,54 @@ CREATE TABLE IF NOT EXISTS ai_runs (
     created_at        INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS external_refs (
+    local_node_id       TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+    source_workspace_id TEXT NOT NULL,
+    source_flow_id      TEXT NOT NULL,
+    source_flow_name    TEXT NOT NULL,
+    source_db_path      TEXT NOT NULL,
+    source_node_id      TEXT NOT NULL,
+    synced_hash         TEXT NOT NULL,
+    synced_at           INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    note          TEXT NOT NULL DEFAULT '',
+    snapshot_json TEXT NOT NULL,
+    node_count    INTEGER NOT NULL DEFAULT 0,
+    edge_count    INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL
+);
+
 INSERT OR IGNORE INTO workspace_meta (key, value) VALUES ('system_prompt', '');
 INSERT OR REPLACE INTO workspace_meta (key, value) VALUES ('schema_version', '2');
+"#;
+
+const MIGRATE_V2_TO_V3_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS external_refs (
+    local_node_id       TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+    source_workspace_id TEXT NOT NULL,
+    source_flow_id      TEXT NOT NULL,
+    source_flow_name    TEXT NOT NULL,
+    source_db_path      TEXT NOT NULL,
+    source_node_id      TEXT NOT NULL,
+    synced_hash         TEXT NOT NULL,
+    synced_at           INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    note          TEXT NOT NULL DEFAULT '',
+    snapshot_json TEXT NOT NULL,
+    node_count    INTEGER NOT NULL DEFAULT 0,
+    edge_count    INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL
+);
+
+INSERT OR REPLACE INTO workspace_meta (key, value) VALUES ('schema_version', '3');
 "#;
 
 fn migrate_v1_to_v2(conn: &Connection) -> Result<(), IpcError> {
@@ -224,6 +291,16 @@ fn migrate_v1_to_v2(conn: &Connection) -> Result<(), IpcError> {
     Ok(())
 }
 
+fn migrate_v2_to_v3(conn: &Connection) -> Result<(), IpcError> {
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    if let Err(err) = conn.execute_batch(MIGRATE_V2_TO_V3_SQL) {
+        let _ = conn.execute_batch("ROLLBACK;");
+        return Err(err.into());
+    }
+    conn.execute_batch("COMMIT;")?;
+    Ok(())
+}
+
 pub fn run_migrations(conn: &Connection) -> Result<(), IpcError> {
     conn.execute_batch(CONNECTION_PRAGMAS_SQL)?;
     let nodes_exists: bool = conn.query_row(
@@ -232,11 +309,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), IpcError> {
         |r| r.get(0),
     )?;
     if !nodes_exists {
-        conn.execute_batch(SCHEMA_V2_SQL)?;
+        conn.execute_batch(SCHEMA_V3_SQL)?;
         return Ok(());
     }
 
-    let version: i64 = conn
+    let mut version: i64 = conn
         .query_row(
             "SELECT value FROM workspace_meta WHERE key = 'schema_version'",
             [],
@@ -247,6 +324,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), IpcError> {
         .unwrap_or(1);
     if version < 2 {
         migrate_v1_to_v2(conn)?;
+        version = 2;
+    }
+    if version < 3 {
+        migrate_v2_to_v3(conn)?;
     }
     Ok(())
 }

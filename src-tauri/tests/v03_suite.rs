@@ -191,7 +191,7 @@ fn v1_to_v2_migration_preserves_rows_fts_edges_and_enables_research_study_origin
             |r| r.get(0),
         )
         .expect("schema_version");
-    assert_eq!(schema_version, "2");
+    assert!(schema_version.parse::<i64>().unwrap_or(0) >= 2);
 
     let fk_enabled: i64 = conn
         .query_row("PRAGMA foreign_keys;", [], |r| r.get(0))

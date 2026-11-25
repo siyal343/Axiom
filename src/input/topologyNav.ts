@@ -1,4 +1,5 @@
-import type { EdgeDto, NodeDto } from "../ipc/types";
+import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
+import type { EdgeDto, NodeDto, NodePositionUpdate } from "../ipc/types";
 
 function compareNodesYX(a: NodeDto, b: NodeDto): number {
   return a.layout.y - b.layout.y || a.layout.x - b.layout.x || a.id.localeCompare(b.id);
@@ -222,4 +223,194 @@ export function collectSubtreeIds(
   }
 
   return result;
+}
+
+export function collectSpotlightIds(
+  rootId: string | null,
+  nodes: Map<string, NodeDto>,
+  edges: Map<string, EdgeDto>,
+): Set<string> {
+  if (rootId === null || !nodes.has(rootId)) {
+    return new Set();
+  }
+
+  // Backward BFS across spine edges (derives, branches, synthesizes)
+  const lineage = new Set<string>([rootId]);
+  const queue: string[] = [rootId];
+  while (queue.length > 0) {
+    const curr = queue.shift();
+    if (curr === undefined) {
+      break;
+    }
+    for (const edge of edges.values()) {
+      if (edge.target_id === curr && isSpineEdge(edge)) {
+        if (nodes.has(edge.source_id) && !lineage.has(edge.source_id)) {
+          lineage.add(edge.source_id);
+          queue.push(edge.source_id);
+        }
+      }
+    }
+  }
+
+  // Union with forward subtree (including challenged loopholes)
+  for (const id of collectSubtreeIds(rootId, nodes, edges)) {
+    lineage.add(id);
+  }
+
+  // Include 1-hop challenges, resolves, and references neighbors of any node in the lineage
+  const spotlight = new Set<string>(lineage);
+  for (const edge of edges.values()) {
+    if (
+      edge.type !== "challenges" &&
+      edge.type !== "resolves" &&
+      edge.type !== "references"
+    ) {
+      continue;
+    }
+    if (lineage.has(edge.source_id) && nodes.has(edge.target_id)) {
+      spotlight.add(edge.target_id);
+    }
+    if (lineage.has(edge.target_id) && nodes.has(edge.source_id)) {
+      spotlight.add(edge.source_id);
+    }
+  }
+
+  return spotlight;
+}
+
+export type AlignMode = "left" | "top" | "distribute_h" | "distribute_v";
+
+export function computeAlignmentMoves(
+  nodeIds: Iterable<string>,
+  nodes: Map<string, NodeDto>,
+  mode: AlignMode,
+): { prev: NodePositionUpdate[]; next: NodePositionUpdate[] } {
+  const seen = new Set<string>();
+  const items: NodeDto[] = [];
+  for (const id of nodeIds) {
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const node = nodes.get(id);
+    if (node) {
+      items.push(node);
+    }
+  }
+
+  if (items.length < 2) {
+    return { prev: [], next: [] };
+  }
+
+  const targets = new Map<string, { x: number; y: number }>();
+
+  if (mode === "left") {
+    let minX = Number.POSITIVE_INFINITY;
+    for (const node of items) {
+      if (node.layout.x < minX) {
+        minX = node.layout.x;
+      }
+    }
+    for (const node of items) {
+      targets.set(node.id, { x: minX, y: node.layout.y });
+    }
+  } else if (mode === "top") {
+    let minY = Number.POSITIVE_INFINITY;
+    for (const node of items) {
+      if (node.layout.y < minY) {
+        minY = node.layout.y;
+      }
+    }
+    for (const node of items) {
+      targets.set(node.id, { x: node.layout.x, y: minY });
+    }
+  } else if (mode === "distribute_h") {
+    if (items.length < 3) {
+      return { prev: [], next: [] };
+    }
+    items.sort((a, b) => a.layout.x - b.layout.x || a.id.localeCompare(b.id));
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!first || !last) {
+      return { prev: [], next: [] };
+    }
+    let widthSum = 0;
+    for (let i = 0; i < items.length - 1; i += 1) {
+      const item = items[i];
+      if (item) {
+        widthSum += item.layout.width;
+      }
+    }
+    const totalGapSpace = last.layout.x - first.layout.x - widthSum;
+    if (totalGapSpace >= 0) {
+      const gap = totalGapSpace / (items.length - 1);
+      let cursor = first.layout.x + first.layout.width + gap;
+      for (let i = 1; i < items.length - 1; i += 1) {
+        const item = items[i];
+        if (!item) continue;
+        targets.set(item.id, { x: cursor, y: item.layout.y });
+        cursor += item.layout.width + gap;
+      }
+    } else {
+      const step = (last.layout.x - first.layout.x) / (items.length - 1);
+      for (let i = 1; i < items.length - 1; i += 1) {
+        const item = items[i];
+        if (!item) continue;
+        targets.set(item.id, { x: first.layout.x + step * i, y: item.layout.y });
+      }
+    }
+  } else {
+    if (items.length < 3) {
+      return { prev: [], next: [] };
+    }
+    items.sort((a, b) => a.layout.y - b.layout.y || a.id.localeCompare(b.id));
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!first || !last) {
+      return { prev: [], next: [] };
+    }
+    let heightSum = 0;
+    for (let i = 0; i < items.length - 1; i += 1) {
+      const item = items[i];
+      if (item) {
+        heightSum += getEffectiveNodeHeight(item);
+      }
+    }
+    const totalGapSpace = last.layout.y - first.layout.y - heightSum;
+    if (totalGapSpace >= 0) {
+      const gap = totalGapSpace / (items.length - 1);
+      let cursor = first.layout.y + getEffectiveNodeHeight(first) + gap;
+      for (let i = 1; i < items.length - 1; i += 1) {
+        const item = items[i];
+        if (!item) continue;
+        targets.set(item.id, { x: item.layout.x, y: cursor });
+        cursor += getEffectiveNodeHeight(item) + gap;
+      }
+    } else {
+      const step = (last.layout.y - first.layout.y) / (items.length - 1);
+      for (let i = 1; i < items.length - 1; i += 1) {
+        const item = items[i];
+        if (!item) continue;
+        targets.set(item.id, { x: item.layout.x, y: first.layout.y + step * i });
+      }
+    }
+  }
+
+  const prev: NodePositionUpdate[] = [];
+  const next: NodePositionUpdate[] = [];
+  for (const node of items) {
+    const target = targets.get(node.id);
+    if (!target) {
+      continue;
+    }
+    if (
+      Math.abs(target.x - node.layout.x) > 0.5 ||
+      Math.abs(target.y - node.layout.y) > 0.5
+    ) {
+      prev.push({ id: node.id, x: node.layout.x, y: node.layout.y });
+      next.push({ id: node.id, x: target.x, y: target.y });
+    }
+  }
+
+  return { prev, next };
 }

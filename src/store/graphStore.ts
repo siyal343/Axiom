@@ -1,19 +1,24 @@
 import { signal } from "@preact/signals";
-import type { CameraTransform } from "../canvas/camera";
-import { ViewportSpatialIndex } from "../canvas/spatialIndex";
+import { clampZoom, type CameraTransform } from "../canvas/camera";
+import { getEffectiveNodeHeight, ViewportSpatialIndex } from "../canvas/spatialIndex";
 import {
   acknowledgeStaleNode,
   applyOps,
+  detachExternalRef,
+  getExternalRefStatuses,
   getStaleNodes,
   isTauriRuntime,
+  pullExternalReference,
   resolveOverlaps,
   spawnConnectedNode,
+  syncExternalRef,
 } from "../ipc/client";
 import type {
   ApplyResult,
   CameraState,
   EdgeDto,
   EdgeType,
+  ExternalRefInfo,
   GraphOp,
   NodeDto,
   NodePositionUpdate,
@@ -29,7 +34,13 @@ import {
   graphHistory,
   syncHistorySignals,
 } from "./history";
-import { focusId, selectSingle, staleNodesMap } from "./selection";
+import {
+  externalRefsMap,
+  focusId,
+  selectSingle,
+  spotlightRootId,
+  staleNodesMap,
+} from "./selection";
 import { scheduleSaveCurrentLocalFlowSnapshot } from "./workspaceCatalogStore";
 
 export interface LoopholeSummary {
@@ -353,6 +364,8 @@ export function loadSnapshot(snapshot: WorkspaceSnapshot): void {
   tokenBudget.value = snapshot.token_budget;
   flowSystemPrompt.value = snapshot.system_prompt ?? "";
   staleNodesMap.value = new Map();
+  externalRefsMap.value = new Map();
+  spotlightRootId.value = null;
   graphHistory.clear();
   syncHistorySignals();
   recomputeUnresolvedLoopholes();
@@ -394,6 +407,104 @@ export async function acknowledgeAndRefreshStaleNode(nodeId: string): Promise<vo
     next.delete(nodeId);
     staleNodesMap.value = next;
   }
+}
+
+export async function refreshExternalRefs(): Promise<void> {
+  if (!isTauriRuntime()) {
+    return;
+  }
+  try {
+    const items = await getExternalRefStatuses();
+    const next = new Map<string, ExternalRefInfo>();
+    for (const item of items) {
+      next.set(item.local_node_id, item);
+    }
+    externalRefsMap.value = next;
+  } catch {
+    // Non-fatal: external ref badges remain unchanged until the next refresh.
+  }
+}
+
+export async function syncExternalRefNode(localNodeId: string): Promise<void> {
+  const updated = await syncExternalRef(localNodeId);
+  nodesMap.set(updated.id, updated);
+  viewportSpatialIndex.upsert(updated);
+  recomputeUnresolvedLoopholes();
+  graphVersion.value += 1;
+  cameraControllerRef.current?.refreshCull();
+  cameraControllerRef.current?.markDirty();
+  await Promise.all([refreshExternalRefs(), refreshStaleNodes()]);
+}
+
+export async function detachExternalRefNode(localNodeId: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await detachExternalRef(localNodeId);
+  }
+  if (externalRefsMap.value.has(localNodeId)) {
+    const next = new Map(externalRefsMap.value);
+    next.delete(localNodeId);
+    externalRefsMap.value = next;
+  }
+}
+
+export async function pullExternalRefIntoCanvas(
+  sourceWorkspaceId: string,
+  sourceFlowId: string,
+  sourceNodeId: string,
+  attachToNodeId?: string | null,
+): Promise<NodeDto | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+  const pulled = await pullExternalReference(
+    sourceWorkspaceId,
+    sourceFlowId,
+    sourceNodeId,
+    attachToNodeId ?? null,
+  );
+  nodesMap.set(pulled.node.id, pulled.node);
+  viewportSpatialIndex.upsert(pulled.node);
+  const createdEdges: EdgeDto[] = [];
+  if (pulled.edge) {
+    edgesMap.set(pulled.edge.id, pulled.edge);
+    createdEdges.push(pulled.edge);
+  }
+
+  const nextRefs = new Map(externalRefsMap.value);
+  nextRefs.set(pulled.external_ref.local_node_id, pulled.external_ref);
+  externalRefsMap.value = nextRefs;
+
+  recomputeUnresolvedLoopholes();
+
+  const { forward, inverse } = buildCreateNodeWithInverse(pulled.node, createdEdges);
+  graphHistory.push({ label: "Link cross-flow card", forward, inverse });
+  syncHistorySignals();
+
+  selectSingle(pulled.node.id);
+  graphVersion.value += 1;
+  cameraControllerRef.current?.refreshCull();
+  cameraControllerRef.current?.markDirty();
+
+  const controller = cameraControllerRef.current;
+  if (controller) {
+    const w = pulled.node.layout.width ?? 320;
+    const h = getEffectiveNodeHeight(pulled.node);
+    const cx = pulled.node.layout.x + w / 2;
+    const cy = pulled.node.layout.y + h / 2;
+    const cam = controller.getCamera();
+    const { width, height } = controller.getViewportSize();
+    const targetZoom = clampZoom(Math.max(cam.zoom, 0.85));
+    controller.animateTo(
+      {
+        x: width / 2 - cx * targetZoom,
+        y: height / 2 - cy * targetZoom,
+        zoom: targetZoom,
+      },
+      220,
+    );
+  }
+
+  return pulled.node;
 }
 
 export async function mutateGraph(ops: GraphOp[]): Promise<ApplyResult> {

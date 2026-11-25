@@ -1,6 +1,8 @@
+pub mod checkpoints;
 pub mod compiler;
 pub mod diagnostics;
 pub mod exporter;
+pub mod external_refs;
 pub mod importer;
 pub mod models;
 pub mod provenance;

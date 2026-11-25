@@ -53,7 +53,10 @@ import {
   syncHistorySignals,
 } from "../store/history";
 import {
+  checkpointsModalOpen,
+  clearSpotlight,
   closeArtifactExport,
+  closeCheckpointsModal,
   closeCommandPalette,
   closeDiagnosticsModal,
   closeNodeContextMenu,
@@ -65,6 +68,7 @@ import {
   focusId,
   minimapOpen,
   modalState,
+  openCheckpointsModal,
   openCommandPalette,
   openDiagnosticsModal,
   relatedPopoverNodeId,
@@ -73,6 +77,8 @@ import {
   selectSingle,
   setSelection,
   shortcutsHelpOpen,
+  spotlightRootId,
+  toggleSpotlight,
   triggerLockedShake,
   xrayPinned,
   xrayState,
@@ -119,6 +125,8 @@ export interface KeymapDeps {
   resetZoom?: () => void;
   toggleShortcutsHelp?: () => void;
   toggleDiagnosticsModal?: () => void;
+  toggleCheckpointsModal?: () => void;
+  toggleFocusSpotlight?: () => void;
   closeOverlays: () => void;
   setConnectSourceId?: (id: string | null) => void;
   openEdgePopoverFor: (sourceId: string, targetId: string) => void;
@@ -566,6 +574,30 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
         closeDiagnosticsModal();
       } else {
         openDiagnosticsModal();
+      }
+      return;
+    }
+
+    if (lower === "s" && e.shiftKey) {
+      e.preventDefault();
+      if (deps.toggleCheckpointsModal) {
+        deps.toggleCheckpointsModal();
+      } else if (checkpointsModalOpen.value) {
+        closeCheckpointsModal();
+      } else {
+        openCheckpointsModal();
+      }
+      return;
+    }
+
+    if (lower === "f" && e.shiftKey) {
+      e.preventDefault();
+      if (deps.toggleFocusSpotlight) {
+        deps.toggleFocusSpotlight();
+      } else if (spotlightRootId.value === null && deps.getFocusId() === null) {
+        deps.pushToast("Select a focus node first", "warning");
+      } else {
+        toggleSpotlight(deps.getFocusId());
       }
       return;
     }
@@ -1111,6 +1143,20 @@ export function attachKeymap(
         openDiagnosticsModal();
       }
     },
+    toggleCheckpointsModal: () => {
+      if (checkpointsModalOpen.value) {
+        closeCheckpointsModal();
+      } else {
+        openCheckpointsModal();
+      }
+    },
+    toggleFocusSpotlight: () => {
+      if (spotlightRootId.value === null && focusId.value === null) {
+        pushToast("Select a focus node first", "warning");
+        return;
+      }
+      toggleSpotlight(focusId.value);
+    },
     closeOverlays: () => {
       edgePopover.value = null;
       closeNodeContextMenu();
@@ -1118,6 +1164,8 @@ export function attachKeymap(
       shortcutsHelpOpen.value = false;
       closeDiagnosticsModal();
       closeOutlineImportModal();
+      closeCheckpointsModal();
+      clearSpotlight();
       closeCommandPalette();
       closeCustomPromptBar();
       closeSettingsModal();

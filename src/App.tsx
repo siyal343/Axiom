@@ -16,7 +16,12 @@ import { CardLayer } from "./cards/CardLayer";
 import { LiveEditorOverlay } from "./cards/LiveEditorOverlay";
 import { attachKeymap } from "./input/keymap";
 import { setCustomLenses } from "./input/actionTags";
-import { findParentTarget } from "./input/topologyNav";
+import {
+  collectSpotlightIds,
+  computeAlignmentMoves,
+  findParentTarget,
+  type AlignMode,
+} from "./input/topologyNav";
 import {
   getSettings,
   isTauriRuntime,
@@ -25,6 +30,7 @@ import {
 } from "./ipc/client";
 import type { EdgeType, GraphOp, LensKind, NodeDto } from "./ipc/types";
 import { ArtifactExportModal } from "./overlays/ArtifactExportModal";
+import { CheckpointsModal } from "./overlays/CheckpointsModal";
 import { CommandPalette } from "./overlays/CommandPalette";
 import { CustomPromptBar } from "./overlays/CustomPromptBar";
 import { DiagnosticsModal } from "./overlays/DiagnosticsModal";
@@ -37,7 +43,7 @@ import { RelatedNodesPopover } from "./overlays/RelatedNodesPopover";
 import { SettingsModal } from "./overlays/SettingsModal";
 import { ShortcutsModal } from "./overlays/ShortcutsModal";
 import { SpineBreadcrumb } from "./overlays/SpineBreadcrumb";
-import { notifyIpcError, ToastStack } from "./overlays/ToastStack";
+import { notifyIpcError, pushToast, ToastStack } from "./overlays/ToastStack";
 import { WorkspaceSidebar } from "./overlays/WorkspaceSidebar";
 import { XrayHud } from "./overlays/XrayHud";
 import {
@@ -56,6 +62,7 @@ import {
   acknowledgeAndRefreshStaleNode,
   cameraControllerRef,
   connectNodesWithEdge,
+  detachExternalRefNode,
   dragOffsets,
   edgeFlowEnabled,
   edgesMap,
@@ -63,8 +70,10 @@ import {
   isBirdsEye,
   mutateGraphUndoable,
   nodesMap,
+  refreshExternalRefs,
   refreshStaleNodes,
   resizeSizes,
+  syncExternalRefNode,
   theme,
   tokenBudget,
   unresolvedLoopholes,
@@ -74,28 +83,38 @@ import {
 import {
   buildCreateNodeWithInverse,
   buildDeleteWithInverse,
+  buildMoveNodesWithInverse,
   buildUpdateMetaWithInverse,
 } from "./store/history";
 import {
+  checkpointsModalOpen,
+  clearSpotlight,
   connectSourceId,
   diagnosticsModalOpen,
   edgePopover,
   enterEditMode,
+  externalRefsMap,
   focusId,
   hoveredId,
   isInteracting,
   minimapOpen,
   modalState,
+  openCheckpointsModal,
   openDiagnosticsModal,
   selectedEdgeId,
   selectedIds,
   selectSingle,
   setSelection,
   shortcutsHelpOpen,
+  spotlightRootId,
   staleNodesMap,
   xrayState,
 } from "./store/selection";
-import { initWorkspaceCatalog, sidebarOpen } from "./store/workspaceCatalogStore";
+import {
+  initWorkspaceCatalog,
+  openFlowAndFocusNode,
+  sidebarOpen,
+} from "./store/workspaceCatalogStore";
 
 const EDGE_POPOVER_OPTIONS: ReadonlyArray<{
   keyHint: string;
@@ -187,6 +206,9 @@ export function App() {
   const isSidebarOpen = sidebarOpen.value;
   const isMinimapOpen = minimapOpen.value;
   const isDiagnosticsOpen = diagnosticsModalOpen.value;
+  const isCheckpointsOpen = checkpointsModalOpen.value;
+  const activeSpotlightRoot = spotlightRootId.value;
+  const externalRefs = externalRefsMap.value;
   const hasXray = xrayState.value !== null;
   const staleNodes = staleNodesMap.value;
   const staleCount = staleNodes.size;
@@ -267,6 +289,15 @@ export function App() {
       canvas,
       cardLayerEl: null,
       renderFrame: (ctx, cam, width, height) => {
+        const spotRoot = spotlightRootId.value;
+        const spotlightIds =
+          spotRoot !== null ? collectSpotlightIds(spotRoot, nodesMap, edgesMap) : null;
+        const outOfSyncRefIds = new Set<string>();
+        for (const [id, info] of externalRefsMap.value.entries()) {
+          if (info.status !== "synced") {
+            outOfSyncRefIds.add(id);
+          }
+        }
         renderCanvas2d(ctx, {
           cam,
           width,
@@ -284,6 +315,8 @@ export function App() {
           xrayState: xrayState.value,
           unresolvedLoopholes: unresolvedLoopholes.value,
           staleNodeIds: new Set(staleNodesMap.value.keys()),
+          spotlightIds,
+          outOfSyncRefIds,
           marqueeWorld: overlay.marqueeWorld,
           edgePreviewWorld: overlay.edgePreviewWorld,
           themeKey: theme.value,
@@ -409,6 +442,8 @@ export function App() {
     connectSourceId.value,
     xrayState.value,
     staleNodes,
+    activeSpotlightRoot,
+    externalRefs,
   ]);
 
   useEffect(() => {
@@ -417,6 +452,7 @@ export function App() {
     }
     const timer = setTimeout(() => {
       void refreshStaleNodes();
+      void refreshExternalRefs();
     }, 250);
     return () => {
       clearTimeout(timer);
@@ -474,11 +510,79 @@ export function App() {
       void triggerLens(lens);
     };
 
+    const handleSyncExtRef = (e: Event): void => {
+      const detail = (e as CustomEvent<{ nodeId?: string; localNodeId?: string } | string>).detail;
+      const nodeId = typeof detail === "string" ? detail : (detail?.nodeId ?? detail?.localNodeId);
+      if (!nodeId) {
+        return;
+      }
+      void syncExternalRefNode(nodeId)
+        .then(() => {
+          pushToast("Synced linked card from source", "info");
+        })
+        .catch(notifyIpcError);
+    };
+
+    const handleOpenExtRef = (e: Event): void => {
+      const detail = (
+        e as CustomEvent<
+          | {
+              nodeId?: string;
+              localNodeId?: string;
+              sourceWorkspaceId?: string;
+              sourceFlowId?: string;
+              sourceNodeId?: string;
+              source_workspace_id?: string;
+              source_flow_id?: string;
+              source_node_id?: string;
+            }
+          | string
+        >
+      ).detail;
+      const nodeId = typeof detail === "string" ? detail : (detail?.nodeId ?? detail?.localNodeId);
+      const refInfo = nodeId ? externalRefsMap.value.get(nodeId) : undefined;
+      const wsId =
+        typeof detail === "object" && detail !== null
+          ? (detail.sourceWorkspaceId ?? detail.source_workspace_id ?? refInfo?.source_workspace_id)
+          : refInfo?.source_workspace_id;
+      const flowId =
+        typeof detail === "object" && detail !== null
+          ? (detail.sourceFlowId ?? detail.source_flow_id ?? refInfo?.source_flow_id)
+          : refInfo?.source_flow_id;
+      const srcNodeId =
+        typeof detail === "object" && detail !== null
+          ? (detail.sourceNodeId ?? detail.source_node_id ?? refInfo?.source_node_id)
+          : refInfo?.source_node_id;
+      if (!wsId || !flowId || !srcNodeId) {
+        return;
+      }
+      void openFlowAndFocusNode(wsId, flowId, srcNodeId).catch(notifyIpcError);
+    };
+
+    const handleDetachExtRef = (e: Event): void => {
+      const detail = (e as CustomEvent<{ nodeId?: string; localNodeId?: string } | string>).detail;
+      const nodeId = typeof detail === "string" ? detail : (detail?.nodeId ?? detail?.localNodeId);
+      if (!nodeId) {
+        return;
+      }
+      void detachExternalRefNode(nodeId)
+        .then(() => {
+          pushToast("Detached external link", "info");
+        })
+        .catch(notifyIpcError);
+    };
+
     window.addEventListener("axiom:ack-stale", handleAckStale);
     window.addEventListener("axiom:rerun-stale", handleRerunStale);
+    window.addEventListener("axiom:sync-extref", handleSyncExtRef);
+    window.addEventListener("axiom:open-extref", handleOpenExtRef);
+    window.addEventListener("axiom:detach-extref", handleDetachExtRef);
     return () => {
       window.removeEventListener("axiom:ack-stale", handleAckStale);
       window.removeEventListener("axiom:rerun-stale", handleRerunStale);
+      window.removeEventListener("axiom:sync-extref", handleSyncExtRef);
+      window.removeEventListener("axiom:open-extref", handleOpenExtRef);
+      window.removeEventListener("axiom:detach-extref", handleDetachExtRef);
     };
   }, []);
 
@@ -613,6 +717,21 @@ export function App() {
         notifyIpcError,
       );
     }
+  };
+
+  const handleAlign = (mode: AlignMode): void => {
+    const { prev, next } = computeAlignmentMoves(currentSelected, nodesMap, mode);
+    if (next.length === 0) {
+      return;
+    }
+    const { forward, inverse } = buildMoveNodesWithInverse(prev, next);
+    const labelByMode: Record<AlignMode, string> = {
+      left: "Align left",
+      top: "Align top",
+      distribute_h: "Distribute horizontally",
+      distribute_v: "Distribute vertically",
+    };
+    void mutateGraphUndoable(labelByMode[mode], forward, inverse).catch(notifyIpcError);
   };
 
   const handleCreateFirstNode = (): void => {
@@ -757,6 +876,46 @@ export function App() {
           </button>
           <button
             type="button"
+            class="multi-select-pill__btn"
+            title="Align left edges"
+            aria-label="Align left"
+            onClick={() => handleAlign("left")}
+          >
+            ⫢ L
+          </button>
+          <button
+            type="button"
+            class="multi-select-pill__btn"
+            title="Align top edges"
+            aria-label="Align top"
+            onClick={() => handleAlign("top")}
+          >
+            ⊤ T
+          </button>
+          {currentSelected.size >= 3 && (
+            <>
+              <button
+                type="button"
+                class="multi-select-pill__btn"
+                title="Distribute horizontally"
+                aria-label="Distribute horizontally"
+                onClick={() => handleAlign("distribute_h")}
+              >
+                ⫦ H
+              </button>
+              <button
+                type="button"
+                class="multi-select-pill__btn"
+                title="Distribute vertically"
+                aria-label="Distribute vertically"
+                onClick={() => handleAlign("distribute_v")}
+              >
+                ⫧ V
+              </button>
+            </>
+          )}
+          <button
+            type="button"
             class="multi-select-pill__btn multi-select-pill__btn--danger"
             onClick={handleBulkDelete}
           >
@@ -809,6 +968,20 @@ export function App() {
         <div class="triage-hint-pill" role="status">
           {activeTriage}
         </div>
+      )}
+
+      {activeSpotlightRoot !== null && (
+        <button
+          type="button"
+          class="spotlight-pill"
+          title="Exit Focus Spotlight (Esc)"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            clearSpotlight();
+          }}
+        >
+          Focus Spotlight · Exit (Esc)
+        </button>
       )}
 
       <div class="top-hud-stack">
@@ -968,6 +1141,18 @@ export function App() {
         </button>
         <button
           type="button"
+          class={`canvas-controls__btn ${isCheckpointsOpen ? "canvas-controls__btn--active" : ""}`}
+          title="Checkpoints & Graph Diff (Shift+S)"
+          aria-label="Checkpoints & Graph Diff"
+          aria-pressed={isCheckpointsOpen}
+          onClick={() => {
+            openCheckpointsModal();
+          }}
+        >
+          ⚑
+        </button>
+        <button
+          type="button"
           class="canvas-controls__btn"
           title="Keyboard shortcuts (?)"
           aria-label="Keyboard shortcuts"
@@ -990,6 +1175,7 @@ export function App() {
       <CustomPromptBar />
       <ArtifactExportModal />
       <DiagnosticsModal />
+      <CheckpointsModal />
       <OutlineImportModal />
       <SettingsModal />
       <ShortcutsModal />

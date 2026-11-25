@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { collectSpotlightIds } from "../input/topologyNav";
 import type { NodeDto, SpawnDirection } from "../ipc/types";
 import { activeRunFocusIds, activeRunStatus } from "../store/aiRunner";
 import {
   cardDomRefs,
   dragOffsets,
   edgesMap,
+  graphVersion,
   mutateGraphUndoable,
   nodesMap,
   queueNodeResize,
@@ -20,12 +22,14 @@ import {
 import {
   connectSourceId,
   enterEditMode,
+  externalRefsMap,
   focusId,
   hoveredId,
   isInteracting,
   lockedShakeId,
   modalState,
   selectedIds,
+  spotlightRootId,
   staleNodesMap,
   xrayState,
 } from "../store/selection";
@@ -42,6 +46,7 @@ export function NodeCard({ node }: NodeCardProps) {
   latestLayoutRef.current = node.layout;
   const [moreOpen, setMoreOpen] = useState(false);
   const [staleOpen, setStaleOpen] = useState(false);
+  const [extRefOpen, setExtRefOpen] = useState(false);
 
   const isFocused = focusId.value === node.id;
   const isSelected = selectedIds.value.has(node.id);
@@ -51,9 +56,17 @@ export function NodeCard({ node }: NodeCardProps) {
   const xray = xrayState.value;
   const loopholeInfo = unresolvedLoopholes.value.get(node.id);
   const staleInfo = staleNodesMap.value.get(node.id);
+  const extRef = externalRefsMap.value.get(node.id);
+  const spotlightRoot = spotlightRootId.value;
+  void graphVersion.value;
 
   const xrayMode = xray ? xray.node_modes[node.id] : undefined;
   const isXrayDimmed = xray !== null && xrayMode === undefined;
+  let isSpotlightDimmed = false;
+  if (spotlightRoot !== null && xray === null) {
+    const spotlightSet = collectSpotlightIds(spotlightRoot, nodesMap, edgesMap);
+    isSpotlightDimmed = spotlightSet.size > 0 && !spotlightSet.has(node.id);
+  }
   const isThinkingTarget =
     activeRunStatus.value === "thinking" && activeRunFocusIds.value.includes(node.id);
   const showHoverPill =
@@ -123,6 +136,12 @@ export function NodeCard({ node }: NodeCardProps) {
     }
   }, [staleInfo, staleOpen]);
 
+  useEffect(() => {
+    if (!extRef && extRefOpen) {
+      setExtRefOpen(false);
+    }
+  }, [extRef, extRefOpen]);
+
   const offset = dragOffsets.get(node.id);
   const resized = resizeSizes.get(node.id);
   const displayWidth = resized ? resized.width : node.layout.width;
@@ -146,11 +165,14 @@ export function NodeCard({ node }: NodeCardProps) {
   if (node.layout.collapsed) classes.push("node-card--collapsed");
   if (isFocused) classes.push("node-card--focused");
   if (isSelected) classes.push("node-card--selected");
-  if (isHovered || isFocused || moreOpen || staleOpen) classes.push("node-card--elevated");
+  if (isHovered || isFocused || moreOpen || staleOpen || extRefOpen) {
+    classes.push("node-card--elevated");
+  }
   if (staleInfo) classes.push("node-card--stale");
   if (isThinkingTarget) classes.push("node-card--thinking");
   if (isShaking) classes.push("node-card--shaking");
   if (isXrayDimmed) classes.push("node-card--xray-dim");
+  if (isSpotlightDimmed) classes.push("node-card--spotlight-dim");
   if (connectSourceId.value === node.id) classes.push("node-card--connect-source");
 
   const renderedHtml = node.layout.collapsed
@@ -405,8 +427,108 @@ export function NodeCard({ node }: NodeCardProps) {
               STALE
             </button>
           )}
+          {extRef && (
+            <button
+              type="button"
+              class={`node-badge ${
+                extRef.status === "out_of_sync"
+                  ? "node-badge--extref-drift"
+                  : extRef.status === "source_missing"
+                    ? "node-badge--extref-missing"
+                    : "node-badge--extref-synced"
+              }`}
+              title={`Linked from ${extRef.source_flow_name}${extRef.source_title ? `: ${extRef.source_title}` : ""}`}
+              aria-expanded={extRefOpen}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setExtRefOpen((v) => !v);
+              }}
+            >
+              {extRef.status === "out_of_sync"
+                ? "OUT OF SYNC"
+                : extRef.status === "source_missing"
+                  ? "MISSING"
+                  : "LINKED"}
+            </button>
+          )}
         </div>
       </header>
+
+      {extRef && extRefOpen && (
+        <div
+          class="stale-popover extref-popover"
+          role="dialog"
+          aria-label="External flow reference"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div class="stale-popover__header">Linked from {extRef.source_flow_name}</div>
+          <div class="stale-popover__list">
+            <div class="stale-popover__item">
+              {extRef.status === "source_missing"
+                ? "Source node was deleted or flow is unavailable."
+                : extRef.source_title
+                  ? extRef.source_title
+                  : extRef.source_node_id}
+            </div>
+          </div>
+          <div class="stale-popover__actions">
+            {extRef.status !== "source_missing" && (
+              <button
+                type="button"
+                class="stale-popover__btn stale-popover__btn--primary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExtRefOpen(false);
+                  window.dispatchEvent(
+                    new CustomEvent("axiom:sync-extref", {
+                      detail: { nodeId: node.id },
+                    }),
+                  );
+                }}
+              >
+                Pull Latest
+              </button>
+            )}
+            <button
+              type="button"
+              class="stale-popover__btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setExtRefOpen(false);
+                window.dispatchEvent(
+                  new CustomEvent("axiom:open-extref", {
+                    detail: {
+                      nodeId: node.id,
+                      sourceWorkspaceId: extRef.source_workspace_id,
+                      sourceFlowId: extRef.source_flow_id,
+                      sourceNodeId: extRef.source_node_id,
+                    },
+                  }),
+                );
+              }}
+            >
+              Open Source
+            </button>
+            <button
+              type="button"
+              class="stale-popover__btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setExtRefOpen(false);
+                window.dispatchEvent(
+                  new CustomEvent("axiom:detach-extref", {
+                    detail: { nodeId: node.id },
+                  }),
+                );
+              }}
+            >
+              Detach
+            </button>
+          </div>
+        </div>
+      )}
 
       {staleInfo && staleOpen && (
         <div

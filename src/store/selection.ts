@@ -3,6 +3,7 @@ import type {
   ArtifactFormat,
   ArtifactScope,
   CompiledXray,
+  ExternalRefInfo,
   NodeDto,
   StaleNodeInfo,
 } from "../ipc/types";
@@ -44,9 +45,43 @@ export const staleNodesMap = signal<ReadonlyMap<string, StaleNodeInfo>>(new Map(
 export const relatedPopoverNodeId = signal<string | null>(null);
 export const diagnosticsModalOpen = signal<boolean>(false);
 export const outlineImportModalOpen = signal<boolean>(false);
+export const externalRefsMap = signal<ReadonlyMap<string, ExternalRefInfo>>(new Map());
+export const checkpointsModalOpen = signal<boolean>(false);
+export const spotlightRootId = signal<string | null>(null);
 
 export function closeNodeContextMenu(): void {
   nodeContextMenu.value = null;
+}
+
+export function openCheckpointsModal(): void {
+  edgePopover.value = null;
+  nodeContextMenu.value = null;
+  relatedPopoverNodeId.value = null;
+  hoveredId.value = null;
+  shortcutsHelpOpen.value = false;
+  artifactExportOpen.value = false;
+  diagnosticsModalOpen.value = false;
+  outlineImportModalOpen.value = false;
+  checkpointsModalOpen.value = true;
+}
+
+export function closeCheckpointsModal(): void {
+  checkpointsModalOpen.value = false;
+}
+
+export function toggleSpotlight(nodeId?: string | null): void {
+  const target = nodeId ?? focusId.value;
+  if (spotlightRootId.value !== null && (target === null || target === spotlightRootId.value)) {
+    spotlightRootId.value = null;
+    return;
+  }
+  if (target !== null) {
+    spotlightRootId.value = target;
+  }
+}
+
+export function clearSpotlight(): void {
+  spotlightRootId.value = null;
 }
 
 export function openDiagnosticsModal(): void {
@@ -57,6 +92,7 @@ export function openDiagnosticsModal(): void {
   shortcutsHelpOpen.value = false;
   artifactExportOpen.value = false;
   outlineImportModalOpen.value = false;
+  checkpointsModalOpen.value = false;
   diagnosticsModalOpen.value = true;
 }
 
@@ -72,6 +108,7 @@ export function openOutlineImportModal(): void {
   shortcutsHelpOpen.value = false;
   artifactExportOpen.value = false;
   diagnosticsModalOpen.value = false;
+  checkpointsModalOpen.value = false;
   outlineImportModalOpen.value = true;
 }
 
@@ -90,6 +127,7 @@ export function openArtifactExport(
   shortcutsHelpOpen.value = false;
   diagnosticsModalOpen.value = false;
   outlineImportModalOpen.value = false;
+  checkpointsModalOpen.value = false;
   artifactExportFormat.value = format;
   artifactExportScope.value = scope;
   artifactExportOpen.value = true;
@@ -108,6 +146,7 @@ export function openCommandPalette(): void {
   artifactExportOpen.value = false;
   diagnosticsModalOpen.value = false;
   outlineImportModalOpen.value = false;
+  checkpointsModalOpen.value = false;
   selectedEdgeId.value = null;
   commandPaletteOpen.value = true;
   modalState.value = "command";
@@ -210,6 +249,7 @@ export function enterEditMode(node: NodeDto): boolean {
   relatedPopoverNodeId.value = null;
   diagnosticsModalOpen.value = false;
   outlineImportModalOpen.value = false;
+  checkpointsModalOpen.value = false;
   modalState.value = "edit";
   return true;
 }

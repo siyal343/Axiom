@@ -12,12 +12,12 @@ use crate::db;
 use crate::error::IpcError;
 use crate::graph::compiler::compile_context;
 use crate::graph::models::{
-    AppSettingsDto, ApplyResult, ArtifactFormat, ArtifactScope, CameraState, CompiledArtifact,
-    CompiledXray, EdgeType, GraphDiagnostics, GraphOp, ImportOutlineResult, LensKind,
-    LensStreamEvent, NodePositionUpdate, NodeType, OpenFlowResult, RelatedNodeHit,
-    SaveSettingsInput, SearchHit, SpawnConnectedResult, SpawnDirection, StaleNodeInfo,
-    TestConnectionResult, WorkspaceCatalogDto, WorkspaceEntryDto, WorkspaceSearchHit,
-    WorkspaceSnapshot,
+    AppSettingsDto, ApplyResult, ArtifactFormat, ArtifactScope, CameraState, CheckpointDiff,
+    CheckpointSummary, CompiledArtifact, CompiledXray, EdgeType, ExternalRefInfo, GraphDiagnostics,
+    GraphOp, ImportOutlineResult, LensKind, LensStreamEvent, NodeDto, NodePositionUpdate,
+    NodeType, OpenFlowResult, PullExternalRefResult, RelatedNodeHit, SaveSettingsInput, SearchHit,
+    SpawnConnectedResult, SpawnDirection, StaleNodeInfo, TestConnectionResult, WorkspaceCatalogDto,
+    WorkspaceEntryDto, WorkspaceSearchHit, WorkspaceSnapshot,
 };
 use crate::graph::provenance::{acknowledge_stale_node as ack_stale_node_db, compute_stale_nodes};
 use crate::graph::spatial::{
@@ -1110,4 +1110,253 @@ pub fn seed_stress_500(state: tauri::State<'_, AppState>) -> Result<WorkspaceSna
         db::stress::seed_stress_500_into_workspace(conn, &mut active.engine, &active.path)?;
     active.token_budget = snapshot.token_budget;
     Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn pull_external_reference(
+    source_workspace_id: String,
+    source_flow_id: String,
+    source_node_id: String,
+    attach_to_node_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<PullExternalRefResult, IpcError> {
+    let catalog = state.workspaces.load_or_init()?;
+    let ws = catalog
+        .workspaces
+        .iter()
+        .find(|w| w.id == source_workspace_id)
+        .ok_or_else(|| {
+            IpcError::validation(format!("Source workspace '{source_workspace_id}' not found"))
+        })?;
+    let flow = ws
+        .flows
+        .iter()
+        .find(|f| f.id == source_flow_id)
+        .ok_or_else(|| {
+            IpcError::validation(format!(
+                "Source flow '{source_flow_id}' not found in workspace '{source_workspace_id}'"
+            ))
+        })?;
+
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let mut workspace_guard = state
+        .workspace
+        .write()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    let source_db_path = Path::new(&flow.db_path);
+    let result = crate::graph::external_refs::pull_external_reference(
+        conn,
+        &mut active.engine,
+        &ws.id,
+        &flow.id,
+        &flow.name,
+        source_db_path,
+        &source_node_id,
+        attach_to_node_id.as_deref(),
+    )?;
+
+    if !result.node.context_controls.exclude_from_ai
+        && result.node.content_hash != result.node.summary_hash
+    {
+        let _ = state.summary_tx.send(result.node.id.clone());
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn get_external_ref_statuses(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ExternalRefInfo>, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let workspace_guard = state
+        .workspace
+        .read()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::external_refs::compute_external_ref_statuses(conn, &active.engine)
+}
+
+#[tauri::command]
+pub fn sync_external_ref(
+    local_node_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<NodeDto, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let mut workspace_guard = state
+        .workspace
+        .write()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    let updated =
+        crate::graph::external_refs::sync_external_ref(conn, &mut active.engine, &local_node_id)?;
+    if !updated.context_controls.exclude_from_ai && updated.content_hash != updated.summary_hash {
+        let _ = state.summary_tx.send(updated.id.clone());
+    }
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn detach_external_ref(
+    local_node_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), IpcError> {
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::external_refs::detach_external_ref(conn, &local_node_id)
+}
+
+#[tauri::command]
+pub fn list_checkpoints(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<CheckpointSummary>, IpcError> {
+    let db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::checkpoints::list_checkpoints(conn)
+}
+
+#[tauri::command]
+pub fn create_checkpoint(
+    name: String,
+    note: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<CheckpointSummary, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let workspace_guard = state
+        .workspace
+        .read()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::checkpoints::create_checkpoint(
+        conn,
+        &active.engine,
+        &active.system_prompt,
+        active.token_budget,
+        &name,
+        note.as_deref().unwrap_or(""),
+    )
+}
+
+#[tauri::command]
+pub fn diff_checkpoint(
+    checkpoint_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<CheckpointDiff, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let workspace_guard = state
+        .workspace
+        .read()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::checkpoints::diff_checkpoint(conn, &active.engine, &checkpoint_id)
+}
+
+#[tauri::command]
+pub fn restore_checkpoint(
+    checkpoint_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceSnapshot, IpcError> {
+    // Canonical lock ordering: ALWAYS acquire workspace lock BEFORE db lock.
+    let mut workspace_guard = state
+        .workspace
+        .write()
+        .map_err(|_| IpcError::db("Workspace lock poisoned"))?;
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+
+    let active = workspace_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    state.bump_generation_and_cancel_runs();
+    crate::graph::checkpoints::restore_checkpoint(conn, active, &checkpoint_id)
+}
+
+#[tauri::command]
+pub fn delete_checkpoint(
+    checkpoint_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), IpcError> {
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::checkpoints::delete_checkpoint(conn, &checkpoint_id)
 }

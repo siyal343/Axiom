@@ -79,6 +79,15 @@ pub fn run() {
             ipc::commands::save_settings,
             ipc::commands::test_provider_connection,
             ipc::commands::seed_stress_500,
+            ipc::commands::pull_external_reference,
+            ipc::commands::get_external_ref_statuses,
+            ipc::commands::sync_external_ref,
+            ipc::commands::detach_external_ref,
+            ipc::commands::list_checkpoints,
+            ipc::commands::create_checkpoint,
+            ipc::commands::diff_checkpoint,
+            ipc::commands::restore_checkpoint,
+            ipc::commands::delete_checkpoint,
         ]);
 
     if let Err(err) = builder.run(tauri::generate_context!()) {

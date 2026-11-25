@@ -6,10 +6,13 @@ import type {
   ArtifactFormat,
   ArtifactScope,
   CameraState,
+  CheckpointDiff,
+  CheckpointSummary,
   CompiledArtifact,
   CompiledXray,
   EdgeDto,
   EdgeType,
+  ExternalRefInfo,
   FlowTemplate,
   GraphDiagnostics,
   GraphOp,
@@ -21,6 +24,7 @@ import type {
   NodePositionUpdate,
   NodeType,
   OpenFlowResult,
+  PullExternalRefResult,
   RelatedNodeHit,
   SaveSettingsInput,
   SearchHit,
@@ -291,4 +295,56 @@ export async function importMarkdownOutline(
     markdown,
     parentId: parentId ?? null,
   });
+}
+
+export async function pullExternalReference(
+  sourceWorkspaceId: string,
+  sourceFlowId: string,
+  sourceNodeId: string,
+  attachToNodeId?: string | null,
+): Promise<PullExternalRefResult> {
+  return invoke<PullExternalRefResult>("pull_external_reference", {
+    sourceWorkspaceId,
+    sourceFlowId,
+    sourceNodeId,
+    attachToNodeId: attachToNodeId ?? null,
+  });
+}
+
+export async function getExternalRefStatuses(): Promise<ExternalRefInfo[]> {
+  return invoke<ExternalRefInfo[]>("get_external_ref_statuses", {});
+}
+
+export async function syncExternalRef(localNodeId: string): Promise<NodeDto> {
+  return invoke<NodeDto>("sync_external_ref", { localNodeId });
+}
+
+export async function detachExternalRef(localNodeId: string): Promise<void> {
+  return invoke<void>("detach_external_ref", { localNodeId });
+}
+
+export async function listCheckpoints(): Promise<CheckpointSummary[]> {
+  return invoke<CheckpointSummary[]>("list_checkpoints", {});
+}
+
+export async function createCheckpoint(
+  name: string,
+  note?: string,
+): Promise<CheckpointSummary> {
+  return invoke<CheckpointSummary>("create_checkpoint", {
+    name,
+    note: note ?? "",
+  });
+}
+
+export async function diffCheckpoint(checkpointId: string): Promise<CheckpointDiff> {
+  return invoke<CheckpointDiff>("diff_checkpoint", { checkpointId });
+}
+
+export async function restoreCheckpoint(checkpointId: string): Promise<WorkspaceSnapshot> {
+  return invoke<WorkspaceSnapshot>("restore_checkpoint", { checkpointId });
+}
+
+export async function deleteCheckpoint(checkpointId: string): Promise<void> {
+  return invoke<void>("delete_checkpoint", { checkpointId });
 }

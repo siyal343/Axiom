@@ -25,7 +25,12 @@ import {
   runToggleThemeAction,
 } from "../ipc/workspaceActions";
 import { executeActionTag, openSettingsModal, shouldRunTagInPlace } from "../store/aiRunner";
-import { cameraControllerRef, nodesMap, tokenBudget } from "../store/graphStore";
+import {
+  cameraControllerRef,
+  nodesMap,
+  pullExternalRefIntoCanvas,
+  tokenBudget,
+} from "../store/graphStore";
 import {
   closeCommandPalette,
   commandPaletteOpen,
@@ -33,16 +38,23 @@ import {
   minimapOpen,
   modalState,
   openArtifactExport,
+  openCheckpointsModal,
   openDiagnosticsModal,
   openOutlineImportModal,
   relatedPopoverNodeId,
   selectedIds,
   selectSingle,
+  spotlightRootId,
   staleNodesMap,
+  toggleSpotlight,
   xrayPinned,
   xrayState,
 } from "../store/selection";
-import { openFlowAndFocusNode, toggleSidebar } from "../store/workspaceCatalogStore";
+import {
+  openFlowAndFocusNode,
+  toggleSidebar,
+  workspaceCatalog,
+} from "../store/workspaceCatalogStore";
 import { notifyIpcError, pushToast } from "./ToastStack";
 import { buildBrowserFallbackXray } from "./XrayHud";
 
@@ -298,6 +310,30 @@ function buildPaletteCommands(onFilterStale: () => void): PaletteCommand[] {
         openSettingsModal();
       },
     },
+    {
+      id: "checkpoints-diff",
+      label: "> Checkpoints & Graph Diff (Shift+S)",
+      description: "Save named checkpoints, inspect graph diffs, or restore an earlier state",
+      keywords: "checkpoints snapshot restore diff history version",
+      badge: "Workspace",
+      run: () => {
+        openCheckpointsModal();
+      },
+    },
+    {
+      id: "toggle-spotlight",
+      label: "> Toggle Focus Spotlight (Shift+F)",
+      description: "Dim unrelated branches and focus on the active node's lineage",
+      keywords: "spotlight focus dim lineage isolate branch",
+      badge: "Canvas",
+      run: () => {
+        if (spotlightRootId.value === null && focusId.value === null) {
+          pushToast("Select a focus node first", "warning");
+          return;
+        }
+        toggleSpotlight(focusId.value);
+      },
+    },
   ];
 
   if (import.meta.env.DEV) {
@@ -549,7 +585,7 @@ export function CommandPalette() {
         void searchWorkspaceFlows(effectiveQuery, 30)
           .then((res) => {
             if (!cancelled) {
-              setWorkspaceHits(res);
+              setWorkspaceHits(Array.isArray(res) ? res : []);
               setActiveIndex(0);
             }
           })
@@ -568,7 +604,7 @@ export function CommandPalette() {
         void searchNodes(effectiveQuery, 30)
           .then((res) => {
             if (!cancelled) {
-              setHits(res);
+              setHits(Array.isArray(res) ? res : []);
               setActiveIndex(0);
             }
           })
@@ -629,6 +665,28 @@ export function CommandPalette() {
     closeCommandPalette();
     void openFlowAndFocusNode(wsHit.workspace_id, wsHit.flow_id, wsHit.hit.id);
   };
+
+  const linkWorkspaceHit = (wsHit: WorkspaceSearchHit): void => {
+    const attachTo = focusId.value;
+    setQuery("");
+    setWorkspaceHits([]);
+    setActiveIndex(0);
+    closeCommandPalette();
+    void pullExternalRefIntoCanvas(
+      wsHit.workspace_id,
+      wsHit.flow_id,
+      wsHit.hit.id,
+      attachTo,
+    )
+      .then((node) => {
+        if (node) {
+          pushToast(`Linked card from ${wsHit.flow_name}`, "info");
+        }
+      })
+      .catch(notifyIpcError);
+  };
+
+  const activeFlowId = workspaceCatalog.value?.active_flow_id ?? null;
 
   const executeCommand = (cmd: PaletteCommand): void => {
     if (cmd.keepOpen) {
@@ -890,14 +948,21 @@ export function CommandPalette() {
               <div class="command-palette__empty">No matching nodes across flows</div>
             ) : (
               workspaceHits.map((wsHit, idx) => (
-                <button
+                <div
                   key={`${wsHit.workspace_id}:${wsHit.flow_id}:${wsHit.hit.id}`}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   class={`command-palette__item ${
                     idx === activeIndex ? "command-palette__item--active" : ""
                   }`}
                   onMouseEnter={() => setActiveIndex(idx)}
                   onClick={() => jumpToWorkspaceHit(wsHit)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      jumpToWorkspaceHit(wsHit);
+                    }
+                  }}
                 >
                   <div class="command-palette__item-top">
                     <span class="command-palette__item-title">
@@ -912,12 +977,25 @@ export function CommandPalette() {
                         </span>
                       )}
                       <span class="badge">{wsHit.hit.status}</span>
+                      {wsHit.flow_id !== activeFlowId && (
+                        <button
+                          type="button"
+                          class="palette-link-btn"
+                          title={`Pull linked reference from ${wsHit.flow_name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            linkWorkspaceHit(wsHit);
+                          }}
+                        >
+                          + Link
+                        </button>
+                      )}
                     </div>
                   </div>
                   {wsHit.hit.snippet && (
                     <div class="command-palette__item-snippet">{wsHit.hit.snippet}</div>
                   )}
-                </button>
+                </div>
               ))
             )
           ) : showQuickActions ? (

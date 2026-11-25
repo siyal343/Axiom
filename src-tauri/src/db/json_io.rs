@@ -344,7 +344,7 @@ pub fn stage_import_json(
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         let meta_pairs = [
-            ("schema_version", "2".to_owned()),
+            ("schema_version", "3".to_owned()),
             ("camera_x", doc.meta.camera.x.to_string()),
             ("camera_y", doc.meta.camera.y.to_string()),
             ("camera_zoom", doc.meta.camera.zoom.to_string()),

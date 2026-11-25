@@ -27,6 +27,7 @@ const GRAPH_CONTEXT_ROWS: ShortcutRow[] = [
   { keys: "C / Shift + C", action: "Fold selection or fold entire subtree" },
   { keys: "T", action: "Tidy subtree layout" },
   { keys: "Hold V / Shift + V", action: "Peek or pin interactive Context X-Ray" },
+  { keys: "Shift + F", action: "Focus Spotlight (dim unrelated branches)" },
   { keys: "Ctrl/Cmd + Z / Shift+Z", action: "Undo / Redo" },
   { keys: "Del / Backspace", action: "Dismiss active loophole or delete selection/edge" },
 ];
@@ -46,6 +47,7 @@ const WORKSPACE_ROWS: ShortcutRow[] = [
   { keys: "Ctrl/Cmd + B", action: "Toggle Workspaces & Flows sidebar" },
   { keys: "Ctrl/Cmd + ,", action: "Open AI & Workspace Settings" },
   { keys: "Shift + H", action: "Graph Health & Diagnostics" },
+  { keys: "Shift + S", action: "Checkpoints & Graph Diff" },
   { keys: "Ctrl/Cmd + = / - / 0", action: "Zoom in, zoom out, reset 100%" },
   { keys: "F / F F", action: "Fit selection/subtree or fit entire graph" },
   { keys: "M", action: "Toggle canvas minimap" },
