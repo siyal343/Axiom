@@ -823,7 +823,10 @@ function truncateClueSafe(text: string, maxChars: number): string {
 }
 
 export function extractHintFromAnswer(answer: string): string {
-  const normalized = answer.trim();
+  const withoutSimBlocks = answer
+    .replace(/```(?:axiom-sim|sim)\b[\s\S]*?(?:```|$)/gi, "")
+    .trim();
+  const normalized = withoutSimBlocks;
   if (!normalized) {
     return "";
   }

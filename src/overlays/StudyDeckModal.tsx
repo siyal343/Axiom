@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { clampZoom } from "../canvas/camera";
 import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
 import { renderMarkdownToSanitizedHtml } from "../cards/markdownCache";
+import { useSimHydration } from "../cards/simMountHost";
 import { parseIpcError } from "../ipc/client";
 import type { StudyCardDto, StudyCardKind, StudyRating } from "../ipc/types";
 import { cameraControllerRef, edgesMap, nodesMap } from "../store/graphStore";
@@ -158,6 +159,8 @@ export function StudyDeckModal() {
     () => (activeCard && revealed ? renderMarkdownToSanitizedHtml(activeCard.answer) : ""),
     [activeCard?.id, activeCard?.answer, revealed],
   );
+  const answerBodyRef = useRef<HTMLDivElement | null>(null);
+  useSimHydration(answerBodyRef, answerHtml, isOpen && revealed);
 
   useEffect(() => {
     setHintOpen(false);
@@ -821,6 +824,7 @@ export function StudyDeckModal() {
                 <article class="study-card-face study-card-face--answer">
                   <div class="study-card-face__label">Answer</div>
                   <div
+                    ref={answerBodyRef}
                     class="study-card-face__answer markdown-body"
                     // Sanitized by DOMPurify inside renderMarkdownToSanitizedHtml.
                     dangerouslySetInnerHTML={{ __html: answerHtml }}

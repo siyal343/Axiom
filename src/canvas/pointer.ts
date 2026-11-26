@@ -138,7 +138,7 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   }
   return Boolean(
     target.closest(
-      "button, input, textarea, select, a, .cm-editor, .live-editor-overlay, .hover-pill, .edge-popover, .edge-inspector-pill, .minimap-card, .multi-select-pill, .group-inspector-pill, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu",
+      "button, input, textarea, select, a, .cm-editor, .live-editor-overlay, .hover-pill, .edge-popover, .edge-inspector-pill, .minimap-card, .multi-select-pill, .group-inspector-pill, .node-context-menu, .workspace-sidebar, .sidebar-toggle-bar, .editor-tag-menu, .axiom-sim",
     ),
   );
 }

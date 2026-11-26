@@ -81,6 +81,8 @@ Explain the core mechanism, mathematical principle, or non-obvious trade-off ins
 
 TASK:
 Avoid surface-level definitions and patronizing analogies. Build a tight causal mental model grounded in physical or computational constraints, units, and regime limits.
+When the concept involves dynamics, waves, filters, RF impedance, control loops, or digital bus timing, include ONE compact interactive `axiom-sim` fenced JSON block so the student can test parameter sensitivity directly on the card.
+Available `preset` values: `second_order_step`, `pid_step`, `rc_step`, `splane`, `smith`, `rf_s11`, `spi_timing`, `pwm_rc`, `damped_wave`, `standing_wave`, or `custom_expr` (with `expr`, `xMin`, `xMax`, and `params: [{id,label,unit,min,max,step,value}]`).
 
 OUTPUT FORMAT:
 Emit exactly ONE block:
@@ -94,6 +96,11 @@ Emit exactly ONE block:
 **Concrete Walkthrough:** <Tiny numerical or state-transition worked example with units showing the mechanism in action>
 
 **Common Trap:** <The #1 misconception or sign/unit/regime error engineers hit when applying this>
+
+*(Optional when visual physics/dynamics helps — emit at most ONE valid JSON fence before @@END):*
+```axiom-sim
+{"title":"<short lab title>","domain":"<controls|rf|embedded|physics|math>","preset":"<preset>","caption":"<1-line insight to explore>"}
+```
 @@END"#;
 
 pub const LENS_SYNTHESIZE: &str = r#"LENS: SYNTHESIZE (MULTI-BRANCH COMPARISON & DECISION LOCK)
@@ -139,10 +146,11 @@ Emit 2 to 3 separate blocks using:
 @@END"#;
 
 pub const LENS_STUDY: &str = r#"LENS: STUDY & ACTIVE RECALL (ENGINEERING MASTERY)
-Transform the [FOCUS NODE] into a closed-book engineering study sheet covering intuition, governing equations with units and validity limits, a sanity-checked worked example, and diagnostic active-recall questions.
+Transform the [FOCUS NODE] into a closed-book engineering study sheet covering intuition, governing equations with units and validity limits, a sanity-checked worked example, an optional interactive simulation, and diagnostic active-recall questions.
 
 TASK:
 Build genuine predictive problem-solving mastery so the student can set up novel problems from first principles without rote formula-plugging.
+When the topic covers dynamics, waves, filters, RF matching/S11, PID/s-plane controls, or embedded SPI/PWM timing, embed ONE compact `axiom-sim` fenced JSON block using a preset (`second_order_step`, `pid_step`, `rc_step`, `splane`, `smith`, `rf_s11`, `spi_timing`, `pwm_rc`, `damped_wave`, `standing_wave`) or `custom_expr` (`expr`, `xMin`, `xMax`, `params`).
 
 OUTPUT FORMAT:
 Emit exactly ONE block:
@@ -151,6 +159,11 @@ Emit exactly ONE block:
 
 **Governing Equations, Units & Validity Regime:**
 <Key relations in KaTeX `$...$` / `$$...$$` with variable legend, physical/SI/computational units, and explicit boundary/regime assumptions>
+
+*(Optional for RF/Controls/Embedded/Physics — at most ONE valid JSON block):*
+```axiom-sim
+{"title":"<short lab title>","domain":"<controls|rf|embedded|physics|math>","preset":"<preset>","caption":"<what to vary and observe>"}
+```
 
 **Worked Example (Setup → Solve → Sanity Check):**
 - **Setup:** <Given quantities with units + verified assumptions>

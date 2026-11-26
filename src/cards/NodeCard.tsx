@@ -35,6 +35,7 @@ import {
 } from "../store/selection";
 import { getRenderedMarkdown, renderMarkdownToSanitizedHtml } from "./markdownCache";
 import { resolveNodeTone } from "./nodeAccent";
+import { useSimHydration } from "./simMountHost";
 
 interface NodeCardProps {
   node: NodeDto;
@@ -42,6 +43,7 @@ interface NodeCardProps {
 
 export function NodeCard({ node }: NodeCardProps) {
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const latestLayoutRef = useRef(node.layout);
   latestLayoutRef.current = node.layout;
   const [moreOpen, setMoreOpen] = useState(false);
@@ -180,6 +182,8 @@ export function NodeCard({ node }: NodeCardProps) {
     : node.status === "draft"
       ? renderMarkdownToSanitizedHtml(node.content)
       : getRenderedMarkdown(node.content_hash, node.content);
+
+  useSimHydration(bodyRef, renderedHtml, !node.layout.collapsed);
 
   const applyMetaPatch = (label: string, patch: NodeMetaPatch): void => {
     const { forward, inverse } = buildUpdateMetaWithInverse(node, patch);
@@ -587,6 +591,7 @@ export function NodeCard({ node }: NodeCardProps) {
 
       {!node.layout.collapsed && (
         <div
+          ref={bodyRef}
           class="node-card__body markdown-body"
           // Sanitized exclusively by DOMPurify in markdownCache.ts
           dangerouslySetInnerHTML={{ __html: renderedHtml }}

@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use axiom_canvas_lib::ai::provider::{stream_completion, LlmStreamRequest};
+use axiom_canvas_lib::ai::provider::{build_anthropic_body, stream_completion, LlmStreamRequest};
 use axiom_canvas_lib::ai::runner::{execute_lens_run, LensRunParams};
 use axiom_canvas_lib::ai::summarizer::spawn_summarizer_worker;
 use axiom_canvas_lib::db::open_connection;
@@ -849,4 +849,30 @@ fn spawn_summarizer_worker_works_outside_tokio_runtime() {
     assert_eq!(evt.node_id, "n_sync");
     assert_eq!(evt.summary, "Short note under 160 chars.");
     drop(summary_tx);
+}
+
+#[test]
+fn deepseek_anthropic_body_disables_thinking_for_non_reasoner_models() {
+    let base_req = |base_url: &str, model: &str| LlmStreamRequest {
+        system_prompt: "sys".to_owned(),
+        user_prompt: "usr".to_owned(),
+        config: ModelTierConfig {
+            provider: ProviderKind::Anthropic,
+            base_url: base_url.to_owned(),
+            model: model.to_owned(),
+            has_api_key: true,
+            temperature: 0.4,
+            max_tokens: 2048,
+        },
+        api_key: Some("k".to_owned()),
+    };
+
+    let ds_flash = build_anthropic_body(&base_req("https://api.deepseek.com/anthropic", "deepseek-flash"));
+    assert_eq!(ds_flash["thinking"]["type"], "disabled");
+
+    let ds_reasoner = build_anthropic_body(&base_req("https://api.deepseek.com/anthropic", "deepseek-reasoner"));
+    assert!(ds_reasoner.get("thinking").is_none());
+
+    let claude = build_anthropic_body(&base_req("https://api.anthropic.com/v1", "claude-3-7-sonnet"));
+    assert!(claude.get("thinking").is_none());
 }

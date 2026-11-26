@@ -16,6 +16,7 @@ import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import katex from "katex";
 import MarkdownIt from "markdown-it";
+import { parseVisualSimSpec } from "./visualSimEngine";
 
 hljs.registerLanguage("typescript", typescript);
 hljs.registerLanguage("ts", typescript);
@@ -56,8 +57,16 @@ const DOMPURIFY_CONFIG: DomPurifyConfig = {
     "mfrac",
     "annotation",
   ],
-  ADD_ATTR: ["class", "style"],
+  ADD_ATTR: ["class", "style", "data-sim"],
 };
+
+function escapeHtmlAttr(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
 
 interface SanitizerLike {
   sanitize(source: string, config?: DomPurifyConfig): string;
@@ -131,18 +140,39 @@ function preprocessMathOutsideCode(input: string): {
         if (fenceLen >= 3) {
           const fence = ch.repeat(fenceLen);
           const firstNl = input.indexOf("\n", i + spaceCount + fenceLen);
+          const infoString = (
+            firstNl === -1
+              ? input.slice(i + spaceCount + fenceLen)
+              : input.slice(i + spaceCount + fenceLen, firstNl)
+          )
+            .trim()
+            .toLowerCase();
+          const isSimFence = infoString === "axiom-sim" || infoString === "sim";
+
           if (firstNl === -1) {
-            out += input.slice(i);
+            if (isSimFence) {
+              const token = `AXIOMSIMBLOCK${seq}END`;
+              seq += 1;
+              placeholders.set(token, `<div class="axiom-sim-streaming">Compiling interactive visual…</div>`);
+              out += token;
+            } else {
+              out += input.slice(i);
+            }
             break;
           }
+
           let searchPos = firstNl + 1;
           let closeEnd = input.length;
+          let bodyEnd = input.length;
+          let foundClosing = false;
           while (searchPos < input.length) {
             const nextNl = input.indexOf("\n", searchPos);
             const lineEnd = nextNl === -1 ? input.length : nextNl;
             const line = input.slice(searchPos, lineEnd).trim();
             if (line.startsWith(fence) && line.slice(fenceLen).trim() === "") {
               closeEnd = nextNl === -1 ? input.length : nextNl + 1;
+              bodyEnd = searchPos;
+              foundClosing = true;
               break;
             }
             if (nextNl === -1) {
@@ -150,6 +180,32 @@ function preprocessMathOutsideCode(input: string): {
             }
             searchPos = nextNl + 1;
           }
+
+          if (isSimFence) {
+            if (!foundClosing) {
+              const token = `AXIOMSIMBLOCK${seq}END`;
+              seq += 1;
+              placeholders.set(token, `<div class="axiom-sim-streaming">Compiling interactive visual…</div>`);
+              out += token;
+              i = closeEnd;
+              continue;
+            }
+            const rawJson = input.slice(firstNl + 1, bodyEnd);
+            const parsedSpec = parseVisualSimSpec(rawJson);
+            if (parsedSpec) {
+              const token = `AXIOMSIMBLOCK${seq}END`;
+              seq += 1;
+              const encoded = escapeHtmlAttr(JSON.stringify(parsedSpec));
+              placeholders.set(
+                token,
+                `<div class="axiom-sim-mount" data-sim="${encoded}">${escapeHtmlAttr(parsedSpec.title)}</div>`,
+              );
+              out += token;
+              i = closeEnd;
+              continue;
+            }
+          }
+
           out += input.slice(i, closeEnd);
           i = closeEnd;
           continue;

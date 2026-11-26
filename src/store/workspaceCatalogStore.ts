@@ -197,7 +197,7 @@ export function buildTemplateSnapshot(
       const root = makeTemplateNode(
         "core",
         "Topic to Master",
-        "State the physical or computational law, knowns/unknowns with units, and assumptions.\n\nTip: Press Tab on any concept and run @feynman or @study to build intuition, worked checks, and flashcards.",
+        "State the physical or computational law, knowns/unknowns with units, and assumptions.\n\n```axiom-sim\n{\"title\":\"2nd-Order Transient Sensitivity\",\"domain\":\"controls\",\"preset\":\"second_order_step\",\"caption\":\"Vary ζ and ωn to link damping to %OS and settling time Ts.\"}\n```\n\nTip: Press Tab on any concept and run @feynman or @study to build intuition, worked checks, interactive sims, and flashcards.",
         0,
         0,
         now,

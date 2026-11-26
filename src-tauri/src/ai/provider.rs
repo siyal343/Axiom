@@ -57,6 +57,31 @@ pub fn build_openai_compat_body(req: &LlmStreamRequest) -> serde_json::Value {
     }
 }
 
+pub fn build_anthropic_body(req: &LlmStreamRequest) -> serde_json::Value {
+    let base_low = req.config.base_url.to_ascii_lowercase();
+    let model_low = req.config.model.to_ascii_lowercase();
+    let mut body = json!({
+        "model": req.config.model,
+        "stream": true,
+        "temperature": req.config.temperature,
+        "max_tokens": req.config.max_tokens,
+        "system": req.system_prompt,
+        "messages": [
+            { "role": "user", "content": req.user_prompt }
+        ]
+    });
+
+    // DeepSeek's Anthropic gateway defaults non-reasoner aliases like `deepseek-flash`
+    // to thinking mode, which can exhaust 2048-token budgets before emitting text.
+    if base_low.contains("deepseek.com") && !model_low.contains("reasoner") {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("thinking".to_owned(), json!({ "type": "disabled" }));
+        }
+    }
+
+    body
+}
+
 fn map_reqwest_error(err: reqwest::Error) -> IpcError {
     IpcError::provider_network(err.without_url().to_string())
 }
@@ -192,21 +217,13 @@ pub async fn stream_completion(
             let key = key_trimmed
                 .ok_or_else(|| IpcError::provider_auth("Anthropic API key is missing"))?;
             let url = format!("{base}/messages");
+            let body = build_anthropic_body(&req);
             client
                 .post(url)
                 .header("Content-Type", "application/json")
                 .header("x-api-key", key)
                 .header("anthropic-version", "2023-06-01")
-                .json(&json!({
-                    "model": req.config.model,
-                    "stream": true,
-                    "temperature": req.config.temperature,
-                    "max_tokens": req.config.max_tokens,
-                    "system": req.system_prompt,
-                    "messages": [
-                        { "role": "user", "content": req.user_prompt }
-                    ]
-                }))
+                .json(&body)
         }
         ProviderKind::Ollama => {
             let url = format!("{base}/api/chat");

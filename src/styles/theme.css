@@ -4647,3 +4647,388 @@ body,
     transition: none;
   }
 }
+
+/* ---------- Axiom Visual Lab (Interactive Engineering Sims) ---------- */
+
+.axiom-sim-mount {
+  margin: 8px 0;
+}
+
+.axiom-sim-streaming {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-code);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.axiom-sim {
+  --sim-accent: var(--tone-feynman);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg-code);
+  padding: 8px 9px;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  user-select: none;
+}
+
+.axiom-sim--controls {
+  --sim-accent: var(--tone-feynman);
+}
+
+.axiom-sim--rf {
+  --sim-accent: var(--tone-research);
+}
+
+.axiom-sim--embedded {
+  --sim-accent: var(--tone-study);
+}
+
+.axiom-sim--physics {
+  --sim-accent: var(--edge-challenge);
+}
+
+.axiom-sim--math {
+  --sim-accent: var(--tone-synthesize);
+}
+
+.axiom-sim__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.axiom-sim__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.axiom-sim__domain-pill {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--sim-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--sim-accent) 16%, transparent);
+  color: var(--sim-accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.axiom-sim__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axiom-sim__reset-btn {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.axiom-sim__reset-btn:focus-visible {
+  outline: 2px solid var(--sim-accent);
+  outline-offset: 2px;
+}
+
+.axiom-sim__viewport {
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-canvas) 68%, var(--bg-code));
+  overflow: hidden;
+}
+
+.axiom-sim__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.axiom-sim__grid {
+  stroke: var(--border-subtle);
+  stroke-width: 0.85;
+}
+
+.axiom-sim__grid-dashed {
+  stroke: var(--border-strong);
+  stroke-width: 0.9;
+  stroke-dasharray: 3 3;
+}
+
+.axiom-sim__axis {
+  stroke: var(--border-strong);
+  stroke-width: 1.1;
+}
+
+.axiom-sim__axis-dot {
+  fill: var(--text-secondary);
+}
+
+.axiom-sim__axis-label {
+  fill: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+}
+
+.axiom-sim__axis-title {
+  fill: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 8.5px;
+}
+
+.axiom-sim__band {
+  fill: color-mix(in srgb, var(--health-good) 12%, transparent);
+}
+
+.axiom-sim__rhp-zone {
+  fill: color-mix(in srgb, var(--health-crit) 11%, transparent);
+}
+
+.axiom-sim__target-line {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.axiom-sim__curve-primary {
+  stroke: var(--sim-accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.axiom-sim__curve-secondary {
+  stroke: var(--text-secondary);
+  stroke-opacity: 0.72;
+  stroke-width: 1.25;
+  stroke-dasharray: 3 2;
+}
+
+.axiom-sim__curve-env {
+  stroke: var(--edge-challenge);
+  stroke-opacity: 0.55;
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+.axiom-sim__pole {
+  stroke: var(--sim-accent);
+  color: var(--sim-accent);
+}
+
+.axiom-sim__pole--crit {
+  stroke: var(--health-crit);
+  color: var(--health-crit);
+}
+
+.axiom-sim__smith-outer {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.2;
+}
+
+.axiom-sim__smith-match-circle {
+  stroke: color-mix(in srgb, var(--health-good) 55%, var(--border-strong));
+  stroke-width: 1;
+}
+
+.axiom-sim__smith-dot {
+  fill: var(--sim-accent);
+  stroke: var(--bg-canvas);
+  stroke-width: 1.4;
+}
+
+.axiom-sim__timing-line {
+  stroke-width: 1.75;
+  stroke-linejoin: miter;
+}
+
+.axiom-sim__timing-line--accent {
+  stroke: var(--sim-accent);
+}
+
+.axiom-sim__timing-line--good {
+  stroke: var(--health-good);
+}
+
+.axiom-sim__timing-line--warn {
+  stroke: var(--health-warn);
+}
+
+.axiom-sim__sample-edge {
+  stroke: var(--health-good);
+  stroke-opacity: 0.5;
+  stroke-width: 0.9;
+  stroke-dasharray: 2 2;
+}
+
+.axiom-sim__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.axiom-sim__metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  font-size: 10px;
+}
+
+.axiom-sim__metric-label {
+  color: var(--text-muted);
+}
+
+.axiom-sim__metric-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.axiom-sim__metric--good .axiom-sim__metric-value {
+  color: var(--health-good);
+}
+
+.axiom-sim__metric--warn .axiom-sim__metric-value {
+  color: var(--health-warn);
+}
+
+.axiom-sim__metric--crit .axiom-sim__metric-value {
+  color: var(--health-crit);
+}
+
+.axiom-sim__metric--accent .axiom-sim__metric-value {
+  color: var(--sim-accent);
+}
+
+.axiom-sim__controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  gap: 6px 10px;
+}
+
+.axiom-sim__control {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.axiom-sim__control-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.axiom-sim__control-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.axiom-sim__control-readout {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.axiom-sim__slider {
+  --slider-track-size: 5px;
+  --slider-thumb-size: 13px;
+  --slider-track-color: var(--border-strong);
+  --slider-fill-color: var(--sim-accent);
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.axiom-sim__slider::-webkit-slider-runnable-track {
+  height: var(--slider-track-size);
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to right,
+    var(--slider-fill-color) var(--slider-progress, 50%),
+    var(--slider-track-color) var(--slider-progress, 50%)
+  );
+}
+
+.axiom-sim__slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--slider-thumb-size);
+  height: var(--slider-thumb-size);
+  margin-top: calc((var(--slider-track-size) - var(--slider-thumb-size)) / 2);
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-canvas);
+  background: var(--slider-fill-color);
+}
+
+.axiom-sim__slider::-moz-range-track {
+  height: var(--slider-track-size);
+  border-radius: var(--radius-pill);
+  background: var(--slider-track-color);
+}
+
+.axiom-sim__slider::-moz-range-progress {
+  height: var(--slider-track-size);
+  border-radius: var(--radius-pill);
+  background: var(--slider-fill-color);
+}
+
+.axiom-sim__slider::-moz-range-thumb {
+  width: var(--slider-thumb-size);
+  height: var(--slider-thumb-size);
+  border: 1.5px solid var(--bg-canvas);
+  border-radius: 50%;
+  background: var(--slider-fill-color);
+}
+
+.axiom-sim__slider:focus-visible {
+  outline: 2px solid var(--sim-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.axiom-sim__caption {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.axiom-sim__error {
+  padding: 12px;
+  color: var(--health-crit);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
