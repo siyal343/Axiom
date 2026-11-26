@@ -1344,6 +1344,22 @@ pub(crate) fn update_study_card_sm2_tx(
     Ok(())
 }
 
+pub(crate) fn update_study_card_text_tx(
+    tx: &Transaction<'_>,
+    card_id: &str,
+    prompt: &str,
+    answer: &str,
+    updated_at: i64,
+) -> Result<usize, IpcError> {
+    let rows = tx.execute(
+        "UPDATE study_cards
+         SET prompt = ?1, answer = ?2, updated_at = ?3
+         WHERE id = ?4",
+        params![prompt, answer, updated_at, card_id],
+    )?;
+    Ok(rows)
+}
+
 pub(crate) fn list_study_cards(
     conn: &Connection,
     due_before_ms: Option<i64>,

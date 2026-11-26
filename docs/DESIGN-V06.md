@@ -1,8 +1,8 @@
 # Axiom v0.6 Architecture & Design Record
 
 **Date:** 2026-11-26  
-**Scope:** Canvas2D Theme Palette Synchronization Fix, SM-2 Study & Active Recall Studio (`study_cards`, `graph::study`, `StudyDeckModal`), Spatial Canvas Groups / Regions (`canvas_groups`, `CanvasGroupDto`, `[GROUP: ...]` context annotations), and Schema v4 Migration  
-**Status:** Implemented in source and test suites; CI & live browser verification gates pending execution (see Section 7).
+**Scope:** Canvas2D Theme Palette Synchronization Fix, SM-2 Study & Active Recall Studio (`study_cards`, `graph::study`, `StudyDeckModal`), Spatial Canvas Groups / Regions (`canvas_groups`, `CanvasGroupDto`, `[GROUP: ...]` context annotations), Schema v4 Migration, v0.6.1 UI/UX Polish, and v0.6.2 Undergraduate Study Mode Polish  
+**Status:** Implemented in source and test suites; CI & live browser verification gates pending execution (see Section 8).
 
 ---
 
@@ -11,7 +11,7 @@
 Axiom v0.5 introduced cross-flow live reference cards, named graph checkpoints with structural diffs, focus spotlight, and multi-select spatial alignment. Axiom v0.6 resolves a Canvas2D theme synchronization bug and delivers two major study and spatial organization workflows while preserving all six architectural invariants in `AGENTS.md`:
 
 1. **Bugfix — Canvas2D Theme Palette Synchronization (`src/canvas/renderer2d.ts`, `src/store/graphStore.ts`, `src/styles/theme.css`):** Ensures `getPalette(themeKey)` checks and reconciles the DOM `data-theme` attribute before reading CSS custom properties, keeps `setTheme` synchronous with DOM updates, and aligns `:root` / `[data-theme]` `color-scheme` declarations.
-2. **Feature 1 — SM-2 Study & Active Recall Studio (Schema v4 `study_cards` + `graph::study` + `StudyDeckModal`):** Extracts recall cards automatically from `@study` (`Q:`/`A:` or fallback), `@feynman`, and unresolved `challenges` loopholes while preserving SM-2 scheduling state across syncs, supports manual flashcards, exposes 5 Tauri IPC commands with a browser `localStorage` fallback, and provides an accessible `<dialog closedby="any">` review studio (`Shift+Q`) with KaTeX/code rendering and keyboard grading (`1`–`4`).
+2. **Feature 1 — SM-2 Study & Active Recall Studio (Schema v4 `study_cards` + `graph::study` + `StudyDeckModal`):** Extracts recall cards automatically from `@study` (`Q:`/`A:` or fallback), `@feynman`, and unresolved `challenges` loopholes while preserving SM-2 scheduling state across syncs and inline edits, supports manual flashcards, exposes 6 Tauri IPC commands with a browser `localStorage` fallback, and provides an accessible `<dialog closedby="any">` review studio (`Shift+Q`) with KaTeX/code rendering, closed-book attempt comparison, non-spoiling hints, interleaving, and keyboard grading (`1`–`4`).
 3. **Feature 2 — Spatial Canvas Groups / Regions (Schema v4 `canvas_groups` + `GraphOp` + `[GROUP: ...]` Context Compiler Annotations):** Groups multi-selected nodes (`G` or `.multi-select-pill`) into named, color-coded spatial regions rendered on Canvas2D with an `O(1)` empty skip, supports 60–120 FPS multi-node header dragging without Preact re-renders, annotates grouped nodes with `[GROUP: <Title>]` in `compiler::compile_context`, and preserves backwards compatibility across JSON export/import and checkpoints.
 
 ---
@@ -58,7 +58,7 @@ In prior builds, switching themes could leave Canvas2D reading stale CSS variabl
 
 ### 3.3 IPC Commands, Browser Fallback & Studio UI
 
-- **Tauri IPC (`src-tauri/src/ipc/commands.rs`, `src-tauri/src/lib.rs`, `src/ipc/client.ts`):** `sync_study_deck`, `list_study_cards`, `create_study_card`, `review_study_card`, and `delete_study_card`.
+- **Tauri IPC (`src-tauri/src/ipc/commands.rs`, `src-tauri/src/lib.rs`, `src/ipc/client.ts`):** `sync_study_deck`, `list_study_cards`, `create_study_card`, `review_study_card`, `update_study_card`, and `delete_study_card`.
 - **Frontend Store (`src/store/studyStore.ts`):** Mirrors SM-2 (`applySm2ReviewLocal`) and extraction (`extractStudyCandidatesLocal`) for non-Tauri browser execution, persisting cards per active flow under `localStorage` key `"axiom_study_cards_v1_<scopeId>"` with an in-memory `Map` fallback (`memoryStudyStorage`). Exposes reactive `studyCards`, `studyModalOpen`, `studyScope` (`"due" | "flow" | "subtree"`), `studyLoading`, `studyFocusNodeId`, `studyCreateFormOpen`, and computed `dueStudyCount`.
 - **Modal UX & Entry Points (`src/overlays/StudyDeckModal.tsx`, `src/input/keymap.ts`, `src/App.tsx`, `src/overlays/NodeContextMenu.tsx`, `src/overlays/CommandPalette.tsx`):**
   - Uses native `<dialog class="study-dialog" closedby="any" aria-labelledby="study-dialog-title">` with a pointer-outside light-dismiss fallback when `"closedBy" in HTMLDialogElement.prototype` is unavailable.
@@ -131,16 +131,60 @@ A follow-up UI/UX de-bloating, spatial clamping, and accessibility pass (detaile
 
 ---
 
-## 7. Verification Checklist & Status
+## 7. Study Mode Polish (v0.6.2 — Undergraduate Engineering Mastery)
+
+A targeted study workflow upgrade in v0.6.2 aligns Axiom's AI lenses, flow templates, card editing, and `StudyDeckModal` recall loop with closed-book undergraduate engineering mastery:
+
+### 7.1 Upgraded `LENS_FEYNMAN` and `LENS_STUDY` Prompts (`src-tauri/src/ai/prompts.rs`, `src/input/actionTags.ts`)
+
+- **`LENS_FEYNMAN` (`@@NODE type=probe edge=derives title="First Principles: <core concept>"`):** Replaces surface definitions with a five-part first-principles structure:
+  1. **Causal Mechanism:** 3–4 sentences grounded in physical or computational constraints explaining *why* the mechanism behaves as it does.
+  2. **Governing Rule / Relation:** Key equation, invariant, or complexity bound in KaTeX with every variable and physical/SI/computational unit defined.
+  3. **Assumptions & Breakdown Limits:** Explicit approximations and the operating regime where the model holds versus fails (steady vs. transient, linear vs. saturated, $O(\cdot)$, SNR, stress, Reynolds, or bandwidth limits).
+  4. **Concrete Walkthrough:** Tiny numerical or state-transition worked example with units.
+  5. **Common Trap:** Top misconception or sign/unit/regime error.
+- **`LENS_STUDY` (`@@NODE type=probe edge=derives title="Study & Recall: <core topic>"`):** Produces a closed-book engineering mastery sheet with four sections:
+  1. **Core Intuition:** 2–3 sentence physical or mathematical explanation without jargon.
+  2. **Governing Equations, Units & Validity Regime:** KaTeX relations (`$...$` / `$$...$$`) with variable legend, physical/SI/computational units, and explicit boundary/regime assumptions.
+  3. **Worked Example (Setup → Solve → Sanity Check):** Given quantities with units and verified assumptions (`Setup`), step-by-step algebra or state trace (`Solve`), and a dimensional-analysis or limiting-case verification (`Sanity Check`).
+  4. **Active-Recall Quiz:** Three numbered `**Q:** ... — **A:** ...` items testing boundary-condition/assumption traps, problem setup or derivation steps, and interleaved principle discrimination across competing laws or models.
+- **`ACTION_TAGS` (`src/input/actionTags.ts`):** Updates `@feynman` (`"Deconstruct first principles, units, regime limits, and traps"`) and `@study` (`"Build intuition, worked checks, and active-recall quizzes"`) descriptions to match the upgraded lenses.
+
+### 7.2 Actionable `"study"` Flow Template & Fence-Safe Content Tag Matching
+
+- **Actionable `"study"` Template (`src-tauri/src/db/mod.rs::seed_flow_template`, `src/store/workspaceCatalogStore.ts::buildTemplateSnapshot`):** Seeds three connected cards (`Topic to Master` -> `derives` -> `First-Principles Breakdown` and `Active Recall Questions`):
+  - `Topic to Master` (`core`) prompts the student to record knowns/unknowns with units and assumptions and includes a prose tip mentioning `@feynman` and `@study`.
+  - `First-Principles Breakdown` (`probe`) begins with `@feynman First principles & boundary limits: ...` (`>= 15` chars), immediately extracting a `feynman` card.
+  - `Active Recall Questions` (`probe`) begins with `@study` and an engineering assumption-check `**Q:** ... — **A:** ...` item, immediately extracting a `qa` card (`2` starter flashcards on initial `sync_study_deck`).
+- **Line-Start Non-Fenced Content Matching (`src-tauri/src/graph/study.rs::has_content_tag`, `src/store/studyStore.ts::hasContentTag`):** While `has_tag` / `hasTag` continues matching tag tokens in `title`, `has_content_tag` / `hasContentTag` scans `content` line by line outside ```` ``` ```` and `~~~` fenced code blocks and matches `@study` / `@feynman` only when a trimmed line starts with the tag followed by end-of-line, whitespace, or `:`. Inline prose mentions (such as the tip inside `Topic to Master`) no longer spawn spurious flashcards.
+
+### 7.3 SM-2-Preserving Inline Card Editing (`update_study_card`)
+
+- **Rust Backend (`src-tauri/src/graph/study.rs::update_study_card`, `src-tauri/src/db/queries.rs::update_study_card_text_tx`, `src-tauri/src/ipc/commands.rs::update_study_card`, `src-tauri/src/lib.rs`):** Trims `card_id`, `prompt`, and `answer`, rejects blank inputs or missing card IDs with `IpcErrorCode::ValidationError`, and updates only `prompt`, `answer`, and `updated_at` inside `TransactionBehavior::Immediate` so `repetitions`, `interval_days`, `ease_factor`, `lapses`, `due_at`, and `last_reviewed_at` remain intact.
+- **TypeScript IPC & Store (`src/ipc/client.ts::updateStudyCard`, `src/store/studyStore.ts::updateStudyCardAction`):** Mirrors blank validation, invokes `update_study_card` under Tauri, and updates `localStorage` / `memoryStudyStorage` in browser fallback mode while preserving SM-2 state.
+
+### 7.4 `StudyDeckModal` Closed-Book Active Recall Loop (`src/overlays/StudyDeckModal.tsx`, `src/store/studyStore.ts`, `src/overlays/ShortcutsModal.tsx`)
+
+- **Closed-Book Attempt Comparison (`A` / **Write attempt**):** Toggles and auto-focuses `#study-attempt-textarea` before reveal; when non-empty on reveal, renders **Your Closed-Book Attempt** (`.study-card-face--attempt`) directly above the **Answer** face for self-comparison.
+- **Non-Spoiling Hint (`H` / **Hint** via `extractHintFromAnswer`):** Strips Markdown bold/underline/backtick markers, formats multi-item numbered answers as `1/<N>: <clue>...`, caps short single-line answers at ~45% length (minimum `10` chars) and longer lines at `72` chars, and backs off before unbalanced `$` delimiters so KaTeX spans remain intact and unspoiled.
+- **Interleaved Drill (`Interleave` via `interleaveStudyCards`):** Uses a deterministic seeded PRNG (`createSeededRng`) plus greedy reordering so consecutive cards avoid matching on both `node_id` and `card_kind` when alternatives exist.
+- **Inline Edit (`E` / **Edit**):** Opens the form prefilled with the active card's `prompt` and `answer`, labels it `Preserves SM-2`, and commits through `updateStudyCardAction`.
+- **Live Scope Counts & Ephemeral Session Progress:** Scope tabs display live totals (`Due Now (<n>)`, `Current Flow (<n>)`, `Focused Subtree (<n>)`), `.study-queue-breakdown` shows `<dueInScopeCount> due · <allCards.length> in flow`, and `sessionStats` tracks ephemeral `reviewed`, `strong` (`hard`/`good`/`easy`), and `again` counts per modal session. `ShortcutsModal` documents the study loop (`Space / H / A / E / 1–4`).
+
+---
+
+## 8. Verification Checklist & Status
 
 ### Statically Implemented Automated Tests
-- **Rust Integration Suite (`src-tauri/tests/v06_suite.rs`, 5 tests implemented):**
+- **Rust Integration Suite (`src-tauri/tests/v06_suite.rs`, 7 tests implemented):**
   1. `v3_to_v4_migration_preserves_data_and_creates_study_cards_and_canvas_groups`: Verifies v3-to-v4 migration, `schema_version = '4'`, `study_cards`/`canvas_groups` tables and indexes, `nodes_fts` preservation, and snapshot hydration.
   2. `canvas_groups_crud_delete_nodes_pruning_checkpoints_and_json_roundtrip`: Verifies `CreateGroup`/`UpdateGroup`/`DeleteGroup`, `DeleteNodes` group member pruning, checkpoint restore of groups, Schema v4 JSON roundtrip (including `study_cards`), and legacy v3 JSON import compatibility.
   3. `compiler_annotates_grouped_nodes_with_group_titles`: Verifies deterministic `[GROUP: ...]` header annotations in `compile_context`.
   4. `sm2_scheduler_intervals_and_bounds_for_all_ratings`: Verifies `Again`/`Hard`/`Good`/`Easy` intervals, `lapses`, and `ease_factor` `[1.3, 3.5]` bounds.
   5. `extract_and_sync_study_deck_preserves_sm2_and_cleans_resolved_loopholes`: Verifies `@study` Q:/A: (single & numbered quiz), `@study` fallback, placeholder skipping, `@feynman` 15-char threshold, active loophole extraction, `sync_study_deck` SM-2 state preservation on edits, resolved loophole pruning, `due_only` filtering, and manual card deletion.
-- **TypeScript / Preact Suite (`src/overlays/__tests__/v06StudyAndGroups.test.tsx`, 10 tests implemented):**
+  6. `update_study_card_edits_text_preserves_sm2_and_rejects_blank`: Verifies `update_study_card` trims and persists edited `prompt`/`answer` while preserving SM-2 `repetitions`, `interval_days`, `ease_factor`, `lapses`, `due_at`, and `last_reviewed_at`, and rejects blank prompts/answers or missing card IDs with `ValidationError`.
+  7. `study_flow_template_extracts_two_starter_flashcards_immediately`: Verifies `seed_flow_template(..., "study")` + `sync_study_deck` extracts exactly `2` starter flashcards (`Feynman` and `Qa`) while ignoring inline prose tag mentions in `Topic to Master`.
+- **TypeScript / Preact Suite (`src/overlays/__tests__/v06StudyAndGroups.test.tsx`, 14 tests implemented):**
   1. `applySm2ReviewLocal` intervals and ease bounds for `again`, `hard`, `good`, and `easy`.
   2. `syncStudyDeckAction` extraction (`@study` Q:/A:, `@feynman`, active `challenges` loophole) and pruning when loopholes resolve.
   3. `StudyDeckModal` `<dialog closedby="any">` attributes, KaTeX answer reveal, `Good` grading update, and `J`/button jump-to-node camera animation.
@@ -151,9 +195,13 @@ A follow-up UI/UX de-bloating, spatial clamping, and accessibility pass (detaile
   8. `traps Tab and Shift+Tab inside DiagnosticsModal and CheckpointsModal without leaking to canvas controls`.
   9. `lifts ToastStack above minimap with toast-stack--above-minimap when minimapOpen is true`.
   10. `omits duplicate + New Card button in StudyDeckModal empty state and closes form then dialog on Esc`.
+  11. `extractHintFromAnswer and interleaveStudyCards are pure, non-spoiling, and deterministic`.
+  12. `updateStudyCardAction edits prompt/answer while preserving SM-2 state and rejecting blanks`.
+  13. `StudyDeckModal supports live tab counts, Hint (H), Write attempt (A) comparison, Interleave, inline Edit, and session summary`.
+  14. `study flow template seeds actionable @feynman & @study nodes that extract 2 starter flashcards`.
 
 ### CI & Live Browser Verification Gates Pending Execution
-The following verification commands and visual checks were **not** executed for this unpushed v0.6.1 polish commit and remain pending CI & live browser re-verification:
+The following verification commands and visual checks were **not** executed for the v0.6.1 / v0.6.2 polish commits and remain pending CI & live browser re-verification:
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml`
 - [ ] `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
 - [ ] `npm test -- --run` (Vitest)

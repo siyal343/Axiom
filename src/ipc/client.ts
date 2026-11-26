@@ -382,6 +382,18 @@ export async function reviewStudyCard(
   return invoke<StudyCardDto>("review_study_card", { cardId, rating });
 }
 
+export async function updateStudyCard(params: {
+  cardId: string;
+  prompt: string;
+  answer: string;
+}): Promise<StudyCardDto> {
+  return invoke<StudyCardDto>("update_study_card", {
+    cardId: params.cardId,
+    prompt: params.prompt,
+    answer: params.answer,
+  });
+}
+
 export async function deleteStudyCard(cardId: string): Promise<void> {
   return invoke<void>("delete_study_card", { cardId });
 }

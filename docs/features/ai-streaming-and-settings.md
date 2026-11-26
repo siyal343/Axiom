@@ -46,8 +46,9 @@ API keys are stored through `keyring::Entry::new("dev.axiom.canvas", KEY_NAME)` 
 
 `src-tauri/src/ai/prompts.rs` defines `BASE_SYSTEM_PROMPT` (tuned for systems engineering, scientific research, and deep study), eight specialized lens prompts (`LENS_RED_TEAM`, `LENS_EDGE_CASE`, `LENS_DIVERGE`, `LENS_FEYNMAN`, `LENS_SYNTHESIZE`, `LENS_RESEARCH`, `LENS_STUDY`, and `LENS_CUSTOM`), and `UTILITY_SUMMARY_PROMPT`, along with `lens_prompt`, `lens_defaults`, and `lens_to_origin`.
 
-- **Research lens (`A` then `L`):** `LensKind::Research` (`LENS_RESEARCH`) emits `2` to `3` structured `probe` and `branch` cards (`Core Findings & Claims`, `Methodology & Evidence Gaps`, and `Open Research Questions`) and maps to `NodeLensOrigin::Custom` in `lens_to_origin` to preserve the SQLite `CHECK (lens IN ...)` constraint without a schema migration.
-- **Study lens (`A` then `Q`):** `LensKind::Study` (`LENS_STUDY`) emits `1` `probe` card containing **Core Intuition**, **Key Equations & Definitions** in KaTeX, a **Worked Example**, and an **Active-Recall Quiz**, mapping to `NodeLensOrigin::Feynman` in `lens_to_origin`.
+- **Feynman Probe lens (`A` then `F`):** `LensKind::Feynman` (`LENS_FEYNMAN`) emits `1` `probe` card (`First Principles: <core concept>`) structured into **Causal Mechanism**, **Governing Rule / Relation** (KaTeX with all variables and physical/SI/computational units defined), **Assumptions & Breakdown Limits** (operating regime where the model holds versus fails), **Concrete Walkthrough** (worked numerical or state-transition example with units), and **Common Trap**, mapping to `NodeLensOrigin::Feynman` in `lens_to_origin`.
+- **Research lens (`A` then `L`):** `LensKind::Research` (`LENS_RESEARCH`) emits `2` to `3` structured `probe` and `branch` cards (`Core Findings & Claims`, `Methodology & Evidence Gaps`, and `Open Research Questions`) and maps to `NodeLensOrigin::Research` in `lens_to_origin`.
+- **Study lens (`A` then `Q`):** `LensKind::Study` (`LENS_STUDY`) emits `1` `probe` card (`Study & Recall: <core topic>`) formatted as a closed-book engineering mastery sheet with **Core Intuition**, **Governing Equations, Units & Validity Regime** (KaTeX `$...$` / `$$...$$` with variable legend, units, and boundary/regime assumptions), **Worked Example (Setup → Solve → Sanity Check)**, and a 3-question diagnostic **Active-Recall Quiz** (`Q:` / `A:` pairs testing assumption traps, setup/derivation checks, and interleaved principle discrimination), mapping to `NodeLensOrigin::Study` in `lens_to_origin`.
 - **Loophole triage (`A` then `T`):** Invokes `startLoopholeTriage` in `src/store/aiRunner.ts` to focus and pan to the highest-severity `active` loophole connected to the focused card (or anywhere in `nodesMap`) and display the triage banner.
 - **Universal user instruction attachment:** In `execute_lens_run` (`src-tauri/src/ai/runner.rs`), whenever `params.custom_prompt` is non-empty for any `LensKind`, the runner appends `\n\n---\n\n[USER INSTRUCTION]\n{extra_instruction}` to the compiled prompt so inline instructions steer any lens.
 
@@ -80,13 +81,13 @@ When you invoke `run_lens` from `triggerLens` (`src/store/aiRunner.ts`), the bac
 | Tag | Aliases | Dispatched behavior |
 | --- | --- | --- |
 | `@custom` | `prompt`, `ask` | Runs `triggerLens("custom", argument)` |
-| `@feynman` | `firstprinciples`, `explain` | Runs `triggerLens("feynman", argument)` |
+| `@feynman` | `firstprinciples`, `explain` | Deconstructs first principles, units, regime limits, and traps via `triggerLens("feynman", argument)` |
 | `@redteam` | `red-team`, `critique`, `challenge` | Runs `triggerLens("red_team", argument)` |
 | `@edgecase` | `edge-case`, `edgecases`, `boundary` | Runs `triggerLens("edge_case", argument)` |
 | `@diverge` | `branches`, `options` | Runs `triggerLens("diverge", argument)` |
 | `@synthesize` | `synth`, `decide` | Runs `triggerLens("synthesize", argument)` |
 | `@research` | `lit`, `cite`, `sources` | Runs `triggerLens("research", argument)` |
-| `@study` | `quiz`, `recall`, `flashcards` | Runs `triggerLens("study", argument)` |
+| `@study` | `quiz`, `recall`, `flashcards` | Builds intuition, worked checks, and active-recall quizzes via `triggerLens("study", argument)` |
 | `@triage` | `loopholes` | Runs `startLoopholeTriage()` |
 
 You can invoke `@tag` actions from four UI surfaces:

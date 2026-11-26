@@ -3,7 +3,8 @@ use tempfile::tempdir;
 
 use axiom_canvas_lib::db::json_io::{export_json, import_json};
 use axiom_canvas_lib::db::queries::{apply_ops, search_nodes};
-use axiom_canvas_lib::db::{hydrate_or_seed_workspace, open_connection};
+use axiom_canvas_lib::db::{hydrate_or_seed_workspace, open_connection, seed_flow_template};
+use axiom_canvas_lib::error::IpcErrorCode;
 use axiom_canvas_lib::graph::checkpoints::{create_checkpoint, restore_checkpoint};
 use axiom_canvas_lib::graph::compiler::compile_context;
 use axiom_canvas_lib::graph::models::{
@@ -14,7 +15,7 @@ use axiom_canvas_lib::graph::models::{
 use axiom_canvas_lib::graph::spatial::{DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH};
 use axiom_canvas_lib::graph::study::{
     apply_sm2_review, create_study_card, delete_study_card, extract_study_candidates,
-    list_study_cards, review_study_card, sync_study_deck,
+    list_study_cards, review_study_card, sync_study_deck, update_study_card,
 };
 use axiom_canvas_lib::graph::GraphEngine;
 use axiom_canvas_lib::ipc::ActiveWorkspace;
@@ -755,4 +756,92 @@ fn extract_and_sync_study_deck_preserves_sm2_and_cleans_resolved_loopholes() {
     delete_study_card(&mut conn, &manual.id).expect("delete manual card");
     let remaining = list_study_cards(&conn, false).expect("list remaining");
     assert_eq!(remaining.len(), 4);
+}
+
+#[test]
+fn update_study_card_edits_text_preserves_sm2_and_rejects_blank() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("study_update.sqlite");
+    let mut conn = open_connection(&db_path).expect("open db");
+    let mut engine = GraphEngine::default();
+
+    let n1 = make_node("n_bern", NodeType::Core, "Bernoulli Equation", "Steady inviscid flow", 0.0, 0.0);
+    apply_ops(&mut conn, &mut engine, &[GraphOp::CreateNode { node: n1 }]).expect("create node");
+
+    let created = create_study_card(
+        &mut conn,
+        Some("n_bern"),
+        "When does Bernoulli's equation apply?",
+        "Steady, incompressible, inviscid flow along a streamline.",
+        StudyCardKind::Manual,
+    )
+    .expect("create study card");
+
+    let t1 = now_epoch_ms();
+    let r1 = review_study_card(&mut conn, &created.id, StudyRating::Good, t1).expect("review 1");
+    let r2 = review_study_card(&mut conn, &created.id, StudyRating::Good, t1 + 86_400_000)
+        .expect("review 2");
+    assert_eq!(r2.repetitions, 2);
+    assert_eq!(r2.interval_days, 6);
+
+    let updated = update_study_card(
+        &mut conn,
+        &created.id,
+        "  State all 4 Bernoulli assumptions with regime check  ",
+        "  Steady, incompressible ($\\rho=\\text{const}$), inviscid, along a streamline.  ",
+    )
+    .expect("update study card");
+
+    assert_eq!(updated.id, created.id);
+    assert_eq!(updated.node_id.as_deref(), Some("n_bern"));
+    assert_eq!(updated.card_kind, StudyCardKind::Manual);
+    assert_eq!(updated.prompt, "State all 4 Bernoulli assumptions with regime check");
+    assert_eq!(
+        updated.answer,
+        "Steady, incompressible ($\\rho=\\text{const}$), inviscid, along a streamline."
+    );
+    assert_eq!(updated.repetitions, r2.repetitions);
+    assert_eq!(updated.interval_days, r2.interval_days);
+    assert!((updated.ease_factor - r2.ease_factor).abs() < 1e-9);
+    assert_eq!(updated.lapses, r2.lapses);
+    assert_eq!(updated.due_at, r2.due_at);
+    assert_eq!(updated.last_reviewed_at, r2.last_reviewed_at);
+    assert!(updated.updated_at >= r1.updated_at);
+
+    let persisted = list_study_cards(&conn, false).expect("list persisted");
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(persisted[0].prompt, updated.prompt);
+    assert_eq!(persisted[0].answer, updated.answer);
+    assert_eq!(persisted[0].repetitions, 2);
+    assert_eq!(persisted[0].interval_days, 6);
+
+    let blank_prompt_err = update_study_card(&mut conn, &created.id, "   ", "Valid answer")
+        .expect_err("blank prompt rejected");
+    assert_eq!(blank_prompt_err.code, IpcErrorCode::ValidationError);
+
+    let blank_answer_err = update_study_card(&mut conn, &created.id, "Valid prompt", "\n\t ")
+        .expect_err("blank answer rejected");
+    assert_eq!(blank_answer_err.code, IpcErrorCode::ValidationError);
+
+    let missing_err = update_study_card(&mut conn, "card_missing", "Prompt", "Answer")
+        .expect_err("missing card rejected");
+    assert_eq!(missing_err.code, IpcErrorCode::ValidationError);
+}
+
+#[test]
+fn study_flow_template_extracts_two_starter_flashcards_immediately() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("study_template.sqlite");
+    let mut conn = open_connection(&db_path).expect("open db");
+    let snap = seed_flow_template(&mut conn, &db_path.to_string_lossy(), "study")
+        .expect("seed study template");
+
+    let mut engine = GraphEngine::default();
+    engine.hydrate(&snap.nodes, &snap.edges, &snap.groups);
+
+    let synced = sync_study_deck(&mut conn, &engine).expect("sync template deck");
+    assert_eq!(synced.added_count, 2);
+    assert_eq!(synced.cards.len(), 2);
+    assert!(synced.cards.iter().any(|c| c.card_kind == StudyCardKind::Feynman));
+    assert!(synced.cards.iter().any(|c| c.card_kind == StudyCardKind::Qa));
 }

@@ -2025,6 +2025,9 @@ body,
 .node-context-menu__chip:active:not(:disabled),
 .study-dialog__tab:active:not(:disabled),
 .study-dialog__close:active:not(:disabled),
+.study-interleave-btn:active:not(:disabled),
+.study-secondary-btn:active:not(:disabled),
+.study-edit-btn:active:not(:disabled),
 .perf-hud__close:active:not(:disabled),
 .canvas-controls__btn:active:not(:disabled),
 .empty-canvas-prompt__btn:active:not(:disabled),
@@ -4164,6 +4167,26 @@ body,
   box-shadow: var(--shadow-card);
 }
 
+.study-interleave-btn {
+  appearance: none;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-code);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: border-color 120ms var(--ease-out), background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+
+.study-interleave-btn--active {
+  border-color: color-mix(in srgb, var(--tone-study) 60%, var(--border-strong));
+  background: color-mix(in srgb, var(--tone-study) 16%, var(--bg-card));
+  color: var(--text-primary);
+}
+
 .study-dialog__header-actions {
   display: inline-flex;
   align-items: center;
@@ -4234,6 +4257,14 @@ body,
   color: var(--text-muted);
 }
 
+.study-session-summary {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-synthesis);
+}
+
 .study-kind-badge--qa {
   color: var(--tone-study);
   border-color: color-mix(in srgb, var(--tone-study) 45%, transparent);
@@ -4255,6 +4286,7 @@ body,
 }
 
 .study-jump-btn,
+.study-edit-btn,
 .study-delete-btn {
   appearance: none;
   border: 1px solid var(--border-subtle);
@@ -4270,6 +4302,9 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   transition: border-color 120ms var(--ease-out), color 120ms var(--ease-out);
 }
 
@@ -4286,6 +4321,79 @@ body,
 .study-card-face--answer {
   border-color: color-mix(in srgb, var(--tone-study) 45%, var(--border-subtle));
   background: color-mix(in srgb, var(--tone-study) 5%, var(--bg-card));
+}
+
+.study-card-face--attempt {
+  border-color: color-mix(in srgb, var(--accent-branch) 40%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent-branch) 5%, var(--bg-card));
+}
+
+.study-attempt-compare__text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.study-hint-box {
+  border: 1px solid color-mix(in srgb, var(--tone-feynman) 45%, var(--border-subtle));
+  background: color-mix(in srgb, var(--tone-feynman) 8%, var(--bg-card));
+  border-radius: var(--radius-card);
+  padding: 9px 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.study-hint-box__label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--tone-feynman);
+  flex-shrink: 0;
+}
+
+.study-attempt-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.study-attempt-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.study-attempt-input {
+  width: 100%;
+  min-height: 68px;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--bg-code);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 9px 11px;
+  box-sizing: border-box;
+  transition: border-color 120ms var(--ease-out);
+}
+
+.study-attempt-input:focus-visible {
+  outline: 2px solid var(--ring-edit);
+  outline-offset: 1px;
+  border-color: var(--ring-edit);
 }
 
 .study-card-face__label {
@@ -4312,8 +4420,33 @@ body,
 
 .study-reveal-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  align-items: center;
+  gap: 8px;
   padding-top: 4px;
+}
+
+.study-secondary-btn {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-code);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: var(--radius-card);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  transition: border-color 120ms var(--ease-out), background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+
+.study-secondary-btn[aria-expanded="true"] {
+  border-color: var(--ring-edit);
+  color: var(--text-primary);
 }
 
 .study-reveal-btn {
@@ -4459,7 +4592,10 @@ body,
 .group-inspector-pill__swatch:focus-visible,
 .study-dialog__tab:focus-visible,
 .study-dialog__close:focus-visible,
+.study-interleave-btn:focus-visible,
+.study-secondary-btn:focus-visible,
 .study-jump-btn:focus-visible,
+.study-edit-btn:focus-visible,
 .study-delete-btn:focus-visible,
 .study-reveal-btn:focus-visible,
 .study-grade-btn:focus-visible {
@@ -4474,7 +4610,10 @@ body,
 
   .study-dialog__tab:hover,
   .study-dialog__close:hover,
+  .study-interleave-btn:hover,
+  .study-secondary-btn:hover,
   .study-jump-btn:hover,
+  .study-edit-btn:hover,
   .study-delete-btn:hover,
   .study-grade-btn:hover {
     border-color: var(--ring-edit);
@@ -4497,8 +4636,12 @@ body,
   .study-dialog,
   .study-dialog__tab,
   .study-dialog__close,
+  .study-interleave-btn,
+  .study-secondary-btn,
   .study-jump-btn,
+  .study-edit-btn,
   .study-delete-btn,
+  .study-attempt-input,
   .study-reveal-btn,
   .study-grade-btn {
     transition: none;

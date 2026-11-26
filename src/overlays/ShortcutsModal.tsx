@@ -51,6 +51,7 @@ const WORKSPACE_ROWS: ShortcutRow[] = [
   { keys: "Shift + H", action: "Graph Health & Diagnostics" },
   { keys: "Shift + S", action: "Checkpoints & Graph Diff" },
   { keys: "Shift + Q", action: "Open Study & Recall Studio" },
+  { keys: "Space / H / A / E / 1–4", action: "Study Studio: reveal, hint, attempt, edit, grade" },
   { keys: "Ctrl/Cmd + = / - / 0", action: "Zoom in, zoom out, reset 100%" },
   { keys: "F / F F", action: "Fit selection/subtree or fit entire graph" },
   { keys: "M", action: "Toggle canvas minimap" },

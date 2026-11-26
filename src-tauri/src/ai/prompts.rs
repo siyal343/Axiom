@@ -80,18 +80,20 @@ pub const LENS_FEYNMAN: &str = r#"LENS: FEYNMAN PROBE (FIRST-PRINCIPLES DECONSTR
 Explain the core mechanism, mathematical principle, or non-obvious trade-off inside the [FOCUS NODE] so an engineer can reason from first principles and predict edge behavior.
 
 TASK:
-Avoid surface-level definitions and patronizing analogies. Build a tight causal mental model.
+Avoid surface-level definitions and patronizing analogies. Build a tight causal mental model grounded in physical or computational constraints, units, and regime limits.
 
 OUTPUT FORMAT:
 Emit exactly ONE block:
 @@NODE type=probe edge=derives title="First Principles: <core concept>"
 **Causal Mechanism:** <Clear 3-4 sentence explanation starting from the underlying physical or computational constraint and WHY it works this way>
 
-**Governing Rule / Relation:** <Key equation, invariant, or complexity bound—omit if purely structural>
+**Governing Rule / Relation:** <Key equation, invariant, or complexity bound in KaTeX with all variables and physical/SI/computational units defined—omit if purely structural>
 
-**Concrete Walkthrough:** <Tiny numerical or state-transition worked example showing the mechanism in action>
+**Assumptions & Breakdown Limits:** <Explicit approximations and operating regime where this model holds vs fails—e.g. steady vs transient, linear vs saturated, $O(\cdot)$ / SNR / stress / Reynolds / bandwidth limits>
 
-**Common Trap:** <The #1 misconception engineers hit when applying this>
+**Concrete Walkthrough:** <Tiny numerical or state-transition worked example with units showing the mechanism in action>
+
+**Common Trap:** <The #1 misconception or sign/unit/regime error engineers hit when applying this>
 @@END"#;
 
 pub const LENS_SYNTHESIZE: &str = r#"LENS: SYNTHESIZE (MULTI-BRANCH COMPARISON & DECISION LOCK)
@@ -136,27 +138,29 @@ Emit 2 to 3 separate blocks using:
 2. **Question:** <Second high-leverage inquiry>
 @@END"#;
 
-pub const LENS_STUDY: &str = r#"LENS: STUDY & ACTIVE RECALL (DEEP MASTERY)
-Transform the [FOCUS NODE] into a crystal-clear study guide with core intuition, formal equations/definitions in KaTeX, a concrete worked example, and active-recall quiz questions with concise answers.
+pub const LENS_STUDY: &str = r#"LENS: STUDY & ACTIVE RECALL (ENGINEERING MASTERY)
+Transform the [FOCUS NODE] into a closed-book engineering study sheet covering intuition, governing equations with units and validity limits, a sanity-checked worked example, and diagnostic active-recall questions.
 
 TASK:
-Build genuine predictive understanding so the learner can solve novel problems without rote memorization.
+Build genuine predictive problem-solving mastery so the student can set up novel problems from first principles without rote formula-plugging.
 
 OUTPUT FORMAT:
 Emit exactly ONE block:
 @@NODE type=probe edge=derives title="Study & Recall: <core topic>"
-**Core Intuition:** <2-3 sentence physical or conceptual picture explaining the key idea>
+**Core Intuition:** <2-3 sentence physical or mathematical mechanism explaining WHY the phenomenon happens without jargon>
 
-**Key Equations & Definitions:**
-<Formal definitions and relations in KaTeX `$...$` / `$$...$$`>
+**Governing Equations, Units & Validity Regime:**
+<Key relations in KaTeX `$...$` / `$$...$$` with variable legend, physical/SI/computational units, and explicit boundary/regime assumptions>
 
-**Worked Example:**
-<Step-by-step numerical or concrete trace>
+**Worked Example (Setup → Solve → Sanity Check):**
+- **Setup:** <Given quantities with units + verified assumptions>
+- **Solve:** <Step-by-step algebra or state trace>
+- **Sanity Check:** <Dimensional analysis or limiting-case check confirming the result>
 
 **Active-Recall Quiz:**
-1. **Q:** <Diagnostic question> — **A:** <Concise 1-sentence answer>
-2. **Q:** <Transfer/edge-case question> — **A:** <Concise 1-sentence answer>
-3. **Q:** <Mechanism why-question> — **A:** <Concise 1-sentence answer>
+1. **Q:** <Boundary-condition or assumption trap question> — **A:** <Concise 1-2 sentence answer>
+2. **Q:** <Problem setup or derivation step check> — **A:** <Concise 1-2 sentence answer>
+3. **Q:** <Interleaved principle discrimination: which law or model governs X instead of this one, and why?> — **A:** <Concise 1-2 sentence answer>
 @@END"#;
 
 pub const LENS_CUSTOM: &str = r#"LENS: CUSTOM DIRECTED OPERATION

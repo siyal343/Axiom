@@ -47,12 +47,16 @@ import {
   applySm2ReviewLocal,
   closeStudyModal,
   dueStudyCount,
+  extractHintFromAnswer,
+  interleaveStudyCards,
   openStudyModal,
   studyCards,
   studyCreateFormOpen,
   studyScope,
   syncStudyDeckAction,
+  updateStudyCardAction,
 } from "../../store/studyStore";
+import { createFlowAction, createWorkspaceAction, workspaceCatalog } from "../../store/workspaceCatalogStore";
 import { CheckpointsModal } from "../CheckpointsModal";
 import { DiagnosticsModal } from "../DiagnosticsModal";
 import { SettingsModal } from "../SettingsModal";
@@ -242,6 +246,7 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
     groupsMap.value = new Map();
     selectedGroupId.value = null;
     studyCards.value = [];
+    workspaceCatalog.value = null;
     clearSelection();
     cameraControllerRef.current = null;
     delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
@@ -714,5 +719,206 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     await flushUi();
     expect(container.querySelector("dialog.study-dialog[open]")).toBeNull();
+  });
+
+  it("extractHintFromAnswer and interleaveStudyCards are pure, non-spoiling, and deterministic", () => {
+    expect(extractHintFromAnswer("")).toBe("");
+    expect(extractHintFromAnswer("Yes")).toBe("");
+
+    const katexShort = extractHintFromAnswer("Ensure $W + R > N$.");
+    expect(katexShort).toBe("Ensure...");
+    expect((katexShort.match(/\$/g) ?? []).length % 2).toBe(0);
+
+    const multiItem = extractHintFromAnswer(
+      "1. Confirm laminar Re < 2300 before Hagen-Poiseuille.\n2. Integrate shell momentum balance.\n3. Check wall shear units.",
+    );
+    expect(multiItem.startsWith("1/3:")).toBe(true);
+    expect(multiItem).not.toContain("Integrate shell momentum");
+
+    const feynmanHint = extractHintFromAnswer(
+      "**Causal Mechanism:** Viscous shear dissipates kinetic energy along the boundary layer.\n\n**Governing Rule:** $\\Delta P = f \\frac{L}{D} \\frac{\\rho v^2}{2}$",
+    );
+    expect(feynmanHint).toContain("Causal Mechanism:");
+    expect(feynmanHint).not.toContain("\\Delta P");
+
+    const deck: StudyCardDto[] = [
+      makeStudyCard({ id: "c1", node_id: "n1", card_kind: "qa" }),
+      makeStudyCard({ id: "c2", node_id: "n1", card_kind: "feynman" }),
+      makeStudyCard({ id: "c3", node_id: "n2", card_kind: "qa" }),
+      makeStudyCard({ id: "c4", node_id: "n2", card_kind: "loophole" }),
+      makeStudyCard({ id: "c5", node_id: "n3", card_kind: "manual" }),
+    ];
+
+    const runA1 = interleaveStudyCards(deck, 42);
+    const runA2 = interleaveStudyCards(deck, 42);
+    expect(runA1.map((c) => c.id)).toEqual(runA2.map((c) => c.id));
+    expect(runA1.map((c) => c.id).sort()).toEqual(["c1", "c2", "c3", "c4", "c5"]);
+    for (let i = 1; i < runA1.length; i += 1) {
+      expect(runA1[i]?.node_id).not.toBe(runA1[i - 1]?.node_id);
+    }
+  });
+
+  it("updateStudyCardAction edits prompt/answer while preserving SM-2 state and rejecting blanks", async () => {
+    loadSnapshot({
+      path: "memory://study-edit",
+      nodes: [
+        makeNode("n_study", {
+          title: "Reynolds Number",
+          lens: "study",
+          content: "Q: When does pipe flow stay laminar?\nA: For $Re < 2300$.",
+        }),
+      ],
+      edges: [],
+      camera: { x: 0, y: 0, zoom: 1, last_focus_id: "n_study" },
+      token_budget: 6000,
+    });
+
+    await syncStudyDeckAction();
+    const original = studyCards.value[0]!;
+    const reviewed = applySm2ReviewLocal(
+      applySm2ReviewLocal(original, "good", 1_700_000_000_000),
+      "good",
+      1_700_086_400_000,
+    );
+    window.localStorage?.setItem(
+      `axiom_study_cards_v1_${workspaceCatalog.value?.active_flow_id || "memory://study-edit"}`,
+      JSON.stringify([reviewed]),
+    );
+    studyCards.value = [reviewed];
+
+    const updated = await updateStudyCardAction(
+      reviewed.id,
+      "  When does Newtonian pipe flow stay laminar?  ",
+      "  When dimensionless $Re = \\rho v D / \\mu < 2300$.  ",
+    );
+
+    expect(updated.prompt).toBe("When does Newtonian pipe flow stay laminar?");
+    expect(updated.answer).toBe("When dimensionless $Re = \\rho v D / \\mu < 2300$.");
+    expect(updated.repetitions).toBe(2);
+    expect(updated.interval_days).toBe(6);
+    expect(updated.due_at).toBe(reviewed.due_at);
+    expect(updated.ease_factor).toBeCloseTo(reviewed.ease_factor, 5);
+    expect(updated.node_id).toBe("n_study");
+
+    await expect(updateStudyCardAction(reviewed.id, "   ", "Valid")).rejects.toThrow(
+      "Study card prompt cannot be empty",
+    );
+    await expect(updateStudyCardAction(reviewed.id, "Valid", "  ")).rejects.toThrow(
+      "Study card answer cannot be empty",
+    );
+  });
+
+  it("StudyDeckModal supports live tab counts, Hint (H), Write attempt (A) comparison, Interleave, inline Edit, and session summary", async () => {
+    loadSnapshot({
+      path: "memory://study-studio-polish",
+      nodes: [
+        makeNode("n1", {
+          title: "Hagen-Poiseuille",
+          lens: "study",
+          content:
+            "Q: What flow regime is required for Hagen-Poiseuille?\nA: Steady, incompressible, fully developed laminar Newtonian flow ($Re < 2300$).",
+        }),
+        makeNode("n2", {
+          title: "Fourier Conduction",
+          lens: "feynman",
+          content:
+            "@feynman Heat flux is proportional to the negative temperature gradient along the thermal path.",
+        }),
+      ],
+      edges: [makeEdge("e1", "n1", "n2", "derives")],
+      camera: { x: 0, y: 0, zoom: 1, last_focus_id: "n1" },
+      token_budget: 6000,
+    });
+
+    render(<StudyDeckModal />, container);
+    await openStudyModal("due", "n1");
+    await flushUi();
+
+    const tabTexts = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".study-dialog__tab"),
+    ).map((b) => b.textContent?.trim());
+    expect(tabTexts).toEqual(["Due Now (2)", "Current Flow (2)", "Focused Subtree (2)"]);
+
+    const interleaveBtn = container.querySelector<HTMLButtonElement>(".study-interleave-btn");
+    expect(interleaveBtn?.getAttribute("aria-pressed")).toBe("false");
+    interleaveBtn?.click();
+    await flushUi();
+    expect(interleaveBtn?.getAttribute("aria-pressed")).toBe("true");
+
+    const hintBtn = Array.from(container.querySelectorAll<HTMLButtonElement>(".study-secondary-btn")).find(
+      (b) => b.textContent?.includes("Hint"),
+    );
+    expect(hintBtn).toBeDefined();
+    hintBtn?.click();
+    await flushUi();
+    expect(container.querySelector(".study-hint-box")).not.toBeNull();
+    expect(dueStudyCount.value).toBe(2);
+
+    // Edit inline and verify form saves cleanly while preserving SM-2 state.
+    const editBtn = container.querySelector<HTMLButtonElement>(".study-edit-btn");
+    expect(editBtn).not.toBeNull();
+    editBtn?.click();
+    await flushUi();
+
+    const promptInput = container.querySelector<HTMLInputElement>("#study-form-prompt");
+    expect(promptInput).not.toBeNull();
+    if (promptInput) {
+      promptInput.value = `${promptInput.value} [Edited]`;
+      promptInput.dispatchEvent(new Event("input", { bubbles: true }));
+      await flushUi();
+    }
+    const form = container.querySelector<HTMLFormElement>(".study-create-form");
+    form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await flushUi();
+    expect(container.textContent).toContain("[Edited]");
+
+    const attemptBtn = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".study-secondary-btn"),
+    ).find((b) => b.textContent?.includes("Write attempt"));
+    expect(attemptBtn).toBeDefined();
+    attemptBtn?.click();
+    await flushUi();
+
+    const attemptTextarea = container.querySelector<HTMLTextAreaElement>("#study-attempt-textarea");
+    expect(attemptTextarea).not.toBeNull();
+    if (attemptTextarea) {
+      attemptTextarea.value = "My closed-book derivation note";
+      attemptTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    await flushUi();
+
+    const revealBtn = container.querySelector<HTMLButtonElement>('[data-study-action="reveal"]');
+    revealBtn?.click();
+    await flushUi();
+
+    expect(container.querySelector(".study-card-face--attempt")?.textContent).toContain(
+      "My closed-book derivation note",
+    );
+
+    const goodBtn = container.querySelector<HTMLButtonElement>(".study-grade-btn--good");
+    goodBtn?.click();
+    await flushUi();
+
+    expect(container.querySelector(".study-session-summary")?.textContent).toContain(
+      "Session: 1 reviewed · 1 strong",
+    );
+    expect(container.querySelector("#study-attempt-textarea")).toBeNull();
+  });
+
+  it("study flow template seeds actionable @feynman & @study nodes that extract 2 starter flashcards", async () => {
+    workspaceCatalog.value = null;
+    const ws = await createWorkspaceAction("Engineering Study");
+    expect(ws).not.toBeNull();
+    if (!ws) return;
+
+    const flowRes = await createFlowAction(ws.id, "Fluid Mechanics", "study");
+    expect(flowRes).not.toBeNull();
+    expect(nodesMap.size).toBe(3);
+    expect(edgesMap.size).toBe(2);
+
+    const synced = await syncStudyDeckAction();
+    expect(synced.added_count).toBe(2);
+    expect(synced.cards).toHaveLength(2);
+    expect(synced.cards.map((c) => c.card_kind).sort()).toEqual(["feynman", "qa"]);
   });
 });

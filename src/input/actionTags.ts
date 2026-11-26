@@ -39,7 +39,7 @@ export const ACTION_TAGS: readonly ActionTagDef[] = [
   {
     tag: "@feynman",
     label: "Feynman Probe",
-    description: "Explain from first principles with intuition and checks",
+    description: "Deconstruct first principles, units, regime limits, and traps",
     aliases: ["firstprinciples", "explain"],
     kind: "lens",
     lens: "feynman",
@@ -87,7 +87,7 @@ export const ACTION_TAGS: readonly ActionTagDef[] = [
   {
     tag: "@study",
     label: "Study & Recall",
-    description: "Build active-recall prompts, mental models, and self-tests",
+    description: "Build intuition, worked checks, and active-recall quizzes",
     aliases: ["quiz", "recall", "flashcards"],
     kind: "lens",
     lens: "study",

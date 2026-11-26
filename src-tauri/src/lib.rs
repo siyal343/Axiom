@@ -92,6 +92,7 @@ pub fn run() {
             ipc::commands::list_study_cards,
             ipc::commands::create_study_card,
             ipc::commands::review_study_card,
+            ipc::commands::update_study_card,
             ipc::commands::delete_study_card,
         ]);
 

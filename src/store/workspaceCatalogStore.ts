@@ -197,7 +197,7 @@ export function buildTemplateSnapshot(
       const root = makeTemplateNode(
         "core",
         "Topic to Master",
-        "State the concept in one sentence and list what you want to predict or derive.",
+        "State the physical or computational law, knowns/unknowns with units, and assumptions.\n\nTip: Press Tab on any concept and run @feynman or @study to build intuition, worked checks, and flashcards.",
         0,
         0,
         now,
@@ -205,7 +205,7 @@ export function buildTemplateSnapshot(
       const breakdown = makeTemplateNode(
         "probe",
         "First-Principles Breakdown",
-        "Core laws, KaTeX definitions, and intuitive causal mechanisms.",
+        "@feynman First principles & boundary limits: explain why the governing relation holds, variable units, and the exact regime where the approximation breaks down.",
         420,
         -110,
         now,
@@ -213,7 +213,7 @@ export function buildTemplateSnapshot(
       const recall = makeTemplateNode(
         "probe",
         "Active Recall Questions",
-        "Self-test prompts, worked derivations, and common edge-case traps.",
+        "@study\n**Q:** Before substituting numbers into an engineering formula, what must you verify first? — **A:** Confirm the physical assumptions and boundary regime hold (e.g., steady state, linearity, laminar $Re < 2300$, consistent units).",
         420,
         120,
         now,

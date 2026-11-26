@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, TransactionBehavior};
 use crate::db::queries::{
     delete_study_card as db_delete_study_card, get_study_card as db_get_study_card,
     insert_study_card_tx, list_study_cards as db_list_study_cards, update_study_card_sm2_tx,
+    update_study_card_text_tx,
 };
 use crate::error::IpcError;
 pub use crate::graph::models::{StudyCardDto, StudyCardKind, StudyRating, StudySyncResult};
@@ -91,6 +92,58 @@ fn has_tag(text: &str, tag: &str) -> bool {
             .next()
             .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
         if prev_ok && next_ok {
+            return true;
+        }
+    }
+    false
+}
+
+/// Match `@tag` invocations in node content only on non-fenced lines starting with the tag,
+/// so inline prose mentions like "run @feynman or @study" do not spawn spurious flashcards.
+fn has_content_tag(content: &str, tag: &str) -> bool {
+    if tag.is_empty() || content.len() < tag.len() {
+        return false;
+    }
+    let tag_bytes = tag.as_bytes();
+    let mut fence: Option<(char, usize)> = None;
+
+    for raw_line in content.lines() {
+        let trimmed_start = raw_line.trim_start();
+        if let Some(fence_ch) = trimmed_start
+            .chars()
+            .next()
+            .filter(|&c| c == '`' || c == '~')
+        {
+            let marker_len = trimmed_start.chars().take_while(|&c| c == fence_ch).count();
+            if marker_len >= 3 {
+                let rest = &trimmed_start[marker_len..];
+                if let Some((active_ch, active_len)) = fence {
+                    if fence_ch == active_ch && marker_len >= active_len && rest.trim().is_empty() {
+                        fence = None;
+                    }
+                    continue;
+                } else if !(fence_ch == '`' && rest.contains('`')) {
+                    fence = Some((fence_ch, marker_len));
+                    continue;
+                }
+            }
+        }
+        if fence.is_some() {
+            continue;
+        }
+
+        let trimmed = raw_line.trim();
+        let Some(head) = trimmed.as_bytes().get(..tag_bytes.len()) else {
+            continue;
+        };
+        if !head.eq_ignore_ascii_case(tag_bytes) {
+            continue;
+        }
+        let next_ok = trimmed[tag_bytes.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| c.is_whitespace() || c == ':');
+        if next_ok {
             return true;
         }
     }
@@ -394,7 +447,7 @@ pub fn extract_study_candidates(engine: &GraphEngine) -> Vec<StudyCandidate> {
         let content = node.content.trim();
 
         let is_study_node = has_tag(&node.title, "@study")
-            || has_tag(&node.content, "@study")
+            || has_content_tag(&node.content, "@study")
             || node.metadata.lens == NodeLensOrigin::Study;
         if is_study_node && !is_placeholder_content(content) {
             if let Some((q, a)) = parse_qa_blocks(content) {
@@ -417,7 +470,7 @@ pub fn extract_study_candidates(engine: &GraphEngine) -> Vec<StudyCandidate> {
         }
 
         let is_feynman_node = has_tag(&node.title, "@feynman")
-            || has_tag(&node.content, "@feynman")
+            || has_content_tag(&node.content, "@feynman")
             || node.metadata.lens == NodeLensOrigin::Feynman;
         if is_feynman_node
             && !title.is_empty()
@@ -626,6 +679,40 @@ pub fn review_study_card(
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     update_study_card_sm2_tx(&tx, &card)?;
+    tx.commit()?;
+
+    Ok(card)
+}
+
+pub fn update_study_card(
+    conn: &mut Connection,
+    card_id: &str,
+    prompt: &str,
+    answer: &str,
+) -> Result<StudyCardDto, IpcError> {
+    let trimmed_id = card_id.trim();
+    let trimmed_prompt = prompt.trim();
+    let trimmed_answer = answer.trim();
+    if trimmed_id.is_empty() {
+        return Err(IpcError::validation("Study card ID cannot be empty"));
+    }
+    if trimmed_prompt.is_empty() {
+        return Err(IpcError::validation("Study card prompt cannot be empty"));
+    }
+    if trimmed_answer.is_empty() {
+        return Err(IpcError::validation("Study card answer cannot be empty"));
+    }
+
+    let mut card = db_get_study_card(conn, trimmed_id)?
+        .ok_or_else(|| IpcError::validation(format!("Study card '{trimmed_id}' not found")))?;
+
+    let now_ms = now_epoch_ms();
+    card.prompt = trimmed_prompt.to_owned();
+    card.answer = trimmed_answer.to_owned();
+    card.updated_at = now_ms;
+
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    update_study_card_text_tx(&tx, &card.id, &card.prompt, &card.answer, card.updated_at)?;
     tx.commit()?;
 
     Ok(card)

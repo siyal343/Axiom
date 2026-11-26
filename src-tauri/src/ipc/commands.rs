@@ -1445,6 +1445,24 @@ pub fn review_study_card(
 }
 
 #[tauri::command]
+pub fn update_study_card(
+    card_id: String,
+    prompt: String,
+    answer: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<StudyCardDto, IpcError> {
+    let mut db_guard = state
+        .db
+        .lock()
+        .map_err(|_| IpcError::db("Database lock poisoned"))?;
+    let conn = db_guard
+        .as_mut()
+        .ok_or_else(IpcError::workspace_not_open)?;
+
+    crate::graph::study::update_study_card(conn, &card_id, &prompt, &answer)
+}
+
+#[tauri::command]
 pub fn delete_study_card(
     card_id: String,
     state: tauri::State<'_, AppState>,

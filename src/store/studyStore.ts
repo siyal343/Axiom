@@ -7,6 +7,7 @@ import {
   listStudyCards,
   reviewStudyCard,
   syncStudyDeck,
+  updateStudyCard,
 } from "../ipc/client";
 import type {
   EdgeDto,
@@ -183,6 +184,55 @@ function hasTag(text: string, tag: string): boolean {
   const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`(^|[^A-Za-z0-9_-])${escaped}($|[^A-Za-z0-9_-])`, "i");
   return pattern.test(text);
+}
+
+function hasContentTag(content: string, tag: string): boolean {
+  if (!tag || content.length < tag.length) {
+    return false;
+  }
+  const lowerTag = tag.toLowerCase();
+  let fenceChar: "`" | "~" | null = null;
+  let fenceLen = 0;
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const trimmedStart = rawLine.trimStart();
+    const fenceMatch = /^(`{3,}|~{3,})(.*)$/.exec(trimmedStart);
+    if (fenceMatch) {
+      const marker = fenceMatch[1] ?? "";
+      const rest = fenceMatch[2] ?? "";
+      const ch = marker[0] === "~" ? "~" : "`";
+      if (fenceChar === null) {
+        if (!(ch === "`" && rest.includes("`"))) {
+          fenceChar = ch;
+          fenceLen = marker.length;
+        }
+        continue;
+      }
+      if (ch === fenceChar && marker.length >= fenceLen && rest.trim() === "") {
+        fenceChar = null;
+        fenceLen = 0;
+      }
+      continue;
+    }
+
+    if (fenceChar !== null) {
+      continue;
+    }
+
+    const trimmed = rawLine.trim();
+    if (trimmed.length < lowerTag.length) {
+      continue;
+    }
+    if (!trimmed.slice(0, lowerTag.length).toLowerCase().startsWith(lowerTag)) {
+      continue;
+    }
+    const nextChar = trimmed[lowerTag.length];
+    if (nextChar === undefined || /\s/.test(nextChar) || nextChar === ":") {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isPlaceholderContent(text: string): boolean {
@@ -433,7 +483,7 @@ export function extractStudyCandidatesLocal(
 
     const isStudyNode =
       hasTag(node.title, "@study") ||
-      hasTag(node.content, "@study") ||
+      hasContentTag(node.content, "@study") ||
       node.metadata.lens === "study";
     if (isStudyNode && !isPlaceholderContent(content)) {
       const qa = parseQaBlocks(content);
@@ -458,7 +508,7 @@ export function extractStudyCandidatesLocal(
 
     const isFeynmanNode =
       hasTag(node.title, "@feynman") ||
-      hasTag(node.content, "@feynman") ||
+      hasContentTag(node.content, "@feynman") ||
       node.metadata.lens === "feynman";
     if (
       isFeynmanNode &&
@@ -677,6 +727,49 @@ export async function reviewStudyCardAction(
   return updated;
 }
 
+export async function updateStudyCardAction(
+  cardId: string,
+  prompt: string,
+  answer: string,
+): Promise<StudyCardDto> {
+  const trimmedPrompt = prompt.trim();
+  const trimmedAnswer = answer.trim();
+  if (!trimmedPrompt) {
+    throw new Error("Study card prompt cannot be empty");
+  }
+  if (!trimmedAnswer) {
+    throw new Error("Study card answer cannot be empty");
+  }
+
+  if (isTauriRuntime()) {
+    const updated = await updateStudyCard({
+      cardId,
+      prompt: trimmedPrompt,
+      answer: trimmedAnswer,
+    });
+    studyCards.value = sortStudyCards(
+      studyCards.value.map((c) => (c.id === updated.id ? updated : c)),
+    );
+    return updated;
+  }
+
+  const existing = readLocalStudyCards();
+  const target = existing.find((c) => c.id === cardId);
+  if (!target) {
+    throw new Error(`Study card '${cardId}' not found`);
+  }
+  const updated: StudyCardDto = {
+    ...target,
+    prompt: trimmedPrompt,
+    answer: trimmedAnswer,
+    updated_at: Date.now(),
+  };
+  const next = sortStudyCards(existing.map((c) => (c.id === updated.id ? updated : c)));
+  writeLocalStudyCards(next);
+  studyCards.value = next;
+  return updated;
+}
+
 export async function deleteStudyCardAction(cardId: string): Promise<void> {
   if (isTauriRuntime()) {
     await deleteStudyCard(cardId);
@@ -687,6 +780,163 @@ export async function deleteStudyCardAction(cardId: string): Promise<void> {
   const next = readLocalStudyCards().filter((c) => c.id !== cardId);
   writeLocalStudyCards(next);
   studyCards.value = sortStudyCards(next);
+}
+
+function stripMarkdownCueMarkers(line: string): string {
+  return line
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateClueSafe(text: string, maxChars: number): string {
+  const clean = text.trim();
+  if (clean.length <= maxChars) {
+    return clean;
+  }
+  let slice = clean.slice(0, maxChars);
+  const lastSpace = slice.lastIndexOf(" ");
+  if (lastSpace >= 12) {
+    slice = slice.slice(0, lastSpace);
+  }
+  let dollarCount = 0;
+  for (let i = 0; i < slice.length; i += 1) {
+    if (slice[i] === "$" && slice[i - 1] !== "\\") {
+      dollarCount += 1;
+    }
+  }
+  if (dollarCount % 2 === 1) {
+    const lastDollar = slice.lastIndexOf("$");
+    if (lastDollar > 0) {
+      slice = slice.slice(0, lastDollar).trimEnd();
+    } else {
+      return "";
+    }
+  }
+  const trimmed = slice.replace(/[.,;:\-]+$/, "").trimEnd();
+  return trimmed.length > 0 ? `${trimmed}...` : "";
+}
+
+export function extractHintFromAnswer(answer: string): string {
+  const normalized = answer.trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line !== "---");
+  if (lines.length === 0) {
+    return "";
+  }
+
+  const numberedLines = lines.filter((line) => /^\d+[.)]\s+/.test(line));
+  if (numberedLines.length >= 2) {
+    const firstItem = stripListPrefix(numberedLines[0] ?? "");
+    const strippedAnswerMarker = stripQaMarker(firstItem, false) ?? firstItem;
+    const cleanFirst = stripMarkdownCueMarkers(strippedAnswerMarker);
+    const clue = truncateClueSafe(cleanFirst, 52);
+    if (!clue) {
+      return `${numberedLines.length} parts — recall item 1 first`;
+    }
+    const cleanClue = clue.replace(/\.+$/, "");
+    return `1/${numberedLines.length}: ${cleanClue}...`;
+  }
+
+  const firstRaw = lines[0] ?? "";
+  const firstNoList = stripListPrefix(firstRaw);
+  const firstNoQa = stripQaMarker(firstNoList, false) ?? firstNoList;
+  const cleanLine = stripMarkdownCueMarkers(firstNoQa);
+  if (!cleanLine) {
+    return "";
+  }
+
+  if (lines.length === 1) {
+    const words = cleanLine.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) {
+      return "";
+    }
+    if (cleanLine.length <= 72) {
+      const cap = Math.max(10, Math.floor(cleanLine.length * 0.45));
+      const partial = truncateClueSafe(cleanLine, cap);
+      if (partial) {
+        return partial;
+      }
+      const firstWord = words[0] ?? "";
+      return firstWord.includes("$") ? "" : `${firstWord}...`;
+    }
+  }
+
+  const truncated = truncateClueSafe(cleanLine, 72);
+  if (!truncated) {
+    return "";
+  }
+  if (truncated.endsWith("...") || lines.length === 1) {
+    return truncated;
+  }
+  return `${truncated.replace(/\.+$/, "")}...`;
+}
+
+function createSeededRng(seed: number): () => number {
+  let state = seed >>> 0 || 1;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function interleaveStudyCards(
+  cards: ReadonlyArray<StudyCardDto>,
+  seed: number,
+): StudyCardDto[] {
+  if (cards.length <= 1) {
+    return [...cards];
+  }
+
+  const rng = createSeededRng(seed);
+  const pool = [...cards];
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = pool[i];
+    const swap = pool[j];
+    if (tmp && swap) {
+      pool[i] = swap;
+      pool[j] = tmp;
+    }
+  }
+
+  const result: StudyCardDto[] = [];
+  const remaining = [...pool];
+  while (remaining.length > 0) {
+    const prev = result[result.length - 1];
+    let pickIdx = 0;
+    if (prev) {
+      const diffNodeAndKind = remaining.findIndex(
+        (c) => c.node_id !== prev.node_id && c.card_kind !== prev.card_kind,
+      );
+      if (diffNodeAndKind !== -1) {
+        pickIdx = diffNodeAndKind;
+      } else {
+        const diffNodeOrKind = remaining.findIndex(
+          (c) => c.node_id !== prev.node_id || c.card_kind !== prev.card_kind,
+        );
+        if (diffNodeOrKind !== -1) {
+          pickIdx = diffNodeOrKind;
+        }
+      }
+    }
+    const [picked] = remaining.splice(pickIdx, 1);
+    if (picked) {
+      result.push(picked);
+    }
+  }
+
+  return result;
 }
 
 export function getScopedStudyCards(
