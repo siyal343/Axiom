@@ -144,4 +144,21 @@ describe("visualSimEngine & Markdown/Preact integration", () => {
     expect(hint).not.toContain('"preset"');
     expect(hint).toContain("Governing Law");
   });
+
+  it("renders Smith Chart inductive/capacitive region cues and syncs sliders when spec changes", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+
+    const smithSpec = parseVisualSimSpec(JSON.stringify({ domain: "rf", preset: "smith" }))!;
+    render(h(VisualSimBlock, { spec: smithSpec }), mount);
+    expect(mount.textContent).toContain("+jX Inductive");
+    expect(mount.textContent).toContain("−jX Capacitive");
+
+    const stepSpec = parseVisualSimSpec(
+      JSON.stringify({ domain: "controls", preset: "second_order_step" }),
+    )!;
+    render(h(VisualSimBlock, { spec: stepSpec }), mount);
+    expect(mount.textContent).toContain("2nd-Order Closed-Loop Step Response");
+    render(null, mount);
+  });
 });

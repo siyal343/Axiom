@@ -31,10 +31,13 @@ Fenced ` ```axiom-sim ` (or ` ```sim `) Markdown JSON blocks compile cleanly thr
 - `.axiom-sim` is registered inside `isInteractiveTarget` (`src/canvas/pointer.ts`) and stops `pointerdown`, `mousedown`, `dblclick`, and `wheel` propagation in `src/cards/VisualSimBlock.tsx`, ensuring dragging parameter sliders never drags or pans the canvas.
 - Streaming incomplete fences render a calm `.axiom-sim-streaming` placeholder until closed, and `extractHintFromAnswer` (`src/store/studyStore.ts`) strips `axiom-sim` blocks so flashcard `Hint (H)` clues never expose raw JSON.
 
-## AI Prompts & DeepSeek Anthropic Compatibility
+## AI Prompts & Provider-Agnostic Streaming Resilience
 
-- `LENS_FEYNMAN` and `LENS_STUDY` (`src-tauri/src/ai/prompts.rs`) instruct AI models to emit at most one concise ` ```axiom-sim ` block alongside KaTeX derivations, validity limits, worked sanity checks, and `**Active-Recall Quiz:**` items while preserving strict `@@NODE ... @@END` framing.
-- `build_anthropic_body` (`src-tauri/src/ai/provider.rs`) automatically disables default internal thinking (`"thinking": { "type": "disabled" }`) on DeepSeek Anthropic requests for non-`reasoner` models (such as `deepseek-flash` against `https://api.deepseek.com/anthropic`) so default `2048`-token budgets produce immediate streaming node output instead of exhausting `max_tokens` during hidden reasoning.
+- `LENS_FEYNMAN` and `LENS_STUDY` (`src-tauri/src/ai/prompts.rs`) instruct any provider's model to emit at most one concise ` ```axiom-sim ` fence alongside KaTeX derivations, validity limits, worked sanity checks, and `**Active-Recall Quiz:**` items while preserving strict `@@NODE ... @@END` framing.
+- `build_anthropic_body` and `build_openai_compat_body` (`src-tauri/src/ai/provider.rs`) stay strictly provider-agnostic with zero hardcoded vendor or domain overrides. To support modern thinking/reasoning models on any Anthropic-, OpenAI-, or Ollama-compatible endpoint:
+  - Default reasoning `max_tokens` is `4096` (`StoredSettings::default` in `src-tauri/src/settings.rs` and `DEFAULT_SETTINGS` in `src/overlays/SettingsModal.tsx`), and `test_connection` probes with `max_tokens: 64`.
+  - `finish_stream_check` inspects protocol-level reasoning and length signals (`thinking_delta` / `reasoning_content` + `stop_reason: "max_tokens"` or `finish_reason: "length"`). If a stream terminates at the token ceiling before emitting visible answer text, Axiom returns an actionable `PROVIDER_NETWORK` error advising the user to raise **Max Tokens** in **Settings** (`8192+`) rather than silently creating a blank card.
+- Range sliders inside `.axiom-sim` are excluded from text-input shortcut suppression in [keymap.ts](file:///f:/Datapack/Personal/Programa/Lattice/src/input/keymap.ts) and [StudyDeckModal.tsx](file:///f:/Datapack/Personal/Programa/Lattice/src/overlays/StudyDeckModal.tsx), preserving Arrow-key slider adjustment while keeping `Shift+Q`, SM-2 `1`–`4` grading, `J`, `E`, and `Escape` active immediately after dragging a parameter.
 
 ## Verification
 

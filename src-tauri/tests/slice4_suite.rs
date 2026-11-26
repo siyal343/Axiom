@@ -852,27 +852,70 @@ fn spawn_summarizer_worker_works_outside_tokio_runtime() {
 }
 
 #[test]
-fn deepseek_anthropic_body_disables_thinking_for_non_reasoner_models() {
-    let base_req = |base_url: &str, model: &str| LlmStreamRequest {
+fn anthropic_body_is_provider_agnostic() {
+    let req = LlmStreamRequest {
         system_prompt: "sys".to_owned(),
         user_prompt: "usr".to_owned(),
         config: ModelTierConfig {
             provider: ProviderKind::Anthropic,
-            base_url: base_url.to_owned(),
-            model: model.to_owned(),
+            base_url: "https://example-gateway.invalid/anthropic".to_owned(),
+            model: "custom-model".to_owned(),
             has_api_key: true,
             temperature: 0.4,
-            max_tokens: 2048,
+            max_tokens: 4096,
         },
         api_key: Some("k".to_owned()),
     };
 
-    let ds_flash = build_anthropic_body(&base_req("https://api.deepseek.com/anthropic", "deepseek-flash"));
-    assert_eq!(ds_flash["thinking"]["type"], "disabled");
+    let body = build_anthropic_body(&req);
+    assert_eq!(body["model"], "custom-model");
+    assert_eq!(body["max_tokens"], 4096);
+    assert!(body.get("thinking").is_none());
+}
 
-    let ds_reasoner = build_anthropic_body(&base_req("https://api.deepseek.com/anthropic", "deepseek-reasoner"));
-    assert!(ds_reasoner.get("thinking").is_none());
+#[tokio::test]
+async fn stream_completion_reports_reasoning_budget_exhaustion_when_no_text_emitted() {
+    let sse = [
+        r#"event: content_block_start"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+        "",
+        r#"event: content_block_delta"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reasoning..."}}"#,
+        "",
+        r#"event: message_delta"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}"#,
+        "",
+        r#"event: message_stop"#,
+        r#"data: {"type":"message_stop"}"#,
+        "",
+    ]
+    .join("\n");
 
-    let claude = build_anthropic_body(&base_req("https://api.anthropic.com/v1", "claude-3-7-sonnet"));
-    assert!(claude.get("thinking").is_none());
+    let srv = spawn_mock_server(move |_req| MockResponseAction::Immediate {
+        status_line: "200 OK",
+        content_type: "text/event-stream",
+        body: sse.clone(),
+    });
+
+    let client = reqwest::Client::new();
+    let req = LlmStreamRequest {
+        system_prompt: "sys".to_owned(),
+        user_prompt: "usr".to_owned(),
+        config: ModelTierConfig {
+            provider: ProviderKind::Anthropic,
+            base_url: srv.base_url,
+            model: "reasoning-model".to_owned(),
+            has_api_key: true,
+            temperature: 0.4,
+            max_tokens: 2048,
+        },
+        api_key: Some("test-key".to_owned()),
+    };
+
+    let err = stream_completion(&client, req, CancellationToken::new(), |_chunk| Ok(()))
+        .await
+        .expect_err("must report exhausted reasoning budget cleanly");
+    assert_eq!(err.code, IpcErrorCode::ProviderNetwork);
+    assert!(err.message.contains("exhausted max_tokens (2048)"));
+    assert!(err.message.contains("8192+"));
 }

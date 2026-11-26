@@ -12,7 +12,7 @@ Non-secret configuration persists in `{config_dir}/axiom-canvas/settings.json` (
 
 | Setting | Default value | Validation rule on save |
 | --- | --- | --- |
-| `reasoning` tier | `openai_compat`, `https://api.openai.com/v1`, `gpt-4o`, `temperature: 0.4`, `max_tokens: 2048` | Non-empty `base_url` and `model`; finite `temperature` in `0.0..=2.0`; `max_tokens >= 64` |
+| `reasoning` tier | `openai_compat`, `https://api.openai.com/v1`, `gpt-4o`, `temperature: 0.4`, `max_tokens: 4096` | Non-empty `base_url` and `model`; finite `temperature` in `0.0..=2.0`; `max_tokens >= 64` |
 | `utility` tier | `openai_compat`, `https://api.openai.com/v1`, `gpt-4o-mini`, `temperature: 0.2`, `max_tokens: 256` | Non-empty `base_url` and `model`; finite `temperature` in `0.0..=2.0`; `max_tokens >= 64` |
 | `default_token_budget` | `6000` | Must be `>= 512` (also updates active `ActiveWorkspace.token_budget`) |
 | `auto_summarize` | `true` | Boolean |
@@ -24,7 +24,7 @@ API keys are stored through `keyring::Entry::new("dev.axiom.canvas", KEY_NAME)` 
 
 - **Update semantics:** Passing `None` preserves the stored credential; passing an empty or whitespace-only string deletes the credential (ignoring `keyring::Error::NoEntry`); passing a non-empty string trims and writes it to the OS keychain.
 - **Safe presence check:** `has_api_key` returns `false` when no entry exists or if the keychain returns an error, so missing credentials never block loading settings.
-- **Live connection probe:** In **Settings** (`src/overlays/SettingsModal.tsx`), clicking **Test Connection** saves the current form values first and invokes `test_provider_connection`. On the back end, `test_provider_connection` runs a `15`-second timeout stream probe (`max_tokens = 16`), cancels immediately on the first non-empty chunk, and returns `TestConnectionResult { ok, latency_ms, message }`.
+- **Live connection probe:** In **Settings** (`src/overlays/SettingsModal.tsx`), clicking **Test Connection** saves the current form values first and invokes `test_provider_connection`. On the back end, `test_provider_connection` runs a `15`-second timeout stream probe (`max_tokens = 64`), cancels immediately on the first non-empty chunk, and returns `TestConnectionResult { ok, latency_ms, message }`.
 
 ## Multi-provider streaming wire adapters
 
@@ -33,14 +33,14 @@ API keys are stored through `keyring::Entry::new("dev.axiom.canvas", KEY_NAME)` 
 | Provider (`ProviderKind`) | Endpoint path | Request auth and format | Stream framing |
 | --- | --- | --- | --- |
 | `openai_compat` | `POST {BASE_URL}/chat/completions` | Optional `Authorization: Bearer <KEY>` | SSE `data:` JSON lines (`/choices/0/delta/content`) until `data: [DONE]` |
-| `anthropic` | `POST {BASE_URL}/messages` | `x-api-key` and `anthropic-version: 2023-06-01`; `build_anthropic_body` disables DeepSeek default internal thinking for non-`reasoner` models (`deepseek-flash`) so `2048`-token budgets stream output immediately | SSE `data:` JSON lines (`content_block_delta` with `delta.type == "text_delta"`) until `message_stop` |
+| `anthropic` | `POST {BASE_URL}/messages` | `x-api-key` and `anthropic-version: 2023-06-01` | SSE `data:` JSON lines (`content_block_delta` with `delta.type == "text_delta"`) until `message_stop` |
 | `ollama` | `POST {BASE_URL}/api/chat` | No auth header; `options: { temperature, num_predict }` | NDJSON lines (`/message/content`) until `done == true` |
 
 ### Line framing, cancellation, and error mapping
 
 - **UTF-8-safe byte splitting:** Incoming chunks append into a `Vec<u8>` buffer and split on newline (`0x0A`) boundaries before decoding with `String::from_utf8_lossy`, preventing multi-byte UTF-8 characters split across TCP packets from corrupting text.
 - **Immediate cancellation:** Request dispatch, error-body reads, and byte-stream iteration run inside `tokio::select!` against a `CancellationToken`.
-- **Structured error codes:** Non-2xx HTTP responses cap error snippets at `240` characters and map `401` and `403` to `PROVIDER_AUTH`, `429` and `500..=599` to `PROVIDER_NETWORK`, and other status codes to `VALIDATION_ERROR`. Anthropic `error` SSE frames map `authentication_error` to `PROVIDER_AUTH` and other errors to `PROVIDER_NETWORK`. Transport failures map to `PROVIDER_NETWORK` using `err.without_url()`.
+- **Structured error codes:** Non-2xx HTTP responses cap error snippets at `240` characters and map `401` and `403` to `PROVIDER_AUTH`, `429` and `500..=599` to `PROVIDER_NETWORK`, and other status codes to `VALIDATION_ERROR`. Anthropic `error` SSE frames map `authentication_error` to `PROVIDER_AUTH` and other errors to `PROVIDER_NETWORK`. Transport failures map to `PROVIDER_NETWORK` using `err.without_url()`. When a thinking/reasoning stream exhausts `max_tokens` (`stop_reason == "max_tokens"` or `finish_reason == "length"`) before emitting text, `finish_stream_check` surfaces an actionable `PROVIDER_NETWORK` message advising the user to raise **Max Tokens** (`8192+`).
 
 ## Lens prompts and streaming runner
 

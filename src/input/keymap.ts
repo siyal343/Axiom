@@ -172,7 +172,25 @@ function isInputLikeElement(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {
     return false;
   }
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], .cm-editor"));
+  return Boolean(
+    target.closest("input:not([type='range']), textarea, select, [contenteditable='true'], .cm-editor"),
+  );
+}
+
+function isRangeSliderControlKey(target: EventTarget | null, key: string): boolean {
+  if (!(target instanceof HTMLInputElement) || target.type !== "range") {
+    return false;
+  }
+  return (
+    key === "ArrowLeft" ||
+    key === "ArrowRight" ||
+    key === "ArrowUp" ||
+    key === "ArrowDown" ||
+    key === "Home" ||
+    key === "End" ||
+    key === "PageUp" ||
+    key === "PageDown"
+  );
 }
 
 function isInteractiveButtonTarget(target: EventTarget | null): boolean {
@@ -480,7 +498,7 @@ export function createKeymapHandler(deps: KeymapDeps): KeymapController {
     }
 
     // Navigate mode
-    if (isInputLikeElement(e.target)) {
+    if (isInputLikeElement(e.target) || isRangeSliderControlKey(e.target, e.key)) {
       return;
     }
 

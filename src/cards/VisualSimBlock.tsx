@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import { useId, useMemo, useState } from "preact/hooks";
+import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import {
   evaluateVisualSim,
   type EvaluatedVisualSim,
@@ -309,6 +309,15 @@ function renderSmithChart(sim: EvaluatedVisualSim): ComponentChildren {
       <text x={cx + R + 12} y={cy + 16} class="axiom-sim__axis-label">
         Dashed = SWR circle
       </text>
+      <text x={cx} y={cy - R - 4} text-anchor="middle" class="axiom-sim__axis-label">
+        +jX Inductive
+      </text>
+      <text x={cx} y={cy + R + 11} text-anchor="middle" class="axiom-sim__axis-label">
+        −jX Capacitive
+      </text>
+      <text x={cx - R - 4} y={cy + 3} text-anchor="end" class="axiom-sim__axis-label">
+        0
+      </text>
     </svg>
   );
 }
@@ -390,6 +399,24 @@ export function VisualSimBlock({ spec }: VisualSimBlockProps) {
     }
     return init;
   });
+
+  const specSig = useMemo(
+    () => JSON.stringify({ preset: spec.preset, expr: spec.expr ?? "", params: spec.params }),
+    [spec],
+  );
+  const prevSpecSigRef = useRef<string>(specSig);
+
+  useEffect(() => {
+    if (prevSpecSigRef.current === specSig) {
+      return;
+    }
+    prevSpecSigRef.current = specSig;
+    const next: Record<string, number> = {};
+    for (const p of spec.params) {
+      next[p.id] = p.value;
+    }
+    setValues(next);
+  }, [specSig, spec.params]);
 
   const sim = useMemo(() => evaluateVisualSim(spec, values), [spec, values]);
 

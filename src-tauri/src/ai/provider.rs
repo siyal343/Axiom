@@ -58,9 +58,7 @@ pub fn build_openai_compat_body(req: &LlmStreamRequest) -> serde_json::Value {
 }
 
 pub fn build_anthropic_body(req: &LlmStreamRequest) -> serde_json::Value {
-    let base_low = req.config.base_url.to_ascii_lowercase();
-    let model_low = req.config.model.to_ascii_lowercase();
-    let mut body = json!({
+    json!({
         "model": req.config.model,
         "stream": true,
         "temperature": req.config.temperature,
@@ -69,17 +67,14 @@ pub fn build_anthropic_body(req: &LlmStreamRequest) -> serde_json::Value {
         "messages": [
             { "role": "user", "content": req.user_prompt }
         ]
-    });
+    })
+}
 
-    // DeepSeek's Anthropic gateway defaults non-reasoner aliases like `deepseek-flash`
-    // to thinking mode, which can exhaust 2048-token budgets before emitting text.
-    if base_low.contains("deepseek.com") && !model_low.contains("reasoner") {
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert("thinking".to_owned(), json!({ "type": "disabled" }));
-        }
-    }
-
-    body
+#[derive(Default)]
+struct StreamDiagnostics {
+    emitted_text: bool,
+    saw_reasoning: bool,
+    hit_length_limit: bool,
 }
 
 fn map_reqwest_error(err: reqwest::Error) -> IpcError {
@@ -99,6 +94,7 @@ fn cap_snippet(raw: &str, max_chars: usize) -> String {
 fn parse_protocol_line(
     provider: ProviderKind,
     line: &str,
+    diag: &mut StreamDiagnostics,
     on_chunk: &mut impl FnMut(String) -> Result<(), IpcError>,
 ) -> Result<bool, IpcError> {
     let trimmed = line.trim();
@@ -119,11 +115,22 @@ fn parse_protocol_line(
                 return Ok(true);
             }
             let val: serde_json::Value = serde_json::from_str(data)?;
+            if val
+                .pointer("/choices/0/delta/reasoning_content")
+                .and_then(|c| c.as_str())
+                .is_some_and(|s| !s.is_empty())
+            {
+                diag.saw_reasoning = true;
+            }
+            if val.pointer("/choices/0/finish_reason").and_then(|f| f.as_str()) == Some("length") {
+                diag.hit_length_limit = true;
+            }
             if let Some(content) = val
                 .pointer("/choices/0/delta/content")
                 .and_then(|c| c.as_str())
             {
                 if !content.is_empty() {
+                    diag.emitted_text = true;
                     on_chunk(content.to_owned())?;
                 }
             }
@@ -140,13 +147,37 @@ fn parse_protocol_line(
             let val: serde_json::Value = serde_json::from_str(data)?;
             match val.get("type").and_then(|t| t.as_str()) {
                 Some("message_stop") => Ok(true),
+                Some("content_block_start") => {
+                    if val.pointer("/content_block/type").and_then(|t| t.as_str())
+                        == Some("thinking")
+                    {
+                        diag.saw_reasoning = true;
+                    }
+                    Ok(false)
+                }
                 Some("content_block_delta") => {
-                    if val.pointer("/delta/type").and_then(|t| t.as_str()) == Some("text_delta") {
-                        if let Some(text) = val.pointer("/delta/text").and_then(|t| t.as_str()) {
-                            if !text.is_empty() {
-                                on_chunk(text.to_owned())?;
+                    match val.pointer("/delta/type").and_then(|t| t.as_str()) {
+                        Some("text_delta") => {
+                            if let Some(text) = val.pointer("/delta/text").and_then(|t| t.as_str())
+                            {
+                                if !text.is_empty() {
+                                    diag.emitted_text = true;
+                                    on_chunk(text.to_owned())?;
+                                }
                             }
                         }
+                        Some("thinking_delta") => {
+                            diag.saw_reasoning = true;
+                        }
+                        _ => {}
+                    }
+                    Ok(false)
+                }
+                Some("message_delta") => {
+                    if val.pointer("/delta/stop_reason").and_then(|s| s.as_str())
+                        == Some("max_tokens")
+                    {
+                        diag.hit_length_limit = true;
                     }
                     Ok(false)
                 }
@@ -173,8 +204,16 @@ fn parse_protocol_line(
             if let Some(err_msg) = val.get("error").and_then(|e| e.as_str()) {
                 return Err(IpcError::provider_network(err_msg));
             }
+            if val
+                .pointer("/message/thinking")
+                .and_then(|c| c.as_str())
+                .is_some_and(|s| !s.is_empty())
+            {
+                diag.saw_reasoning = true;
+            }
             if let Some(text) = val.pointer("/message/content").and_then(|c| c.as_str()) {
                 if !text.is_empty() {
+                    diag.emitted_text = true;
                     on_chunk(text.to_owned())?;
                 }
             }
@@ -272,6 +311,7 @@ pub async fn stream_completion(
 
     let mut stream = response.bytes_stream();
     let mut byte_buf: Vec<u8> = Vec::new();
+    let mut diag = StreamDiagnostics::default();
 
     loop {
         let next_item = tokio::select! {
@@ -287,8 +327,8 @@ pub async fn stream_completion(
                     let line_bytes: Vec<u8> = byte_buf.drain(..=nl_pos).collect();
                     let line_str = String::from_utf8_lossy(&line_bytes);
                     let line = line_str.trim_end_matches(['\r', '\n']);
-                    if parse_protocol_line(req.config.provider, line, &mut on_chunk)? {
-                        return Ok(());
+                    if parse_protocol_line(req.config.provider, line, &mut diag, &mut on_chunk)? {
+                        return finish_stream_check(&diag, req.config.max_tokens);
                     }
                 }
             }
@@ -297,9 +337,28 @@ pub async fn stream_completion(
 
     if !byte_buf.is_empty() {
         let trailing = String::from_utf8_lossy(&byte_buf);
-        let _ = parse_protocol_line(req.config.provider, trailing.trim_end(), &mut on_chunk)?;
+        let _ = parse_protocol_line(
+            req.config.provider,
+            trailing.trim_end(),
+            &mut diag,
+            &mut on_chunk,
+        )?;
     }
 
+    finish_stream_check(&diag, req.config.max_tokens)
+}
+
+fn finish_stream_check(diag: &StreamDiagnostics, max_tokens: u32) -> Result<(), IpcError> {
+    if diag.hit_length_limit && !diag.emitted_text {
+        if diag.saw_reasoning {
+            return Err(IpcError::provider_network(format!(
+                "Model exhausted max_tokens ({max_tokens}) during internal reasoning before emitting text. Increase Max Tokens (e.g., 8192+) in Settings or switch to a non-thinking model."
+            )));
+        }
+        return Err(IpcError::provider_network(format!(
+            "Model reached max_tokens ({max_tokens}) before emitting output text. Increase Max Tokens in Settings."
+        )));
+    }
     Ok(())
 }
 
@@ -311,7 +370,7 @@ pub async fn test_connection(
     let started = Instant::now();
     let cancel = CancellationToken::new();
     let mut test_cfg = config.clone();
-    test_cfg.max_tokens = 16;
+    test_cfg.max_tokens = 64;
 
     let req = LlmStreamRequest {
         system_prompt: "You are a connectivity probe.".to_owned(),

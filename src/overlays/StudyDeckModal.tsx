@@ -66,7 +66,13 @@ function isEditableElement(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {
     return false;
   }
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+  return Boolean(
+    target.closest("input:not([type='range']), textarea, select, [contenteditable='true']"),
+  );
+}
+
+function isRangeSlider(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement && target.type === "range";
 }
 
 function jumpToSourceNode(nodeId: string): void {
@@ -410,6 +416,17 @@ export function StudyDeckModal() {
       return;
     }
     if (isEditableElement(e.target) || createFormOpen || !activeCard) {
+      return;
+    }
+    if (
+      isRangeSlider(e.target) &&
+      (e.key === "ArrowLeft" ||
+        e.key === "ArrowRight" ||
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown" ||
+        e.key === "Home" ||
+        e.key === "End")
+    ) {
       return;
     }
 

@@ -74,7 +74,7 @@ impl Default for StoredSettings {
                 base_url: "https://api.openai.com/v1".to_owned(),
                 model: "gpt-4o".to_owned(),
                 temperature: 0.4,
-                max_tokens: 2048,
+                max_tokens: 4096,
             },
             utility: StoredTierConfig {
                 provider: ProviderKind::OpenaiCompat,

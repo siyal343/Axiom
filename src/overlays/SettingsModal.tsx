@@ -48,7 +48,7 @@ const DEFAULT_SETTINGS: AppSettingsDto = {
     model: "gpt-4o",
     has_api_key: false,
     temperature: 0.4,
-    max_tokens: 2048,
+    max_tokens: 4096,
   },
   utility: {
     provider: "openai_compat",
@@ -239,6 +239,11 @@ function TierEditor({
             onInput={(e) => onChangeMaxTokensDraft(e.currentTarget.value)}
             onBlur={onCommitMaxTokens}
           />
+          {title.toLowerCase().includes("reasoning") && (
+            <span class="settings-hint">
+              Thinking models share this ceiling across reasoning and answer text (use 8192+ if reasoning stalls).
+            </span>
+          )}
         </label>
       </div>
 
