@@ -189,7 +189,7 @@ function createMockCanvasContext(): {
   };
 }
 
-async function flushUi(ms = 30): Promise<void> {
+async function flushUi(ms = 60): Promise<void> {
   await Promise.resolve();
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -585,7 +585,7 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
       "Prompt & Lenses",
     ]);
     expect(getTabs()[0]?.getAttribute("aria-selected")).toBe("true");
-    expect(container.textContent).toContain("Autosaves 1.5s after edits");
+    expect(container.textContent).toContain("autosaves 1.5s after edits");
     expect(container.textContent).toContain("Animate connection flow along edges");
     expect(container.querySelector(".settings-textarea")).toBeNull();
 

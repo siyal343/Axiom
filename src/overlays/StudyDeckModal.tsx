@@ -144,16 +144,15 @@ export function StudyDeckModal() {
           dialog.setAttribute("open", "");
         }
       }
-    } else if (dialog.open) {
-      if (typeof dialog.close === "function") {
+    } else {
+      if (typeof dialog.close === "function" && dialog.open) {
         try {
           dialog.close();
         } catch {
-          dialog.removeAttribute("open");
+          // Fallback to attribute removal below in constrained runtimes.
         }
-      } else {
-        dialog.removeAttribute("open");
       }
+      dialog.removeAttribute("open");
     }
   }, [isOpen]);
 
