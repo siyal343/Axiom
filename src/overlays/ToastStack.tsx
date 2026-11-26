@@ -1,5 +1,6 @@
 import { signal } from "@preact/signals";
 import { parseIpcError } from "../ipc/client";
+import { minimapOpen } from "../store/selection";
 
 export type ToastVariant = "info" | "warning" | "error";
 
@@ -52,12 +53,16 @@ export function notifyIpcError(err: unknown): void {
 
 export function ToastStack() {
   const items = toastsSignal.value;
+  const isMinimapOpen = minimapOpen.value;
   if (items.length === 0) {
     return null;
   }
 
   return (
-    <div class="toast-stack" aria-live="polite">
+    <div
+      class={`toast-stack ${isMinimapOpen ? "toast-stack--above-minimap" : ""}`}
+      aria-live="polite"
+    >
       {items.map((toast) => (
         <div key={toast.id} class={`toast toast--${toast.variant}`}>
           <span class="toast__message">{toast.message}</span>

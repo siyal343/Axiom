@@ -245,17 +245,18 @@ export function MinimapOverlay() {
       aria-label="Graph minimap"
       style={{
         position: "fixed",
-        right: "14px",
-        bottom: "56px",
-        width: `${MINIMAP_W}px`,
-        height: `${MINIMAP_H}px`,
+        right: "16px",
+        bottom: "16px",
+        boxSizing: "border-box",
+        width: "auto",
+        maxWidth: "calc(100vw - 32px)",
         borderRadius: "var(--radius-card)",
         border: "1px solid var(--border-strong)",
         background: "var(--bg-pill)",
         boxShadow: "var(--shadow-card)",
         backdropFilter: "blur(8px)",
         overflow: "hidden",
-        zIndex: 35,
+        zIndex: 62,
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -265,6 +266,7 @@ export function MinimapOverlay() {
         width={MINIMAP_W}
         height={MINIMAP_H}
         style={{
+          boxSizing: "border-box",
           display: "block",
           width: `${MINIMAP_W}px`,
           height: `${MINIMAP_H}px`,

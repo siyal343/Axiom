@@ -59,8 +59,11 @@ export const activeRunLabel = signal<string | null>(null);
 export const activeRunStatus = signal<"idle" | "thinking" | "streaming">("idle");
 export const activeRunFocusIds = signal<string[]>([]);
 export const activeRunSpawnedCount = signal<number>(0);
+export type SettingsTab = "general" | "providers" | "prompt_lenses";
+
 export const customPromptOpen = signal<boolean>(false);
 export const settingsModalOpen = signal<boolean>(false);
+export const settingsActiveTab = signal<SettingsTab>("general");
 export const triageBanner = signal<string | null>(null);
 
 export interface TriggerLensOptions {
@@ -365,7 +368,9 @@ export function closeCustomPromptBar(): void {
   }
 }
 
-export function openSettingsModal(): void {
+export function openSettingsModal(tab?: SettingsTab | Event): void {
+  settingsActiveTab.value =
+    tab === "general" || tab === "providers" || tab === "prompt_lenses" ? tab : "general";
   edgePopover.value = null;
   hoveredId.value = null;
   shortcutsHelpOpen.value = false;

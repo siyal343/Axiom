@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { clampZoom } from "../canvas/camera";
 import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
 import {
@@ -21,6 +21,7 @@ import {
   staleNodesMap,
 } from "../store/selection";
 import { pushToast } from "./ToastStack";
+import { useDialogFocusTrap } from "./useDialogFocusTrap";
 
 function computeBrowserPreviewDiagnostics(): GraphDiagnostics {
   const degreeMap = new Map<string, number>();
@@ -140,6 +141,8 @@ function jumpToNode(nodeId: string): void {
 export function DiagnosticsModal() {
   const isOpen = diagnosticsModalOpen.value;
   const desktopRuntime = isTauriRuntime();
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocusTrap(isOpen, modalRef);
 
   const [diagnostics, setDiagnostics] = useState<GraphDiagnostics | null>(null);
   const [loading, setLoading] = useState(false);
@@ -233,6 +236,8 @@ export function DiagnosticsModal() {
       }}
     >
       <div
+        ref={modalRef}
+        tabIndex={-1}
         class="settings-modal artifact-modal"
         role="dialog"
         aria-modal="true"
@@ -253,7 +258,7 @@ export function DiagnosticsModal() {
             </button>
             <button
               type="button"
-              class="settings-btn settings-btn--secondary"
+              class="settings-btn settings-btn--secondary settings-modal__close"
               onClick={() => closeDiagnosticsModal()}
             >
               Close (Esc)
@@ -264,8 +269,8 @@ export function DiagnosticsModal() {
         <div class="settings-modal__body">
           {!desktopRuntime && (
             <p class="settings-preview-banner" role="note">
-              Browser preview mode: summary counts are local estimates. Full Tarjan SCC cycle
-              analysis runs in the Axiom desktop runtime.
+              Browser preview mode: counts are local estimates. Checks dependencies, cycles, and
+              open risks in the Axiom desktop app.
             </p>
           )}
 

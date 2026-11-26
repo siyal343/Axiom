@@ -412,6 +412,13 @@ describe("v0.3 Discovery, Workspace Search, Stale Actions & Flow System Prompt",
     openSettingsModal();
     await flushUi();
 
+    const promptTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+      (b) => b.textContent?.includes("Prompt & Lenses"),
+    );
+    expect(promptTab).toBeDefined();
+    promptTab?.click();
+    await flushUi();
+
     const textarea = container.querySelector<HTMLTextAreaElement>(".settings-textarea");
     expect(textarea).not.toBeNull();
     expect(textarea?.value).toBe("Initial flow prompt");

@@ -850,16 +850,19 @@ export function attachCanvasPointer(
   };
 
   const onDblClick = (e: MouseEvent): void => {
-    if (modalState.value !== "navigate" || isInteractiveTarget(e.target)) {
+    const rawTarget = e.target;
+    const targetEl =
+      rawTarget instanceof Element
+        ? rawTarget
+        : rawTarget instanceof Node
+          ? rawTarget.parentElement
+          : null;
+    if (modalState.value !== "navigate" || isInteractiveTarget(targetEl)) {
       return;
     }
-    const targetEl = e.target instanceof Element ? e.target : null;
     const cardEl = targetEl?.closest<HTMLElement>("[data-node-id]");
     let nodeId = cardEl?.dataset.nodeId ?? null;
-    if (
-      !nodeId &&
-      (isBirdsEye.value || targetEl === shellEl || targetEl?.classList.contains("canvas-layer"))
-    ) {
+    if (!nodeId && (!targetEl || shellEl.contains(targetEl))) {
       const local = toLocalCoords(e.clientX, e.clientY);
       const worldPt = screenToWorld(local.x, local.y, camera.getCamera());
       nodeId = hitTestNodeAtWorld(worldPt);
@@ -870,6 +873,10 @@ export function attachCanvasPointer(
     const node = nodesMap.get(nodeId);
     if (!node) {
       return;
+    }
+    e.preventDefault();
+    if (typeof window !== "undefined") {
+      window.getSelection?.()?.removeAllRanges();
     }
     nodeContextMenu.value = null;
     selectSingle(node.id);

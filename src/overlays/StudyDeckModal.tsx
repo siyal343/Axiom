@@ -157,6 +157,28 @@ export function StudyDeckModal() {
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    const onWindowKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== "Escape") {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      if (studyCreateFormOpen.value) {
+        studyCreateFormOpen.value = false;
+      } else {
+        closeStudyModal();
+      }
+    };
+    window.addEventListener("keydown", onWindowKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onWindowKeyDown, true);
+    };
+  }, [isOpen]);
+
   // Fallback light-dismiss when native `closedBy` is unsupported on HTMLDialogElement.
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -271,7 +293,13 @@ export function StudyDeckModal() {
       return;
     }
     if (e.key === "Escape") {
+      e.preventDefault();
       e.stopPropagation();
+      if (studyCreateFormOpen.value) {
+        studyCreateFormOpen.value = false;
+      } else {
+        closeStudyModal();
+      }
       return;
     }
     if (isEditableElement(e.target) || createFormOpen || !activeCard) {
@@ -319,7 +347,11 @@ export function StudyDeckModal() {
       class="study-dialog"
       onCancel={(e) => {
         e.preventDefault();
-        closeStudyModal();
+        if (studyCreateFormOpen.value) {
+          studyCreateFormOpen.value = false;
+        } else {
+          closeStudyModal();
+        }
       }}
       onClose={() => {
         if (studyModalOpen.value) {
@@ -356,16 +388,18 @@ export function StudyDeckModal() {
           </div>
         </div>
         <div class="study-dialog__header-actions">
-          <button
-            type="button"
-            class={`settings-btn ${createFormOpen ? "settings-btn--primary" : "settings-btn--secondary"}`}
-            aria-expanded={createFormOpen}
-            onClick={() => {
-              studyCreateFormOpen.value = !createFormOpen;
-            }}
-          >
-            + New Card
-          </button>
+          {!createFormOpen && (activeCard !== null || loading) && (
+            <button
+              type="button"
+              class="settings-btn settings-btn--secondary"
+              aria-expanded={createFormOpen}
+              onClick={() => {
+                studyCreateFormOpen.value = true;
+              }}
+            >
+              + New Card
+            </button>
+          )}
           <button
             type="button"
             class="study-dialog__close"
@@ -468,12 +502,16 @@ export function StudyDeckModal() {
               </button>
               <button
                 type="button"
-                class="settings-btn settings-btn--secondary"
+                class={`settings-btn ${
+                  scope === "due" && allCards.length > 0
+                    ? "settings-btn--secondary"
+                    : "settings-btn--primary"
+                }`}
                 onClick={() => {
                   studyCreateFormOpen.value = true;
                 }}
               >
-                + New Card
+                + Create Flashcard
               </button>
             </div>
           </div>

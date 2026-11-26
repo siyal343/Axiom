@@ -313,6 +313,13 @@ describe("v0.4 Custom Lenses, Runner Integration, DiagnosticsModal & OutlineImpo
     openSettingsModal();
     await flushUi();
 
+    const promptTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+      (b) => b.textContent?.includes("Prompt & Lenses"),
+    );
+    expect(promptTab).toBeDefined();
+    promptTab?.click();
+    await flushUi();
+
     // 1. Install @threat starter preset
     const threatBtn = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (b) => b.textContent?.trim() === "+ @threat",

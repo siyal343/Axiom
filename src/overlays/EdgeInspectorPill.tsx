@@ -24,7 +24,11 @@ const EDGE_TYPES: ReadonlyArray<{ value: EdgeType; label: string }> = [
   { value: "references", label: "References" },
 ];
 
-function computePillTransform(edge: EdgeDto, cam: CameraTransform): string {
+function computePillTransform(
+  edge: EdgeDto,
+  cam: CameraTransform,
+  pillEl?: HTMLElement | null,
+): string {
   const mid = getEdgeMidpointWorld(edge, nodesMap, dragOffsets, resizeSizes);
   if (!mid) {
     return "translate3d(-9999px, -9999px, 0)";
@@ -34,11 +38,14 @@ function computePillTransform(edge: EdgeDto, cam: CameraTransform): string {
     width: typeof window !== "undefined" ? window.innerWidth : 1280,
     height: typeof window !== "undefined" ? window.innerHeight : 800,
   };
-  const minX = 120;
-  const maxX = Math.max(minX, vp.width - 120);
-  const minY = 48;
-  const maxY = Math.max(minY, vp.height - 32);
-  const x = Math.round(Math.max(minX, Math.min(maxX, screen.x)));
+  const halfW = pillEl?.offsetWidth ? pillEl.offsetWidth * 0.5 : Math.min(170, vp.width * 0.45);
+  const pillH = pillEl?.offsetHeight || 38;
+  const minX = halfW + 16;
+  const maxX = vp.width - halfW - 16;
+  const x =
+    minX >= maxX ? Math.round(vp.width * 0.5) : Math.round(Math.max(minX, Math.min(maxX, screen.x)));
+  const minY = 60 + pillH;
+  const maxY = Math.max(minY, vp.height - 78);
   const y = Math.round(Math.max(minY, Math.min(maxY, screen.y - 14)));
   return `translate3d(${x}px, ${y}px, 0) translate(-50%, -100%)`;
 }
@@ -64,13 +71,13 @@ export function EdgeInspectorPill() {
       return;
     }
 
-    el.style.transform = computePillTransform(edge, ctrl.getCamera());
+    el.style.transform = computePillTransform(edge, ctrl.getCamera(), el);
     if (!ctrl.subscribeFrame) {
       return;
     }
     return ctrl.subscribeFrame((cam) => {
       if (pillRef.current) {
-        pillRef.current.style.transform = computePillTransform(edge, cam);
+        pillRef.current.style.transform = computePillTransform(edge, cam, pillRef.current);
       }
     });
   }, [edge?.id, edge?.source_id, edge?.target_id, edge?.type, edge?.weight, version]);
@@ -85,7 +92,7 @@ export function EdgeInspectorPill() {
     zoom: 1,
     last_focus_id: null,
   };
-  const initialTransform = computePillTransform(edge, cam);
+  const initialTransform = computePillTransform(edge, cam, pillRef.current);
 
   const handleTypeChange = (nextType: EdgeType): void => {
     if (nextType === edge.type) {
@@ -203,7 +210,7 @@ export function EdgeInspectorPill() {
         type="button"
         class="edge-inspector-pill__btn"
         aria-label="Toggle edge weight"
-        title="Toggle AI context inclusion (Summary / Full)"
+        title="Switch AI context depth between Summary (compact) and Full"
         style={{
           appearance: "none",
           border: "1px solid var(--border-subtle)",

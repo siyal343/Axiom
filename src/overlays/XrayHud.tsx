@@ -5,13 +5,18 @@ import { graphVersion, tokenBudget } from "../store/graphStore";
 import { focusId, selectedIds, xrayPinned, xrayState } from "../store/selection";
 import { notifyIpcError, pushToast } from "./ToastStack";
 
-const LEGEND_ITEMS: Array<{ key: InclusionMode; label: string; colorVar: string }> = [
-  { key: "pin", label: "Pin", colorVar: "var(--xray-pin)" },
-  { key: "focus", label: "Focus", colorVar: "var(--xray-focus)" },
-  { key: "full", label: "Full", colorVar: "var(--xray-full)" },
-  { key: "summary", label: "Summary", colorVar: "var(--xray-summary)" },
-  { key: "loophole", label: "Loophole", colorVar: "var(--xray-loophole)" },
-  { key: "reference", label: "Reference", colorVar: "var(--xray-reference)" },
+const LEGEND_ITEMS: Array<{
+  key: InclusionMode;
+  label: string;
+  colorVar: string;
+  hint: string;
+}> = [
+  { key: "pin", label: "Pin", colorVar: "var(--xray-pin)", hint: "Always sent to AI in full" },
+  { key: "focus", label: "Focus", colorVar: "var(--xray-focus)", hint: "Selected node(s) sent in full" },
+  { key: "full", label: "Full", colorVar: "var(--xray-full)", hint: "Linked context sent in full" },
+  { key: "summary", label: "Summary", colorVar: "var(--xray-summary)", hint: "Neighbor nodes compressed to summary" },
+  { key: "loophole", label: "Loophole", colorVar: "var(--xray-loophole)", hint: "Open risks attached to context" },
+  { key: "reference", label: "Reference", colorVar: "var(--xray-reference)", hint: "Linked cross-flow references" },
 ];
 
 export function buildBrowserFallbackXray(targets: string[], budget: number): CompiledXray {
@@ -219,7 +224,7 @@ export function XrayHud() {
           const count = modeCounts[item.key];
           const tokens = xray.mode_tokens?.[item.key];
           return (
-            <span key={item.key} class="xray-hud__legend-item xray-hud__chip">
+            <span key={item.key} class="xray-hud__legend-item xray-hud__chip" title={item.hint}>
               <span class="xray-hud__dot" style={{ backgroundColor: item.colorVar }} />
               <span>{item.label}</span>
               <span class="xray-hud__chip-meta">

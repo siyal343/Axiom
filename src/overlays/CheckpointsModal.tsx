@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { clampZoom } from "../canvas/camera";
 import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
 import {
@@ -31,6 +31,7 @@ import {
   selectSingle,
 } from "../store/selection";
 import { pushToast } from "./ToastStack";
+import { useDialogFocusTrap } from "./useDialogFocusTrap";
 
 function formatCheckpointDate(tsRaw: number): string {
   const tsMs = tsRaw < 1e12 ? tsRaw * 1000 : tsRaw;
@@ -141,6 +142,8 @@ function renderDiffSection(
 export function CheckpointsModal() {
   const isOpen = checkpointsModalOpen.value;
   const desktopRuntime = isTauriRuntime();
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocusTrap(isOpen, modalRef);
 
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([]);
   const [name, setName] = useState("");
@@ -285,6 +288,8 @@ export function CheckpointsModal() {
       }}
     >
       <div
+        ref={modalRef}
+        tabIndex={-1}
         class="settings-modal artifact-modal"
         role="dialog"
         aria-modal="true"
@@ -296,7 +301,7 @@ export function CheckpointsModal() {
           <h2 class="settings-modal__title">Checkpoints &amp; Graph Diff</h2>
           <button
             type="button"
-            class="settings-btn settings-btn--secondary"
+            class="settings-btn settings-btn--secondary settings-modal__close"
             onClick={() => closeCheckpointsModal()}
           >
             Close (Esc)
@@ -330,7 +335,7 @@ export function CheckpointsModal() {
                 <input
                   type="text"
                   class="settings-input"
-                  placeholder="Milestone name (e.g. Before Raft refactor)"
+                  placeholder="Milestone name (e.g., Before consensus redesign)"
                   value={name}
                   disabled={!desktopRuntime || saving}
                   onInput={(e) => setName(e.currentTarget.value)}

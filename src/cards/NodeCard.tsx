@@ -218,7 +218,7 @@ export function NodeCard({ node }: NodeCardProps) {
               `${change.reason === "deleted" ? "Deleted" : "Modified"}: ${change.title || change.node_id}`,
           )
           .join(", ")}`
-      : "Upstream inputs changed";
+      : "Upstream inputs changed — click to review or re-run";
 
   return (
     <article

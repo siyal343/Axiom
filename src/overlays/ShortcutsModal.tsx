@@ -1,5 +1,6 @@
-import { useEffect } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 import { shortcutsHelpOpen } from "../store/selection";
+import { useDialogFocusTrap } from "./useDialogFocusTrap";
 
 interface ShortcutRow {
   keys: string;
@@ -78,6 +79,8 @@ function ShortcutSection({ title, rows }: { title: string; rows: ShortcutRow[] }
 
 export function ShortcutsModal() {
   const isOpen = shortcutsHelpOpen.value;
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocusTrap(isOpen, modalRef);
 
   useEffect(() => {
     if (!isOpen) {
@@ -110,6 +113,8 @@ export function ShortcutsModal() {
       }}
     >
       <div
+        ref={modalRef}
+        tabIndex={-1}
         class="settings-modal shortcuts-modal"
         role="dialog"
         aria-modal="true"
@@ -120,7 +125,7 @@ export function ShortcutsModal() {
           <h2 class="settings-modal__title">Keyboard Shortcuts</h2>
           <button
             type="button"
-            class="settings-btn settings-btn--secondary"
+            class="settings-btn settings-btn--secondary settings-modal__close"
             onClick={() => {
               shortcutsHelpOpen.value = false;
             }}

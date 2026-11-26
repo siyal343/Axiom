@@ -10,6 +10,7 @@ import {
   activeRunLens,
   activeRunStatus,
   closeSettingsModal,
+  settingsActiveTab,
   settingsModalOpen,
 } from "../../store/aiRunner";
 import { loadSnapshot, theme } from "../../store/graphStore";
@@ -195,6 +196,7 @@ describe("v0.4 Workbench Integration: CommandPalette, Keymap, NodeContextMenu", 
     await flushUi();
 
     expect(settingsModalOpen.value).toBe(true);
+    expect(settingsActiveTab.value).toBe("prompt_lenses");
     closeSettingsModal();
 
     // 4. @ mode dynamically updates when customLensesSignal changes

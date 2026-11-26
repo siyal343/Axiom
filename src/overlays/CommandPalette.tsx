@@ -279,7 +279,7 @@ function buildPaletteCommands(onFilterStale: () => void): PaletteCommand[] {
       keywords: "system prompt instructions flow ai settings",
       badge: "AI",
       run: () => {
-        openSettingsModal();
+        openSettingsModal("prompt_lenses");
       },
     },
     {
@@ -309,7 +309,7 @@ function buildPaletteCommands(onFilterStale: () => void): PaletteCommand[] {
       keywords: "custom lenses tags prompt template settings @tag",
       badge: "AI",
       run: () => {
-        openSettingsModal();
+        openSettingsModal("prompt_lenses");
       },
     },
     {
@@ -375,7 +375,12 @@ function buildPaletteCommands(onFilterStale: () => void): PaletteCommand[] {
     });
   }
 
-  return base;
+  const seen = new Set<string>();
+  return base.filter((cmd) => {
+    if (seen.has(cmd.id)) return false;
+    seen.add(cmd.id);
+    return true;
+  });
 }
 
 function matchesFuzzySubsequence(text: string, needle: string): boolean {
@@ -830,6 +835,7 @@ export function CommandPalette() {
           ref={inputRef}
           type="text"
           class="command-palette__input"
+          aria-label="Search nodes, commands, or actions"
           placeholder="Search nodes, type > for commands, or @ for AI/Study actions..."
           value={query}
           onInput={(e) => {

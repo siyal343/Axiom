@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { BBox } from "rbush";
 import { computeFitTransform } from "../canvas/camera";
 import { getEffectiveNodeHeight } from "../canvas/spatialIndex";
@@ -20,6 +20,7 @@ import {
   selectSingle,
 } from "../store/selection";
 import { pushToast } from "./ToastStack";
+import { useDialogFocusTrap } from "./useDialogFocusTrap";
 
 function countAtxHeadings(markdown: string): number {
   const lines = markdown.split(/\r?\n/);
@@ -61,6 +62,8 @@ export function OutlineImportModal() {
   const currentFocusId = focusId.value;
   const focusedNode = currentFocusId ? nodesMap.get(currentFocusId) : undefined;
   const desktopRuntime = isTauriRuntime();
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocusTrap(isOpen, modalRef);
 
   const [markdown, setMarkdown] = useState("");
   const [attachToFocus, setAttachToFocus] = useState<boolean>(Boolean(currentFocusId));
@@ -181,6 +184,8 @@ export function OutlineImportModal() {
       }}
     >
       <div
+        ref={modalRef}
+        tabIndex={-1}
         class="settings-modal artifact-modal"
         role="dialog"
         aria-modal="true"
@@ -192,7 +197,7 @@ export function OutlineImportModal() {
           <h2 class="settings-modal__title">Import Markdown Outline</h2>
           <button
             type="button"
-            class="settings-btn settings-btn--secondary"
+            class="settings-btn settings-btn--secondary settings-modal__close"
             onClick={() => closeOutlineImportModal()}
           >
             Close (Esc)

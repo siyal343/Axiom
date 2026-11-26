@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-26  
 **Scope:** Canvas2D Theme Palette Synchronization Fix, SM-2 Study & Active Recall Studio (`study_cards`, `graph::study`, `StudyDeckModal`), Spatial Canvas Groups / Regions (`canvas_groups`, `CanvasGroupDto`, `[GROUP: ...]` context annotations), and Schema v4 Migration  
-**Status:** Implemented in source and test suites; verification gates pending execution (see Section 6).
+**Status:** Implemented in source and test suites; CI & live browser verification gates pending execution (see Section 7).
 
 ---
 
@@ -63,6 +63,7 @@ In prior builds, switching themes could leave Canvas2D reading stale CSS variabl
 - **Modal UX & Entry Points (`src/overlays/StudyDeckModal.tsx`, `src/input/keymap.ts`, `src/App.tsx`, `src/overlays/NodeContextMenu.tsx`, `src/overlays/CommandPalette.tsx`):**
   - Uses native `<dialog class="study-dialog" closedby="any" aria-labelledby="study-dialog-title">` with a pointer-outside light-dismiss fallback when `"closedBy" in HTMLDialogElement.prototype` is unavailable.
   - Renders Markdown, fenced code blocks, and KaTeX math through `renderMarkdownToSanitizedHtml` (DOMPurify-sanitized) on both prompt and revealed answer faces.
+  - In the empty state (`!activeCard && !loading`), hides the header **+ New Card** button so **+ Create Flashcard** is the single empty-state CTA; pressing `Esc` closes an open `studyCreateFormOpen` draft form first before closing the dialog.
   - Keyboard controls inside the modal: `Space` or `Enter` reveals the answer, `1`–`4` grades `Again` / `Hard` / `Good` / `Easy` (showing `formatIntervalPreview` durations), `J` jumps to `activeCard.node_id` and animates the camera (`clampZoom(Math.max(cam.zoom, 0.85))`), and `Esc` closes the dialog.
   - Entry points: `Shift+Q` in Navigate Mode, **Study** button in `.canvas-controls` with live `.study-due-pill` due badge, **Add Study Card** and **Study Deck (`Shift+Q`)** in `NodeContextMenu`, and **> Study & Recall Drill (Shift+Q)** in `CommandPalette`.
 
@@ -86,8 +87,8 @@ In prior builds, switching themes could leave Canvas2D reading stale CSS variabl
 
 - **O(1) Empty Skip & Bounds (`src/canvas/renderer2d.ts`):**
   - Pass `2.5` in `renderCanvas2d` checks `groupCount > 0` before iterating, preserving the 500-node render budget when no groups exist.
-  - `computeGroupBounds(group, sceneRects)` wraps live member rectangles (accounting for `dragOffsets` and `resizeSizes`) with `GROUP_PADDING = 26` and `GROUP_TOP_HEADER = 38`, culls off-screen groups against `minEdgeVx..maxEdgeVy`, draws the tinted dashed/solid rounded region, and draws the header chip `<title> · <memberCount>` when `cam.zoom >= 0.2`.
-  - `hitTestGroupHeader(scenePoint, groups, sceneRects, zoom)` tests the top header band in reverse order (topmost group first) with a zoom-scaled vertical tolerance (`padY = Math.min(10, 4 / Math.max(0.25, zoom))`).
+  - `computeGroupBounds(group, sceneRects)` wraps live member rectangles (accounting for `dragOffsets` and `resizeSizes`) with `GROUP_PADDING = 26` and `GROUP_TOP_HEADER = 38`, culls off-screen groups against `minEdgeVx..maxEdgeVy`, draws the tinted dashed/solid rounded region, and positions the header chip `<title> · <memberCount>` via `resolveGroupChipRect` (cascading colliding chips horizontally within `maxRightX`, or stepping upward when constrained) when `cam.zoom >= 0.2`.
+  - `hitTestGroupHeader(scenePoint, groups, sceneRects, zoom)` runs `resolveGroupChipRect` in the same order and tests cascaded chip rectangles first before testing header bands in reverse order (topmost group first) with zoom-scaled tolerances (`padX = Math.min(8, 3 / Math.max(0.25, zoom))`, `padY = Math.min(10, 4 / Math.max(0.25, zoom))`).
 - **Decoupled Group Dragging (`src/canvas/pointer.ts`):**
   - Hovering a group header sets `hoveredGroupId` and switches the cursor to `grab`.
   - Clicking a group header selects all live member nodes, sets `selectedGroupId`, and starts a `node_drag` gesture with `groupId: hitGroup.id`.
@@ -105,7 +106,9 @@ In prior builds, switching themes could leave Canvas2D reading stale CSS variabl
 ### 4.4 Schema v4 JSON Export/Import & Checkpoints Compatibility (`json_io.rs`, `checkpoints.rs`)
 
 - **`AxiomWorkspaceJson` (`src-tauri/src/db/json_io.rs`):** Adds `#[serde(default)] pub groups: Vec<CanvasGroupDto>` and `#[serde(default)] pub study_cards: Vec<StudyCardDto>`, keeping `version = 1` and `format = "axiom-workspace"` so legacy v3 JSON exports without those fields deserialize and import cleanly.
-- **`CheckpointPayload` (`src-tauri/src/graph/checkpoints.rs`):** Adds `#[serde(default)] pub groups: Vec<CanvasGroupDto>` so checkpoints created on v4 persist and restore `canvas_groups` alongside nodes and edges while v3 checkpoints restore with `groups = []`.
+- **`CheckpointPayload` (`src-tauri/src/graph/checkpoints.rs`):**
+  - Adds `#[serde(default)] pub groups: Vec<CanvasGroupDto>` and `#[serde(default)] pub study_cards: Vec<StudyCardDto>` (populated via `db_list_study_cards(conn, None)` during `create_checkpoint`).
+  - During `restore_checkpoint`, clears `study_cards`, `canvas_groups`, `edges`, and `nodes` inside `TransactionBehavior::Immediate`, tracks `restored_node_ids`, and restores each `StudyCardDto` via `insert_study_card_tx` whenever `card.node_id` is `None` (standalone) or present in `restored_node_ids`. Legacy pre-v4 or pre-study checkpoints deserialize cleanly with `groups = []` and `study_cards = []`.
 
 ---
 
@@ -118,7 +121,17 @@ In prior builds, switching themes could leave Canvas2D reading stale CSS variabl
 
 ---
 
-## 6. Verification Checklist & Status
+## 6. v0.6.1 UX & UI Polish Pass Summary
+
+A follow-up UI/UX de-bloating, spatial clamping, and accessibility pass (detailed in [UI-UX-AUDIT.md](UI-UX-AUDIT.md#L164)) refined the v0.6 surfaces without altering backend invariants:
+
+- **3-Tab `SettingsModal` (`src/overlays/SettingsModal.tsx`, `src/store/aiRunner.ts`):** Organizes settings into **General** (`"general"`), **Providers & Models** (`"providers"`), and **Prompt & Lenses** (`"prompt_lenses"`) via `settingsActiveTab` and `openSettingsModal(tab?)`.
+- **Modal Focus Trapping (`src/overlays/useDialogFocusTrap.ts`):** Traps `Tab` / `Shift+Tab` inside `SettingsModal`, `ArtifactExportModal`, `CheckpointsModal`, `DiagnosticsModal`, `OutlineImportModal`, and `ShortcutsModal`, suppresses outer `dialog:focus` / `[role="dialog"]:focus` / `.settings-modal:focus` rings, and restores trigger focus on close.
+- **Chrome Consolidation & Spatial Clamping:** Compacts `NodeContextMenu` (`288px` 2-column action/lens grids + horizontal `Type`/`Severity` chips), hides `.sidebar-toggle-bar` via `.sidebar-toggle-bar--hidden` while the sidebar is open, deduplicates `CommandPalette` / `StudyDeckModal` actions, right-aligns `.hover-pill`, clamps `.multi-select-pill` / `.edge-popover` / `.edge-inspector-pill` against measured bounds, raises bottom pills to `68px`, lifts `ToastStack` via `.toast-stack--above-minimap`, fits `.minimap-card__canvas` (`box-sizing: border-box`), reserves `78px` bottom clearance on `.live-editor-overlay`, and aligns `.spine-breadcrumb__crumb`, `6px` thin scrollbars, `--text-on-accent`, and double-click `onDblClick` hit-testing.
+
+---
+
+## 7. Verification Checklist & Status
 
 ### Statically Implemented Automated Tests
 - **Rust Integration Suite (`src-tauri/tests/v06_suite.rs`, 5 tests implemented):**
@@ -127,18 +140,24 @@ In prior builds, switching themes could leave Canvas2D reading stale CSS variabl
   3. `compiler_annotates_grouped_nodes_with_group_titles`: Verifies deterministic `[GROUP: ...]` header annotations in `compile_context`.
   4. `sm2_scheduler_intervals_and_bounds_for_all_ratings`: Verifies `Again`/`Hard`/`Good`/`Easy` intervals, `lapses`, and `ease_factor` `[1.3, 3.5]` bounds.
   5. `extract_and_sync_study_deck_preserves_sm2_and_cleans_resolved_loopholes`: Verifies `@study` Q:/A: (single & numbered quiz), `@study` fallback, placeholder skipping, `@feynman` 15-char threshold, active loophole extraction, `sync_study_deck` SM-2 state preservation on edits, resolved loophole pruning, `due_only` filtering, and manual card deletion.
-- **TypeScript / Preact Suite (`src/overlays/__tests__/v06StudyAndGroups.test.tsx`, 5 tests implemented):**
+- **TypeScript / Preact Suite (`src/overlays/__tests__/v06StudyAndGroups.test.tsx`, 10 tests implemented):**
   1. `applySm2ReviewLocal` intervals and ease bounds for `again`, `hard`, `good`, and `easy`.
   2. `syncStudyDeckAction` extraction (`@study` Q:/A:, `@feynman`, active `challenges` loophole) and pruning when loopholes resolve.
   3. `StudyDeckModal` `<dialog closedby="any">` attributes, KaTeX answer reveal, `Good` grading update, and `J`/button jump-to-node camera animation.
   4. `computeGroupBounds`, `hitTestGroupHeader`, `createCanvasGroup`, `updateCanvasGroup`, `buildDeleteWithInverse` pruning, `performUndo` restoration, and `deleteCanvasGroup`.
   5. `getPalette` `data-theme` synchronization, `setTheme` DOM update + `markDirty`, and Canvas2D group rendering (`Replication · 2`).
+  6. `offsets overlapping Canvas2D group chips horizontally and hitTestGroupHeader picks the cascaded chip`.
+  7. `supports 3-tab switching in SettingsModal across General, Providers & Models, and Prompt & Lenses`.
+  8. `traps Tab and Shift+Tab inside DiagnosticsModal and CheckpointsModal without leaking to canvas controls`.
+  9. `lifts ToastStack above minimap with toast-stack--above-minimap when minimapOpen is true`.
+  10. `omits duplicate + New Card button in StudyDeckModal empty state and closes form then dialog on Esc`.
 
-### CI / Live Verification Gates Pending Execution
-The following verification commands were **not** executed during this documentation pass and remain pending CI / release-gate execution:
+### CI & Live Browser Verification Gates Pending Execution
+The following verification commands and visual checks were **not** executed for this unpushed v0.6.1 polish commit and remain pending CI & live browser re-verification:
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml`
 - [ ] `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
 - [ ] `npm test -- --run` (Vitest)
 - [ ] `npx tsc --noEmit`
 - [ ] `npm run build`
 - [ ] 500-node stress benchmark (`src/canvas/__tests__/stress500.test.ts`) confirming zero regression with `O(1)` empty-group skip
+- [ ] Live Chromium & Tauri WebView2 visual re-verification of v0.6.1 overlays, focus rings, and theme contrast

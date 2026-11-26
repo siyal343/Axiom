@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { exportMarkdownArtifact, isTauriRuntime, parseIpcError } from "../ipc/client";
 import type { ArtifactFormat, ArtifactScope, CompiledArtifact } from "../ipc/types";
 import { saveMarkdownArtifactToDisk } from "../ipc/workspaceActions";
@@ -12,6 +12,7 @@ import {
   selectedIds,
 } from "../store/selection";
 import { pushToast } from "./ToastStack";
+import { useDialogFocusTrap } from "./useDialogFocusTrap";
 
 const FORMAT_TABS: ReadonlyArray<{ value: ArtifactFormat; label: string }> = [
   { value: "adr", label: "ADR / RFC" },
@@ -41,6 +42,8 @@ export function ArtifactExportModal() {
   const fid = focusId.value;
   const sel = selectedIds.value;
   const selKey = Array.from(sel).join(",");
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocusTrap(isOpen, modalRef);
 
   const [compiled, setCompiled] = useState<CompiledArtifact | null>(null);
   const [loading, setLoading] = useState(false);
@@ -146,6 +149,8 @@ export function ArtifactExportModal() {
       }}
     >
       <div
+        ref={modalRef}
+        tabIndex={-1}
         class="settings-modal artifact-modal"
         role="dialog"
         aria-modal="true"
@@ -157,7 +162,7 @@ export function ArtifactExportModal() {
           <h2 class="settings-modal__title">Export Markdown Artifact</h2>
           <button
             type="button"
-            class="settings-btn settings-btn--secondary"
+            class="settings-btn settings-btn--secondary settings-modal__close"
             onClick={() => closeArtifactExport()}
           >
             Close (Esc)

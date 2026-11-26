@@ -249,6 +249,55 @@ export function computeGroupBounds(
   return { x, y, w, h, headerX, headerY, headerW, headerH, memberCount };
 }
 
+interface PlacedChipRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function rectsOverlap(a: PlacedChipRect, b: PlacedChipRect): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function resolveGroupChipRect(
+  group: CanvasGroupDto,
+  bounds: GroupBounds,
+  placedChips: PlacedChipRect[],
+  measureTextWidth?: (label: string) => number,
+): { chipLabel: string; chipPadX: number; rect: PlacedChipRect } {
+  const chipLabel = `${group.title} · ${bounds.memberCount}`;
+  const chipPadX = 10;
+  const maxChipW = Math.max(60, bounds.w - 20);
+  const measuredW = measureTextWidth ? measureTextWidth(chipLabel) : chipLabel.length * 6.5;
+  const chipW = Math.min(maxChipW, measuredW + chipPadX * 2);
+  const chipH = bounds.headerH;
+  let chipX = bounds.headerX;
+  let chipY = bounds.headerY;
+  const maxRightX = bounds.x + bounds.w - 10;
+
+  let guard = 0;
+  while (guard < placedChips.length + 2) {
+    guard += 1;
+    const candidate: PlacedChipRect = { x: chipX, y: chipY, w: chipW, h: chipH };
+    const hit = placedChips.find((prev) => rectsOverlap(candidate, prev));
+    if (!hit) {
+      break;
+    }
+    const shiftedX = hit.x + hit.w + 8;
+    if (shiftedX + chipW <= maxRightX) {
+      chipX = shiftedX;
+    } else {
+      chipX = bounds.headerX;
+      chipY = hit.y - chipH - 4;
+    }
+  }
+
+  const rect: PlacedChipRect = { x: chipX, y: chipY, w: chipW, h: chipH };
+  placedChips.push(rect);
+  return { chipLabel, chipPadX, rect };
+}
+
 export function hitTestGroupHeader(
   scenePoint: { x: number; y: number },
   groups: ReadonlyMap<string, CanvasGroupDto> | ReadonlyArray<CanvasGroupDto>,
@@ -260,19 +309,45 @@ export function hitTestGroupHeader(
     return null;
   }
   const list = "size" in groups ? Array.from(groups.values()) : groups;
+  const padX = Math.min(8, 3 / Math.max(0.25, zoom));
   const padY = Math.min(10, 4 / Math.max(0.25, zoom));
-  for (let i = list.length - 1; i >= 0; i -= 1) {
-    const group = list[i];
+  const placedChips: PlacedChipRect[] = [];
+  const entries: Array<{ group: CanvasGroupDto; bounds: GroupBounds; chip: PlacedChipRect }> = [];
+
+  for (const group of list) {
     if (!group) continue;
     const bounds = computeGroupBounds(group, sceneRects);
     if (!bounds) continue;
+    const { rect } = resolveGroupChipRect(group, bounds, placedChips);
+    entries.push({ group, bounds, chip: rect });
+  }
+
+  // Prefer hitting the exact cascaded chip pill first so overlapping group headers remain clickable.
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const { chip } = entry;
+    if (
+      scenePoint.x >= chip.x - padX &&
+      scenePoint.x <= chip.x + chip.w + padX &&
+      scenePoint.y >= chip.y - padY &&
+      scenePoint.y <= chip.y + chip.h + padY
+    ) {
+      return entry.group;
+    }
+  }
+
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const { bounds } = entry;
     if (
       scenePoint.x >= bounds.x &&
       scenePoint.x <= bounds.x + bounds.w &&
       scenePoint.y >= bounds.y - padY &&
       scenePoint.y <= bounds.y + GROUP_TOP_HEADER + padY * 0.5
     ) {
-      return group;
+      return entry.group;
     }
   }
   return null;
@@ -820,6 +895,7 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
   if (groups && groupCount > 0) {
     const groupIter = "size" in groups ? groups.values() : groups;
     const isLightTheme = themeKey === "light";
+    const placedChips: PlacedChipRect[] = [];
     for (const group of groupIter) {
       const bounds = computeGroupBounds(group, sceneRects);
       if (!bounds) {
@@ -857,18 +933,14 @@ export function renderCanvas2d(ctx: CanvasRenderingContext2D, scene: RenderScene
       ctx.setLineDash([]);
 
       if (cam.zoom >= 0.2) {
-        const chipLabel = `${group.title} · ${bounds.memberCount}`;
         ctx.font = "600 11.5px Inter, sans-serif";
-        const measuredW =
-          typeof ctx.measureText === "function"
-            ? ctx.measureText(chipLabel).width
-            : chipLabel.length * 6.5;
-        const chipPadX = 10;
-        const maxChipW = Math.max(60, bounds.w - 20);
-        const chipW = Math.min(maxChipW, measuredW + chipPadX * 2);
-        const chipH = bounds.headerH;
-        const chipX = bounds.headerX;
-        const chipY = bounds.headerY;
+        const { chipLabel, chipPadX, rect: chipRect } = resolveGroupChipRect(
+          group,
+          bounds,
+          placedChips,
+          typeof ctx.measureText === "function" ? (lbl) => ctx.measureText(lbl).width : undefined,
+        );
+        const { x: chipX, y: chipY, w: chipW, h: chipH } = chipRect;
 
         drawRoundedRectPath(ctx, chipX, chipY, chipW, chipH, 13);
         ctx.fillStyle = isSelectedGroup

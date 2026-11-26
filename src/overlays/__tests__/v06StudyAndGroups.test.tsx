@@ -30,18 +30,34 @@ import {
   updateCanvasGroup,
 } from "../../store/graphStore";
 import { buildDeleteWithInverse, graphHistory, syncHistorySignals } from "../../store/history";
-import { clearSelection, focusId, modalState, selectedIds, xrayState } from "../../store/selection";
+import {
+  clearSelection,
+  closeCheckpointsModal,
+  closeDiagnosticsModal,
+  focusId,
+  minimapOpen,
+  modalState,
+  openCheckpointsModal,
+  openDiagnosticsModal,
+  selectedIds,
+  xrayState,
+} from "../../store/selection";
+import { closeSettingsModal, openSettingsModal } from "../../store/aiRunner";
 import {
   applySm2ReviewLocal,
   closeStudyModal,
   dueStudyCount,
   openStudyModal,
   studyCards,
+  studyCreateFormOpen,
   studyScope,
   syncStudyDeckAction,
 } from "../../store/studyStore";
+import { CheckpointsModal } from "../CheckpointsModal";
+import { DiagnosticsModal } from "../DiagnosticsModal";
+import { SettingsModal } from "../SettingsModal";
 import { StudyDeckModal } from "../StudyDeckModal";
-import { toastsSignal } from "../ToastStack";
+import { pushToast, ToastStack, toastsSignal } from "../ToastStack";
 
 function makeNode(
   id: string,
@@ -127,9 +143,11 @@ function makeStudyCard(overrides: Partial<StudyCardDto> = {}): StudyCardDto {
 function createMockCanvasContext(): {
   ctx: CanvasRenderingContext2D;
   fillTextCalls: string[];
+  fillTextPositions: Array<{ text: string; x: number; y: number }>;
 } {
   const noop = (): void => {};
   const fillTextCalls: string[] = [];
+  const fillTextPositions: Array<{ text: string; x: number; y: number }> = [];
   const mock = {
     fillStyle: "#000000",
     strokeStyle: "#000000",
@@ -159,13 +177,15 @@ function createMockCanvasContext(): {
     stroke: noop,
     fillRect: noop,
     strokeRect: noop,
-    fillText: (text: string) => {
+    fillText: (text: string, x: number, y: number) => {
       fillTextCalls.push(text);
+      fillTextPositions.push({ text, x, y });
     },
   };
   return {
     ctx: mock as unknown as CanvasRenderingContext2D,
     fillTextCalls,
+    fillTextPositions,
   };
 }
 
@@ -190,7 +210,12 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
     selectedGroupId.value = null;
     studyCards.value = [];
     studyScope.value = "due";
+    studyCreateFormOpen.value = false;
+    minimapOpen.value = false;
     closeStudyModal();
+    closeSettingsModal();
+    closeDiagnosticsModal();
+    closeCheckpointsModal();
     clearSelection();
     xrayState.value = null;
     modalState.value = "navigate";
@@ -204,7 +229,12 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
   });
 
   afterEach(() => {
+    minimapOpen.value = false;
+    studyCreateFormOpen.value = false;
     closeStudyModal();
+    closeSettingsModal();
+    closeDiagnosticsModal();
+    closeCheckpointsModal();
     render(null, container);
     container.remove();
     nodesMap.clear();
@@ -486,5 +516,203 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
     });
 
     expect(fillTextCalls.some((label) => label.includes("Replication · 2"))).toBe(true);
+  });
+
+  it("offsets overlapping Canvas2D group chips horizontally and hitTestGroupHeader picks the cascaded chip", async () => {
+    loadSnapshot({
+      path: "memory://overlapping-groups",
+      nodes: [
+        makeNode("n1", { title: "Alpha", x: 100, y: 100 }),
+        makeNode("n2", { title: "Beta", x: 460, y: 100 }),
+      ],
+      edges: [],
+      camera: { x: 0, y: 0, zoom: 1, last_focus_id: "n1" },
+      token_budget: 6000,
+    });
+
+    const g1 = await createCanvasGroup(["n1", "n2"], "Consensus", "emerald");
+    const g2 = await createCanvasGroup(["n1", "n2"], "Quorum", "cobalt");
+    expect(g1).not.toBeNull();
+    expect(g2).not.toBeNull();
+    if (!g1 || !g2) return;
+
+    const { ctx, fillTextPositions } = createMockCanvasContext();
+    renderCanvas2d(ctx, {
+      cam: { x: 0, y: 0, zoom: 1, last_focus_id: "n1" },
+      width: 1280,
+      height: 800,
+      nodes: nodesMap,
+      edges: edgesMap,
+      dragOffsets,
+      resizeSizes,
+      selectedIds: selectedIds.value,
+      focusId: focusId.value,
+      xrayState: null,
+      unresolvedLoopholes: unresolvedLoopholes.value,
+      marqueeWorld: null,
+      edgePreviewWorld: null,
+      groups: groupsMap.value,
+      selectedGroupId: selectedGroupId.value,
+      themeKey: "dark",
+    });
+
+    const firstChip = fillTextPositions.find((p) => p.text === "Consensus · 2");
+    const secondChip = fillTextPositions.find((p) => p.text === "Quorum · 2");
+    expect(firstChip).toBeDefined();
+    expect(secondChip).toBeDefined();
+    if (!firstChip || !secondChip) return;
+
+    expect(secondChip.x).toBeGreaterThan(firstChip.x + 40);
+
+    const rects = buildSceneRects(nodesMap, dragOffsets, resizeSizes);
+    const hitFirst = hitTestGroupHeader({ x: firstChip.x + 8, y: firstChip.y }, groupsMap.value, rects, 1.0);
+    const hitSecond = hitTestGroupHeader({ x: secondChip.x + 8, y: secondChip.y }, groupsMap.value, rects, 1.0);
+    expect(hitFirst?.id).toBe(g1.id);
+    expect(hitSecond?.id).toBe(g2.id);
+  });
+
+  it("supports 3-tab switching in SettingsModal across General, Providers & Models, and Prompt & Lenses", async () => {
+    render(<SettingsModal />, container);
+    openSettingsModal();
+    await flushUi();
+
+    const getTabs = (): HTMLButtonElement[] =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('.settings-modal__tabs [role="tab"]'));
+
+    expect(getTabs().map((t) => t.textContent?.trim())).toEqual([
+      "General",
+      "Providers & Models",
+      "Prompt & Lenses",
+    ]);
+    expect(getTabs()[0]?.getAttribute("aria-selected")).toBe("true");
+    expect(container.textContent).toContain("Autosaves 1.5s after edits");
+    expect(container.textContent).toContain("Animate connection flow along edges");
+    expect(container.querySelector(".settings-textarea")).toBeNull();
+
+    getTabs()[1]?.click();
+    await flushUi();
+    expect(getTabs()[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(container.textContent).toContain("Reasoning Tier (AI Lenses)");
+    expect(container.textContent).toContain("Utility Tier (Background Summaries)");
+
+    getTabs()[2]?.click();
+    await flushUi();
+    expect(getTabs()[2]?.getAttribute("aria-selected")).toBe("true");
+    expect(container.querySelector(".settings-textarea")).not.toBeNull();
+    expect(container.textContent).toContain("Custom Lenses (@tags)");
+  });
+
+  it("traps Tab and Shift+Tab inside DiagnosticsModal and CheckpointsModal without leaking to canvas controls", async () => {
+    const outsideBtn = document.createElement("button");
+    outsideBtn.className = "canvas-controls__btn";
+    outsideBtn.textContent = "Zoom";
+    document.body.appendChild(outsideBtn);
+
+    try {
+      render(
+        <>
+          <DiagnosticsModal />
+          <CheckpointsModal />
+        </>,
+        container,
+      );
+
+      outsideBtn.focus();
+      openDiagnosticsModal();
+      await flushUi();
+
+      const diagDialog = container.querySelector<HTMLElement>('[aria-label="Graph Health Diagnostics"]');
+      expect(diagDialog).not.toBeNull();
+      expect(diagDialog?.contains(document.activeElement)).toBe(true);
+
+      const diagButtons = Array.from(
+        diagDialog?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [],
+      );
+      expect(diagButtons.length).toBeGreaterThanOrEqual(2);
+      const diagFirst = diagButtons[0]!;
+      const diagLast = diagButtons[diagButtons.length - 1]!;
+
+      diagLast.focus();
+      const wrapForward = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+      window.dispatchEvent(wrapForward);
+      expect(wrapForward.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(diagFirst);
+
+      const wrapBackward = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      window.dispatchEvent(wrapBackward);
+      expect(wrapBackward.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(diagLast);
+
+      closeDiagnosticsModal();
+      await flushUi();
+      expect(document.activeElement).toBe(outsideBtn);
+
+      openCheckpointsModal();
+      await flushUi();
+      const cpDialog = container.querySelector<HTMLElement>('[aria-label="Checkpoints & Graph Diff"]');
+      expect(cpDialog).not.toBeNull();
+      expect(cpDialog?.contains(document.activeElement)).toBe(true);
+
+      const cpFocusables = Array.from(
+        cpDialog?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)") ?? [],
+      );
+      expect(cpFocusables.length).toBeGreaterThanOrEqual(1);
+      cpFocusables[cpFocusables.length - 1]?.focus();
+      const cpWrap = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+      window.dispatchEvent(cpWrap);
+      expect(cpWrap.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(cpFocusables[0]);
+    } finally {
+      outsideBtn.remove();
+    }
+  });
+
+  it("lifts ToastStack above minimap with toast-stack--above-minimap when minimapOpen is true", async () => {
+    render(<ToastStack />, container);
+    pushToast("Saved workspace", "info");
+    await flushUi();
+
+    const stack = container.querySelector<HTMLElement>(".toast-stack");
+    expect(stack).not.toBeNull();
+    expect(stack?.classList.contains("toast-stack--above-minimap")).toBe(false);
+
+    minimapOpen.value = true;
+    await flushUi();
+    expect(stack?.classList.contains("toast-stack--above-minimap")).toBe(true);
+
+    minimapOpen.value = false;
+    await flushUi();
+    expect(stack?.classList.contains("toast-stack--above-minimap")).toBe(false);
+  });
+
+  it("omits duplicate + New Card button in StudyDeckModal empty state and closes form then dialog on Esc", async () => {
+    render(<StudyDeckModal />, container);
+    await openStudyModal("due", null);
+    await flushUi();
+
+    expect(container.querySelector(".study-dialog__header-actions")?.textContent).not.toContain(
+      "+ New Card",
+    );
+    const createCta = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (b) => b.textContent?.includes("+ Create Flashcard"),
+    );
+    expect(createCta).toBeDefined();
+    createCta?.click();
+    await flushUi();
+
+    expect(studyCreateFormOpen.value).toBe(true);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await flushUi();
+    expect(studyCreateFormOpen.value).toBe(false);
+    expect(container.querySelector("dialog.study-dialog[open]")).not.toBeNull();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await flushUi();
+    expect(container.querySelector("dialog.study-dialog[open]")).toBeNull();
   });
 });

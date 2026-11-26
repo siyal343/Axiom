@@ -149,12 +149,25 @@ function clampOverlayPoint(
   rawY: number,
   viewportWidth: number,
   viewportHeight: number,
+  el?: HTMLElement | null,
+  fallbackHalfWidth = 280,
+  fallbackHeight = 40,
 ): { x: number; y: number } {
-  const maxX = Math.max(64, viewportWidth - 64);
-  const maxY = Math.max(48, viewportHeight - 64);
+  const measuredW = el?.offsetWidth ?? 0;
+  const measuredH = el?.offsetHeight ?? 0;
+  const halfW = measuredW > 0 ? measuredW * 0.5 : Math.min(fallbackHalfWidth, viewportWidth * 0.45);
+  const pillH = measuredH > 0 ? measuredH : fallbackHeight;
+  const minX = halfW + 16;
+  const maxX = viewportWidth - halfW - 16;
+  const x =
+    minX >= maxX
+      ? Math.round(viewportWidth * 0.5)
+      : Math.round(Math.max(minX, Math.min(maxX, rawX)));
+  const minY = 60 + pillH;
+  const maxY = Math.max(minY, viewportHeight - 78);
   return {
-    x: Math.max(64, Math.min(maxX, rawX)),
-    y: Math.max(48, Math.min(maxY, rawY)),
+    x,
+    y: Math.round(Math.max(minY, Math.min(maxY, rawY))),
   };
 }
 
@@ -294,7 +307,7 @@ export function App() {
         const anchor = computeMultiPillWorldAnchor(selectedIds.value);
         if (anchor) {
           const pt = worldToScreen(anchor.x, anchor.y, cam);
-          const clamped = clampOverlayPoint(pt.x, pt.y - 12, vw, vh);
+          const clamped = clampOverlayPoint(pt.x, pt.y - 12, vw, vh, multiEl, 280, 40);
           multiEl.style.transform = `translate3d(${clamped.x}px, ${clamped.y}px, 0) translate(-50%, -100%)`;
         }
       }
@@ -304,7 +317,7 @@ export function App() {
       if (popEl && pop) {
         const worldAnchor = edgePopoverWorldRef.current ?? screenToWorld(pop.x, pop.y, cam);
         const pt = worldToScreen(worldAnchor.x, worldAnchor.y, cam);
-        const clamped = clampOverlayPoint(pt.x, pt.y, vw, vh);
+        const clamped = clampOverlayPoint(pt.x, pt.y, vw, vh, popEl, 250, 38);
         popEl.style.transform = `translate3d(${clamped.x}px, ${clamped.y}px, 0) translate(-50%, -100%)`;
       }
     };
@@ -650,6 +663,9 @@ export function App() {
         screenPt.y - 12,
         viewportSize.width,
         viewportSize.height,
+        multiPillRef.current,
+        280,
+        40,
       );
     }
   }
@@ -660,6 +676,9 @@ export function App() {
         activePopover.y,
         viewportSize.width,
         viewportSize.height,
+        edgePopoverRef.current,
+        250,
+        38,
       )
     : null;
 
@@ -884,15 +903,19 @@ export function App() {
           <button
             type="button"
             class="multi-select-pill__btn"
+            title="Synthesize selected nodes (A S)"
+            aria-label="Synthesize selected nodes"
             onClick={() => {
               void triggerLens("synthesize");
             }}
           >
-            Synthesize (A S)
+            Synthesize
           </button>
           <button
             type="button"
             class="multi-select-pill__btn"
+            title="Group selected nodes (G)"
+            aria-label="Group selected nodes"
             onClick={() => {
               void createCanvasGroup().catch(notifyIpcError);
             }}
@@ -902,30 +925,38 @@ export function App() {
           <button
             type="button"
             class="multi-select-pill__btn"
+            title="Pin selected nodes to global AI context (P)"
+            aria-label="Pin selected nodes"
             onClick={() => handleBulkMetaToggle("pin")}
           >
-            Pin (P)
+            Pin
           </button>
           <button
             type="button"
             class="multi-select-pill__btn"
+            title="Exclude selected nodes from AI context (X)"
+            aria-label="Exclude selected nodes"
             onClick={() => handleBulkMetaToggle("exclude")}
           >
-            Exclude (X)
+            Exclude
           </button>
           <button
             type="button"
             class="multi-select-pill__btn"
+            title="Fold or unfold selected nodes (C)"
+            aria-label="Fold selected nodes"
             onClick={() => handleBulkMetaToggle("fold")}
           >
-            Fold (C)
+            Fold
           </button>
           <button
             type="button"
             class="multi-select-pill__btn"
+            title="Zoom to fit selected nodes (F)"
+            aria-label="Fit selected nodes"
             onClick={() => fitNodeIds(currentSelected)}
           >
-            Fit (F)
+            Fit
           </button>
           <button
             type="button"
@@ -934,7 +965,7 @@ export function App() {
             aria-label="Align left"
             onClick={() => handleAlign("left")}
           >
-            ⫢ L
+            ⫢
           </button>
           <button
             type="button"
@@ -943,7 +974,7 @@ export function App() {
             aria-label="Align top"
             onClick={() => handleAlign("top")}
           >
-            ⊤ T
+            ⊤
           </button>
           {currentSelected.size >= 3 && (
             <>
@@ -954,7 +985,7 @@ export function App() {
                 aria-label="Distribute horizontally"
                 onClick={() => handleAlign("distribute_h")}
               >
-                ⫦ H
+                ⫦
               </button>
               <button
                 type="button"
@@ -963,13 +994,15 @@ export function App() {
                 aria-label="Distribute vertically"
                 onClick={() => handleAlign("distribute_v")}
               >
-                ⫧ V
+                ⫧
               </button>
             </>
           )}
           <button
             type="button"
             class="multi-select-pill__btn multi-select-pill__btn--danger"
+            title="Delete selected nodes (Del)"
+            aria-label="Delete selected nodes"
             onClick={handleBulkDelete}
           >
             Delete

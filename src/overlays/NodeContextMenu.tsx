@@ -420,7 +420,7 @@ export function NodeContextMenu() {
       style={{ left: `${coords.left}px`, top: `${coords.top}px` }}
       onKeyDown={handleMenuKeyDown}
     >
-      <div class="node-context-menu__group">
+      <div class="node-context-menu__group node-context-menu__group--grid">
         <button type="button" role="menuitem" class="node-context-menu__item" onClick={handleEdit}>
           <span>Edit</span>
           <kbd>Enter</kbd>
@@ -429,9 +429,10 @@ export function NodeContextMenu() {
           type="button"
           role="menuitem"
           class="node-context-menu__item"
-          onClick={handleCopyText}
+          onClick={handleAddChild}
         >
-          <span>Copy Text</span>
+          <span>Add Child</span>
+          <kbd>Tab</kbd>
         </button>
         <button
           type="button"
@@ -445,11 +446,13 @@ export function NodeContextMenu() {
           type="button"
           role="menuitem"
           class="node-context-menu__item"
-          onClick={handleAddChild}
+          onClick={handleCopyText}
         >
-          <span>Add Child</span>
-          <kbd>Tab</kbd>
+          <span>Copy Text</span>
         </button>
+      </div>
+
+      <div class="node-context-menu__group">
         <button
           type="button"
           role="menuitem"
@@ -483,23 +486,25 @@ export function NodeContextMenu() {
           <span>{isSpotlightRoot ? "Exit Focus Spotlight" : "Focus Spotlight"}</span>
           <kbd>Shift+F</kbd>
         </button>
-        <button
-          type="button"
-          role="menuitem"
-          class="node-context-menu__item"
-          onClick={handleAddStudyCard}
-        >
-          <span>Add Study Card</span>
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          class="node-context-menu__item"
-          onClick={handleOpenStudyDeck}
-        >
-          <span>Study Deck</span>
-          <kbd>Shift+Q</kbd>
-        </button>
+        <div class="node-context-menu__group--grid">
+          <button
+            type="button"
+            role="menuitem"
+            class="node-context-menu__item"
+            onClick={handleAddStudyCard}
+          >
+            <span>Add Study Card</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="node-context-menu__item"
+            onClick={handleOpenStudyDeck}
+          >
+            <span>Study Deck</span>
+            <kbd>Shift+Q</kbd>
+          </button>
+        </div>
         {extRefInfo && (
           <>
             <button
@@ -604,7 +609,7 @@ export function NodeContextMenu() {
 
       <div class="node-context-menu__divider" role="separator" />
 
-      <div class="node-context-menu__group">
+      <div class="node-context-menu__group node-context-menu__group--grid">
         <button
           type="button"
           role="menuitem"
@@ -719,19 +724,23 @@ export function NodeContextMenu() {
 
       <div class="node-context-menu__divider" role="separator" />
 
-      <div class="node-context-menu__group">
-        {ACTION_TAGS.map((def) => (
-          <button
-            key={def.tag}
-            type="button"
-            role="menuitem"
-            class="node-context-menu__item"
-            onClick={() => handleActionTag(def)}
-          >
-            <span>{def.label}</span>
-            <kbd>{def.tag}</kbd>
-          </button>
-        ))}
+      <div class="node-context-menu__section">
+        <span class="node-context-menu__section-label">AI Lenses</span>
+        <div class="node-context-menu__lens-grid">
+          {ACTION_TAGS.map((def) => (
+            <button
+              key={def.tag}
+              type="button"
+              role="menuitem"
+              class="node-context-menu__item node-context-menu__lens-chip"
+              title={def.description}
+              onClick={() => handleActionTag(def)}
+            >
+              <span>{def.label}</span>
+              <kbd>{def.tag}</kbd>
+            </button>
+          ))}
+        </div>
       </div>
 
       {customTags.length > 0 && (
@@ -739,13 +748,14 @@ export function NodeContextMenu() {
           <div class="node-context-menu__divider" role="separator" />
           <div class="node-context-menu__section">
             <span class="node-context-menu__section-label">Custom Lenses</span>
-            <div class="node-context-menu__group">
+            <div class="node-context-menu__lens-grid">
               {customTags.map((def) => (
                 <button
                   key={def.kind === "lens" && def.customLens ? def.customLens.id : def.tag}
                   type="button"
                   role="menuitem"
-                  class="node-context-menu__item"
+                  class="node-context-menu__item node-context-menu__lens-chip"
+                  title={def.description}
                   onClick={() => handleActionTag(def)}
                 >
                   <span>{def.label}</span>

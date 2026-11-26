@@ -61,7 +61,7 @@ function computeOverlayRect(
   const maxLeft =
     typeof window !== "undefined" ? Math.max(16, window.innerWidth - width - 16) : 900;
   const maxTop =
-    typeof window !== "undefined" ? Math.max(16, window.innerHeight - minHeight - 16) : 600;
+    typeof window !== "undefined" ? Math.max(16, window.innerHeight - minHeight - 78) : 600;
   return {
     left: Math.max(16, Math.min(maxLeft, screenPos.x)),
     top: Math.max(16, Math.min(maxTop, screenPos.y)),
@@ -410,7 +410,7 @@ function LiveEditorInstance({
       )}
       <div class="live-editor-overlay__hint">
         <span>
-          Esc save &amp; exit · Ctrl/Cmd+Enter{" "}
+          Esc save &amp; close · Ctrl/Cmd+Enter{" "}
           {detectedTag ? `run ${detectedTag.action.tag}` : "AI lens"}
         </span>
         {detectedTag && (

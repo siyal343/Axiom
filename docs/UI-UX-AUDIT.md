@@ -160,3 +160,67 @@ Axiom's monochrome obsidian canvas (`#0e1013` / `#15181e`), role-encoded left ac
 4. `/impeccable colorize` (Contrast AA, Light Bird's-Eye tokens, `.hljs-*` theme, `color-scheme`/scrollbars, `:focus-visible`)
 5. `/impeccable animate` (Emil Kowalski easing/press table, GPU `translate`/`scaleX`, reduced motion, idle FPS telemetry)
 6. `/impeccable polish` (Final multi-theme verification pass in Chromium + native Tauri desktop window)
+
+---
+
+## 7. v0.6.1 UX & UI Polish Pass (Resolved — 2026-11-26)
+
+Following the initial `v0.1.0` audit and the `v0.6` Study & Spatial Groups release, a focused de-bloating, spatial clamping, and accessibility polish pass resolved the remaining chrome clutter, overlap, focus-trap, and theme-token issues across `src/`.
+
+> **Verification Status:** Source changes and new unit/integration tests in `src/overlays/__tests__/v06StudyAndGroups.test.tsx` (plus tab/routing updates in `v03DiscoveryAndPrompt.test.tsx`, `v04LensesAndTools.test.tsx`, and `v04WorkbenchIntegration.test.tsx`) are implemented in the working tree. Full CI test execution (`cargo test`, `npm test -- --run`, `npx tsc --noEmit`, `npm run build`) and live browser / Tauri WebView2 re-verification remain **pending this commit's run**.
+
+### 7.1 De-Bloating & Chrome Consolidation
+
+- **`SettingsModal` 3-tab layout (`src/overlays/SettingsModal.tsx`, `src/store/aiRunner.ts`, `src/overlays/CommandPalette.tsx`):**
+  - Replaced the single long-scrolling settings form with three `role="tab"` sections (`SETTINGS_TABS`): **General** (`"general"`), **Providers & Models** (`"providers"`), and **Prompt & Lenses** (`"prompt_lenses"`), backed by the `settingsActiveTab` signal and `openSettingsModal(tab?: SettingsTab | Event)`.
+  - **> Edit Flow System Prompt** and **> Manage Custom Lenses (@tags)** in `CommandPalette` now open `SettingsModal` directly on `"prompt_lenses"`, while the shared `Save Settings` / `Cancel` footer saves across all tabs.
+- **Compact `NodeContextMenu` grid & pill rows (`src/overlays/NodeContextMenu.tsx`, `src/styles/theme.css`):**
+  - Widened `.node-context-menu` to `288px` and compacted vertical height by placing primary node actions, study actions, and metadata toggles (`Pin Global`, `Exclude from AI`, `Fold`, `Lock`, `Tidy Subtree`, loophole triage) into 2-column `.node-context-menu__group--grid` grids.
+  - Kept `Type` and `Severity` as compact horizontal `.node-context-menu__chips` pill rows and arranged `AI Lenses` and `Custom Lenses` in 2-column `.node-context-menu__lens-grid` chips (`.node-context-menu__lens-chip`).
+- **Single sidebar close control (`src/overlays/WorkspaceSidebar.tsx`, `src/styles/theme.css`):**
+  - When `sidebarOpen` is true, `.sidebar-toggle-bar` applies `.sidebar-toggle-bar--hidden` (`opacity: 0; pointer-events: none;`), `aria-hidden={open}`, and `tabIndex={open ? -1 : undefined}`, leaving `.workspace-sidebar__icon-btn` (`aria-label="Close sidebar"`) as the single visible and keyboard-reachable close button.
+- **Deduplicated `CommandPalette`, `StudyDeckModal`, and `.multi-select-pill` controls (`src/overlays/CommandPalette.tsx`, `src/overlays/StudyDeckModal.tsx`, `src/App.tsx`, `src/styles/theme.css`):**
+  - `buildPaletteCommands` deduplicates entries by `cmd.id`; `.command-palette__chips` renders as a single horizontally scrollable strip (`flex-wrap: nowrap; overflow-x: auto;`) with `flex: 0 0 auto` on `.palette-scope-toggle` and `.command-palette__chip`.
+  - `StudyDeckModal` hides the header **+ New Card** button when the empty state renders (`!createFormOpen && (activeCard !== null || loading)`), leaving **+ Create Flashcard** as the single empty-state create action, and scopes `Escape` to close `studyCreateFormOpen` first before closing `<dialog class="study-dialog">`.
+  - `.multi-select-pill` drops redundant inline key suffixes (`(A S)`, `(P)`, `(X)`, `(C)`, `(F)`, `L`, `T`, `H`, `V`) from button labels while preserving shortcuts in `title` and `aria-label` tooltips.
+
+### 7.2 Spatial Collision & Viewport Clamping Fixes
+
+- **Horizontal Canvas2D group chip cascading (`src/canvas/renderer2d.ts`):**
+  - Added `resolveGroupChipRect` (using `rectsOverlap` against `placedChips`) to shift colliding `<title> · <memberCount>` group header chips horizontally (`hit.x + hit.w + 8`) within `maxRightX`, wrapping upward (`hit.y - chipH - 4`) when a group box is narrower than the cascaded row.
+  - Updated `hitTestGroupHeader` to compute the exact same `resolveGroupChipRect` coordinates and test cascaded chip rectangles first so overlapping groups remain individually clickable.
+- **Right-aligned `.hover-pill` (`src/styles/theme.css`):**
+  - Changed `.hover-pill` anchoring from `left: 0; transform-origin: bottom left;` to `right: 0; left: auto; transform-origin: bottom right;` so hover action pills stay aligned with the right edge of `320px` cards.
+- **Viewport-clamped floating pills (`src/App.tsx`, `src/overlays/EdgeInspectorPill.tsx`):**
+  - Extended `clampOverlayPoint` in `src/App.tsx` to read live `offsetWidth` and `offsetHeight` (with fallbacks `280x40` for `.multi-select-pill` and `250x38` for `.edge-popover`) and clamp anchors inside `[halfW + 16, viewportWidth - halfW - 16]` horizontally and `[60 + pillH, viewportHeight - 78]` vertically.
+  - Updated `computePillTransform` in `src/overlays/EdgeInspectorPill.tsx` with the same measured-width horizontal clamping (`16px` margin) and `[60 + pillH, vp.height - 78]` vertical bounds.
+- **Bottom-bar clearance (`src/styles/theme.css`, `src/overlays/ToastStack.tsx`, `src/cards/LiveEditorOverlay.tsx`):**
+  - Raised `.chord-hint-pill`, `.triage-hint-pill`, and `.spotlight-pill` from `bottom: 20px` to `bottom: 68px` (with wrapping `max-width: min(640px, calc(100vw - 32px)); white-space: normal;` on hint pills) to clear `.canvas-controls`.
+  - Added `.toast-stack--above-minimap` (`bottom: 162px`) in `ToastStack.tsx` and `theme.css` whenever `minimapOpen.value` is true so toasts stack above `.minimap-card` (`bottom: 16px; right: 16px; z-index: 62`).
+  - Updated `computeOverlayRect` in `LiveEditorOverlay.tsx` (`maxTop = Math.max(16, window.innerHeight - minHeight - 78)`) and `.live-editor-overlay` (`z-index: 56; max-height: calc(100vh - 88px);`), plus `.editor-tag-menu` (`min-width: min(340px, 88vw); max-width: min(420px, 92vw); max-height: 204px;` with 2-line clamped `.editor-tag-menu__desc`).
+- **Minimap canvas box-sizing (`src/overlays/MinimapOverlay.tsx`, `src/styles/theme.css`):**
+  - Applied `box-sizing: border-box` to both `.minimap-card` (`width: auto; max-width: calc(100vw - 32px); padding: 6px;`) and `.minimap-card__canvas` (`width: 184px; height: 112px;`) so the `1px` canvas border renders cleanly without clipping.
+
+### 7.3 Theme, CSS & Accessibility Unification
+
+- **Spine breadcrumb selector alignment (`src/styles/theme.css`):** Added `.spine-breadcrumb__segment` and renamed `.spine-breadcrumb__item` / `.spine-breadcrumb__item--current` (including the hover rule) to `.spine-breadcrumb__crumb` / `.spine-breadcrumb__crumb--current` to match `SpineBreadcrumb.tsx`.
+- **Modal focus trapping & clean focus rings (`src/overlays/useDialogFocusTrap.ts`, `src/styles/theme.css`):**
+  - Added `useDialogFocusTrap(isOpen, containerRef)` to trap `Tab` / `Shift+Tab` inside custom `role="dialog"` modals and restore focus to the trigger element on close, wired into `SettingsModal`, `ArtifactExportModal`, `CheckpointsModal`, `DiagnosticsModal`, `OutlineImportModal`, and `ShortcutsModal` (`tabIndex={-1}`).
+  - Suppressed outer container focus outlines via `dialog:focus, [role="dialog"]:focus, .settings-modal:focus { outline: none; }` while keeping `:focus-visible` (`outline: 2px solid var(--accent-core); outline-offset: 2px;`) on interactive controls.
+- **Unified scrims & `6px` thin scrollbars (`src/styles/theme.css`):** Standardized `.command-palette-backdrop`, `.settings-modal-backdrop`, and `.study-dialog::backdrop` to `background: rgba(7, 9, 13, 0.58); backdrop-filter: blur(4px);`, and applied `scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;` (with `6px` `@supports not (scrollbar-color: auto)` webkit fallback rules) across cards, editors, sidebars, popovers, and dialogs (including `.study-dialog__body` and `.editor-tag-menu`).
+- **Light theme focus & button contrast (`src/styles/theme.css`):** Added `--text-on-accent` (`#0e1013` dark, `#ffffff` light) for `.settings-btn--primary` and `.settings-btn--primary:disabled` (`opacity: 0.48`), darkened Light `--accent-core` / `--ring-focus` (`#1f2937`), and softened `[data-theme="light"] .node-card--focused` to `border-color: var(--accent-core); box-shadow: 0 0 0 3px rgba(31, 41, 55, 0.14), var(--shadow-card);`.
+- **Consistent double-click node hit-testing (`src/canvas/pointer.ts`):** `onDblClick` now resolves text-node targets via `rawTarget instanceof Node ? rawTarget.parentElement : null`, falls back to `hitTestNodeAtWorld` whenever `!nodeId && (!targetEl || shellEl.contains(targetEl))`, and clears browser text selection (`window.getSelection?.()?.removeAllRanges()`) before opening `LiveEditorOverlay`.
+- **Plainer UX copy (`LiveEditorOverlay.tsx`, `NodeCard.tsx`, `EdgeInspectorPill.tsx`, `DiagnosticsModal.tsx`, `CheckpointsModal.tsx`, `XrayHud.tsx`):** Simplified labels and tooltips (`Esc save & close`, `"Upstream inputs changed — click to review or re-run"`, `"Switch AI context depth between Summary (compact) and Full"`, `"Checks dependencies, cycles, and open risks in the Axiom desktop app"`, `"Milestone name (e.g., Before consensus redesign)"`, and hover `title` hints on `XrayHud` legend chips).
+
+### 7.4 Automated Coverage Added (Pending CI & Live Browser Verification)
+
+Five new Vitest cases in `src/overlays/__tests__/v06StudyAndGroups.test.tsx` cover the polish pass behavior:
+1. `offsets overlapping Canvas2D group chips horizontally and hitTestGroupHeader picks the cascaded chip`
+2. `supports 3-tab switching in SettingsModal across General, Providers & Models, and Prompt & Lenses`
+3. `traps Tab and Shift+Tab inside DiagnosticsModal and CheckpointsModal without leaking to canvas controls`
+4. `lifts ToastStack above minimap with toast-stack--above-minimap when minimapOpen is true`
+5. `omits duplicate + New Card button in StudyDeckModal empty state and closes form then dialog on Esc`
+
+Additional Vitest updates align existing integration tests (`v03DiscoveryAndPrompt.test.tsx`, `v04LensesAndTools.test.tsx`, and `v04WorkbenchIntegration.test.tsx`) with the `SettingsModal` 3-tab layout and `settingsActiveTab` routing.
+
+> **Pending Gates:** CI runs (`cargo test`, `npm test -- --run`, `npx tsc --noEmit`, `npm run build`) and live browser / Tauri WebView2 visual re-verification have **not** yet been run on this unpushed polish commit.

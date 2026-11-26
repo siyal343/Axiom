@@ -232,20 +232,23 @@ export function WorkspaceSidebar() {
   return (
     <>
       <div
-        class={`sidebar-toggle-bar ${open ? "sidebar-toggle-bar--shifted" : ""}`}
+        class={`sidebar-toggle-bar ${open ? "sidebar-toggle-bar--shifted sidebar-toggle-bar--hidden" : ""}`}
+        aria-hidden={open}
         onPointerDown={(e) => e.stopPropagation()}
         onWheel={(e) => e.stopPropagation()}
       >
         <button
           type="button"
           class="sidebar-toggle-bar__btn"
+          tabIndex={open ? -1 : undefined}
           aria-expanded={open}
           aria-controls="workspace-sidebar"
-          title="Toggle Workspaces & Flows (Ctrl/Cmd+B)"
+          aria-label="Open workspaces and flows sidebar"
+          title="Open Workspaces & Flows (Ctrl/Cmd+B)"
           onClick={() => toggleSidebar()}
         >
           <span class="sidebar-toggle-bar__icon" aria-hidden="true">
-            {open ? <CloseIcon /> : "☰"}
+            ☰
           </span>
           <span class="sidebar-toggle-bar__ws">{activeWs?.name ?? "Workspace"}</span>
           <span class="sidebar-toggle-bar__sep" aria-hidden="true">
@@ -268,6 +271,8 @@ export function WorkspaceSidebar() {
           <button
             type="button"
             class="workspace-sidebar__primary-action"
+            title="Create a new flow in active workspace"
+            aria-label="New Flow"
             onClick={openPrimaryNewFlow}
           >
             <PlusIcon />
@@ -277,6 +282,8 @@ export function WorkspaceSidebar() {
           <button
             type="button"
             class="workspace-sidebar__nav-row"
+            title="Search & Actions (Ctrl/Cmd+K)"
+            aria-label="Search & Actions"
             onClick={() => {
               closeSidebar();
               openCommandPalette();
@@ -289,6 +296,8 @@ export function WorkspaceSidebar() {
           <button
             type="button"
             class="workspace-sidebar__nav-row"
+            title="Keyboard Shortcuts (?)"
+            aria-label="Shortcuts"
             onClick={() => {
               closeSidebar();
               shortcutsHelpOpen.value = true;
@@ -469,6 +478,8 @@ export function WorkspaceSidebar() {
                         type="button"
                         class="workspace-group__toggle"
                         aria-expanded={!isCollapsed}
+                        aria-label={`Toggle ${ws.name} workspace`}
+                        title={`Toggle ${ws.name}`}
                         onClick={() => toggleWorkspaceCollapsed(ws.id)}
                       >
                         <span class="workspace-group__folder" aria-hidden="true">
@@ -704,6 +715,8 @@ export function WorkspaceSidebar() {
                                   type="button"
                                   class="workspace-flow-item__main"
                                   aria-current={isActive ? "page" : undefined}
+                                  aria-label={`Open flow ${flow.name}`}
+                                  title={`Open ${flow.name}`}
                                   onClick={() => {
                                     setRowMenu(null);
                                     void openFlowAction(ws.id, flow.id);
@@ -816,6 +829,8 @@ export function WorkspaceSidebar() {
           <button
             type="button"
             class="workspace-sidebar__nav-row workspace-sidebar__footer-btn"
+            aria-label="Settings"
+            title="AI & Workspace Settings (Ctrl/Cmd+,)"
             onClick={() => {
               closeSidebar();
               openSettingsModal();
