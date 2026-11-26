@@ -1,4 +1,5 @@
-import { useEffect, type RefObject } from "preact/hooks";
+import type { RefObject } from "preact";
+import { useEffect } from "preact/hooks";
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
