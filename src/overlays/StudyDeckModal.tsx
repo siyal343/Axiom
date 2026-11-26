@@ -474,7 +474,7 @@ export function StudyDeckModal() {
             </p>
             <p class="study-empty__text">
               Add <code>@study</code> or <code>@feynman</code> cards on your canvas, create active
-              loophole probes, or create a manual card above.
+              loophole probes, or create a manual card below.
             </p>
             <div class="study-empty__actions">
               {scope === "due" && allCards.length > 0 && (

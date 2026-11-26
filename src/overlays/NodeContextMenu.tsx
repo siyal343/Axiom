@@ -100,14 +100,16 @@ export function NodeContextMenu() {
       return;
     }
 
-    const rect = el.getBoundingClientRect();
+    const menuW = Math.max(el.offsetWidth, 288);
+    const maxMenuH = Math.max(120, window.innerHeight - VIEWPORT_PADDING_PX * 2);
+    const menuH = Math.min(Math.max(el.offsetHeight, 120), maxMenuH);
     const maxLeft = Math.max(
       VIEWPORT_PADDING_PX,
-      window.innerWidth - rect.width - VIEWPORT_PADDING_PX,
+      window.innerWidth - menuW - VIEWPORT_PADDING_PX,
     );
     const maxTop = Math.max(
       VIEWPORT_PADDING_PX,
-      window.innerHeight - rect.height - VIEWPORT_PADDING_PX,
+      window.innerHeight - menuH - VIEWPORT_PADDING_PX,
     );
     const clampedLeft = Math.min(Math.max(VIEWPORT_PADDING_PX, menuState.x), maxLeft);
     const clampedTop = Math.min(Math.max(VIEWPORT_PADDING_PX, menuState.y), maxTop);

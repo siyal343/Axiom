@@ -78,6 +78,7 @@
   --radius-card: 8px;
   --radius-pill: 999px;
   --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-modal: 0 16px 40px rgba(0, 0, 0, 0.52);
   --shadow-edit: 0 8px 28px rgba(0, 0, 0, 0.55), 0 0 0 1.5px var(--ring-edit);
 
   /* Graph Health & Diagnostics */
@@ -152,6 +153,7 @@
   --xray-loophole: #d97706;
   --xray-reference: #475569;
   --shadow-card: 0 2px 6px rgba(15, 23, 42, 0.08);
+  --shadow-modal: 0 16px 40px rgba(15, 23, 42, 0.16);
   --shadow-edit: 0 8px 24px rgba(15, 23, 42, 0.14), 0 0 0 1.5px var(--ring-edit);
   --health-good: #16a34a;
   --health-warn: #d97706;
@@ -1516,7 +1518,7 @@ body,
   border-radius: var(--radius-card);
   background: var(--bg-card-elevated);
   border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-edit);
+  box-shadow: var(--shadow-modal);
   overflow: hidden;
   transform-origin: center;
   transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out);
@@ -2699,11 +2701,12 @@ body,
   width: 288px;
   max-height: calc(100vh - 16px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 5px;
   border-radius: var(--radius-card);
   background: var(--bg-card-elevated);
   border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-edit);
+  box-shadow: var(--shadow-modal);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -4078,7 +4081,7 @@ body,
   border: 1px solid var(--border-strong);
   background: var(--bg-card-elevated);
   color: var(--text-primary);
-  box-shadow: var(--shadow-edit);
+  box-shadow: var(--shadow-modal);
   overflow: hidden;
   transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
 }
