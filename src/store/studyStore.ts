@@ -158,7 +158,7 @@ export function applySm2ReviewLocal(
     lapses,
     due_at: dueAt,
     last_reviewed_at: nowMs,
-    updated_at: nowMs,
+    updated_at: card.updated_at,
   };
 }
 
@@ -592,11 +592,13 @@ function syncStudyDeckLocal(nowMs = Date.now()): StudySyncResult {
   for (const candidate of candidates) {
     const key = `${candidate.node_id}:${candidate.card_kind}`;
     const found = existingByKey.get(key);
+    const nodeUpdatedAt = nodesMap.get(candidate.node_id)?.updated_at ?? nowMs;
     if (found) {
-      if (found.prompt !== candidate.prompt || found.answer !== candidate.answer) {
+      const customizedAfterNode = found.updated_at > nodeUpdatedAt;
+      if (!customizedAfterNode && (found.prompt !== candidate.prompt || found.answer !== candidate.answer)) {
         found.prompt = candidate.prompt;
         found.answer = candidate.answer;
-        found.updated_at = nowMs;
+        found.updated_at = nodeUpdatedAt;
       }
     } else {
       const created: StudyCardDto = {
@@ -612,7 +614,7 @@ function syncStudyDeckLocal(nowMs = Date.now()): StudySyncResult {
         due_at: nowMs,
         last_reviewed_at: null,
         created_at: nowMs,
-        updated_at: nowMs,
+        updated_at: nodeUpdatedAt,
       };
       retained.push(created);
       existingByKey.set(key, created);
@@ -762,7 +764,7 @@ export async function updateStudyCardAction(
     ...target,
     prompt: trimmedPrompt,
     answer: trimmedAnswer,
-    updated_at: Date.now(),
+    updated_at: Math.max(Date.now(), target.updated_at + 1),
   };
   const next = sortStudyCards(existing.map((c) => (c.id === updated.id ? updated : c)));
   writeLocalStudyCards(next);
@@ -784,6 +786,7 @@ export async function deleteStudyCardAction(cardId: string): Promise<void> {
 
 function stripMarkdownCueMarkers(line: string): string {
   return line
+    .replace(/^(?:@[a-z0-9_-]+\s*)+/i, "")
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/__([^_]+)__/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
@@ -828,7 +831,7 @@ export function extractHintFromAnswer(answer: string): string {
   const lines = normalized
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line.length > 0 && line !== "---");
+    .filter((line) => line.length > 0 && line !== "---" && !/^(?:@[a-z0-9_-]+\s*)+$/i.test(line));
   if (lines.length === 0) {
     return "";
   }

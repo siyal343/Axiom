@@ -68,7 +68,6 @@ pub fn apply_sm2_review(card: &mut StudyCardDto, rating: StudyRating, now_ms: i6
         }
     }
     card.last_reviewed_at = Some(now_ms);
-    card.updated_at = now_ms;
 }
 
 fn has_tag(text: &str, tag: &str) -> bool {
@@ -568,11 +567,18 @@ pub fn sync_study_deck(
 
     for candidate in &candidates {
         let key = (candidate.node_id.clone(), candidate.card_kind);
+        let node_updated_at = engine
+            .nodes
+            .get(&candidate.node_id)
+            .map_or(now_ms, |node| node.updated_at);
         if let Some(existing) = existing_by_key.get(&key) {
-            if existing.prompt != candidate.prompt || existing.answer != candidate.answer {
+            let customized_after_node = existing.updated_at > node_updated_at;
+            if !customized_after_node
+                && (existing.prompt != candidate.prompt || existing.answer != candidate.answer)
+            {
                 tx.execute(
                     "UPDATE study_cards SET prompt = ?1, answer = ?2, updated_at = ?3 WHERE id = ?4",
-                    params![candidate.prompt, candidate.answer, now_ms, existing.id],
+                    params![candidate.prompt, candidate.answer, node_updated_at, existing.id],
                 )?;
             }
         } else {
@@ -589,7 +595,7 @@ pub fn sync_study_deck(
                 due_at: now_ms,
                 last_reviewed_at: None,
                 created_at: now_ms,
-                updated_at: now_ms,
+                updated_at: node_updated_at,
             };
             insert_study_card_tx(&tx, &new_card)?;
             added_count += 1;
@@ -709,7 +715,7 @@ pub fn update_study_card(
     let now_ms = now_epoch_ms();
     card.prompt = trimmed_prompt.to_owned();
     card.answer = trimmed_answer.to_owned();
-    card.updated_at = now_ms;
+    card.updated_at = now_ms.max(card.updated_at.saturating_add(1));
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     update_study_card_text_tx(&tx, &card.id, &card.prompt, &card.answer, card.updated_at)?;

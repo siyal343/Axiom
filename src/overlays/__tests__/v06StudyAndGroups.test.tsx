@@ -920,5 +920,23 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
     expect(synced.added_count).toBe(2);
     expect(synced.cards).toHaveLength(2);
     expect(synced.cards.map((c) => c.card_kind).sort()).toEqual(["feynman", "qa"]);
+
+    const feynmanCard = synced.cards.find((c) => c.card_kind === "feynman");
+    expect(feynmanCard).toBeDefined();
+    if (feynmanCard) {
+      const hint = extractHintFromAnswer(feynmanCard.answer);
+      expect(hint).not.toContain("@feynman");
+      expect(hint.startsWith("First principles")).toBe(true);
+
+      await updateStudyCardAction(
+        feynmanCard.id,
+        "First-Principles Breakdown (Exam Check)",
+        feynmanCard.answer,
+      );
+      const resynced = await syncStudyDeckAction();
+      expect(resynced.cards.find((c) => c.id === feynmanCard.id)?.prompt).toBe(
+        "First-Principles Breakdown (Exam Check)",
+      );
+    }
   });
 });

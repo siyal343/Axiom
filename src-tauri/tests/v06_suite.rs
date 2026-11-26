@@ -841,6 +841,26 @@ fn study_flow_template_extracts_two_starter_flashcards_immediately() {
     let synced = sync_study_deck(&mut conn, &engine).expect("sync template deck");
     assert_eq!(synced.added_count, 2);
     assert_eq!(synced.cards.len(), 2);
-    assert!(synced.cards.iter().any(|c| c.card_kind == StudyCardKind::Feynman));
+    let feynman_card = synced
+        .cards
+        .iter()
+        .find(|c| c.card_kind == StudyCardKind::Feynman)
+        .expect("feynman template card");
     assert!(synced.cards.iter().any(|c| c.card_kind == StudyCardKind::Qa));
+
+    let edited_template_card = update_study_card(
+        &mut conn,
+        &feynman_card.id,
+        "First-Principles Breakdown (Exam Check)",
+        &feynman_card.answer,
+    )
+    .expect("inline edit template card");
+
+    let resynced = sync_study_deck(&mut conn, &engine).expect("resync after inline edit");
+    let preserved = resynced
+        .cards
+        .iter()
+        .find(|c| c.id == edited_template_card.id)
+        .expect("card remains present");
+    assert_eq!(preserved.prompt, "First-Principles Breakdown (Exam Check)");
 }
