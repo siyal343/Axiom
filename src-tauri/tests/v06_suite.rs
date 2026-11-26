@@ -836,8 +836,7 @@ fn study_flow_template_extracts_two_starter_flashcards_immediately() {
     let snap = seed_flow_template(&mut conn, &db_path.to_string_lossy(), "study")
         .expect("seed study template");
 
-    let mut engine = GraphEngine::default();
-    engine.hydrate(&snap.nodes, &snap.edges, &snap.groups);
+    let engine = GraphEngine::from_snapshot_with_groups(&snap.nodes, &snap.edges, &snap.groups);
 
     let synced = sync_study_deck(&mut conn, &engine).expect("sync template deck");
     assert_eq!(synced.added_count, 2);
