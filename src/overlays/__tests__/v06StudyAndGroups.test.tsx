@@ -939,4 +939,136 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
       );
     }
   });
+
+  it("StudyDeckModal supports Again in-session re-queue, non-destructive step nav, Ctrl+Enter reveal, inline validation, and two-step delete", async () => {
+    loadSnapshot({
+      path: "memory://study-ux-polish",
+      nodes: [
+        makeNode("n_a", {
+          title: "Card Alpha",
+          lens: "study",
+          content: "Q: Define VSWR.\nA: $SWR = (1+|\\Gamma|)/(1-|\\Gamma|)$.",
+        }),
+        makeNode("n_b", {
+          title: "Card Beta",
+          lens: "study",
+          content: "Q: What causes ringing in a step response?\nA: Underdamped poles ($0 < \\zeta < 1$).",
+        }),
+      ],
+      edges: [],
+      camera: { x: 0, y: 0, zoom: 1, last_focus_id: "n_a" },
+      token_budget: 6000,
+    });
+
+    render(<StudyDeckModal />, container);
+    await openStudyModal("due", "n_a");
+    await flushUi();
+
+    expect(container.querySelector('.study-progress[role="progressbar"]')).not.toBeNull();
+    const firstCounter = container.querySelector(".study-counter")?.textContent?.trim();
+    expect(firstCounter).toBe("1 of 2");
+
+    // Non-destructive browse via Next button & '[' / ']' keys
+    const nextBtn = container.querySelector<HTMLButtonElement>('.study-step-btn[aria-label="Next card"]');
+    expect(nextBtn).not.toBeNull();
+    nextBtn?.click();
+    await flushUi();
+    expect(container.querySelector(".study-counter")?.textContent?.trim()).toBe("2 of 2");
+
+    const dialog = container.querySelector<HTMLDialogElement>("dialog.study-dialog");
+    dialog?.dispatchEvent(new KeyboardEvent("keydown", { key: "[", bubbles: true, cancelable: true }));
+    await flushUi();
+    expect(container.querySelector(".study-counter")?.textContent?.trim()).toBe("1 of 2");
+
+    // Ctrl+Enter inside attempt scratchpad reveals answer + shows plain-language SM-2 status
+    dialog?.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true }));
+    await flushUi();
+    const attemptBox = container.querySelector<HTMLTextAreaElement>("#study-attempt-textarea");
+    expect(attemptBox).not.toBeNull();
+    if (attemptBox) {
+      attemptBox.value = "Ratio of Vmax to Vmin";
+      attemptBox.dispatchEvent(new Event("input", { bubbles: true }));
+      attemptBox.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }),
+      );
+    }
+    await flushUi();
+    expect(container.querySelector(".study-card-face--attempt")?.textContent).toContain(
+      "Ratio of Vmax to Vmin",
+    );
+    expect(container.querySelector(".study-sm2-stats")?.textContent).toContain(
+      "New card · First review",
+    );
+
+    // Grading Again keeps missed card at the back of Due Now with Re-learn badge
+    container.querySelector<HTMLButtonElement>(".study-grade-btn--again")?.click();
+    await flushUi();
+    expect(container.querySelector(".study-session-summary")?.textContent).toContain("1 again");
+    expect(container.querySelector(".study-dialog__tab")?.textContent?.trim()).toBe("Due Now (2)");
+
+    // Grade second card Good -> leaves only the Re-learn card
+    container.querySelector<HTMLButtonElement>('[data-study-action="reveal"]')?.click();
+    await flushUi();
+    container.querySelector<HTMLButtonElement>(".study-grade-btn--good")?.click();
+    await flushUi();
+    expect(container.querySelector(".study-relearn-badge")?.textContent).toBe("Re-learn");
+    expect(container.querySelector(".study-dialog__tab")?.textContent?.trim()).toBe("Due Now (1)");
+
+    // Complete Re-learn card -> removes it from relearnIds cleanly
+    container.querySelector<HTMLButtonElement>('[data-study-action="reveal"]')?.click();
+    await flushUi();
+    container.querySelector<HTMLButtonElement>(".study-grade-btn--good")?.click();
+    await flushUi();
+    expect(container.querySelector(".study-empty__title")?.textContent).toContain("All due cards reviewed");
+
+    // Switch to Current Flow, test Create Card blank validation + direct click submit + two-step delete
+    const flowTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".study-dialog__tab")).find(
+      (b) => b.textContent?.includes("Current Flow"),
+    );
+    flowTab?.click();
+    await flushUi();
+
+    const newCardBtn = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((b) =>
+      b.textContent?.includes("+ New Card"),
+    );
+    newCardBtn?.click();
+    await flushUi();
+
+    const submitBtn = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (b) => b.textContent?.trim() === "Create Card",
+    );
+    submitBtn?.click();
+    await flushUi();
+    expect(container.querySelector('.study-form-error[role="alert"]')?.textContent).toContain(
+      "Enter a question or prompt",
+    );
+
+    const pInput = container.querySelector<HTMLInputElement>("#study-form-prompt")!;
+    const aInput = container.querySelector<HTMLTextAreaElement>("#study-form-answer")!;
+    pInput.value = "Manual Z0 Check";
+    pInput.dispatchEvent(new Event("input", { bubbles: true }));
+    aInput.value = "$Z_0 = 50\\,\\Omega$.";
+    aInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushUi();
+    submitBtn?.click();
+    await flushUi();
+    expect(studyCreateFormOpen.value).toBe(false);
+    expect(container.textContent).toContain("Manual Z0 Check");
+
+    // Two-step delete: first click arms Delete?, Escape disarms without closing dialog, two clicks deletes
+    const delBtn = container.querySelector<HTMLButtonElement>(".study-delete-btn");
+    delBtn?.click();
+    await flushUi();
+    expect(delBtn?.textContent).toBe("Delete?");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await flushUi();
+    expect(container.querySelector("dialog.study-dialog[open]")).not.toBeNull();
+    expect(container.querySelector(".study-delete-btn")?.textContent).toBe("🗑");
+
+    container.querySelector<HTMLButtonElement>(".study-delete-btn")?.click();
+    await flushUi();
+    container.querySelector<HTMLButtonElement>(".study-delete-btn")?.click();
+    await flushUi();
+    expect(container.textContent).not.toContain("Manual Z0 Check");
+  });
 });

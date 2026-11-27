@@ -120,12 +120,30 @@ export function StudyDeckModal() {
   const [interleaved, setInterleaved] = useState(false);
   const [interleaveSeed, setInterleaveSeed] = useState(1);
   const [sessionStats, setSessionStats] = useState({ reviewed: 0, strong: 0, again: 0 });
+  const [relearnIds, setRelearnIds] = useState<string[]>([]);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const nowMs = useMemo(() => Date.now(), [isOpen, allCards, scope, focusedTargetId]);
-  const dueCards = useMemo(
-    () => getScopedStudyCards(allCards, "due", focusedTargetId, nodesMap, edgesMap, nowMs),
-    [allCards, focusedTargetId, nowMs],
-  );
+  const dueCards = useMemo(() => {
+    const baseDue = getScopedStudyCards(allCards, "due", focusedTargetId, nodesMap, edgesMap, nowMs);
+    if (relearnIds.length === 0) {
+      return baseDue;
+    }
+    const baseIds = new Set(baseDue.map((c) => c.id));
+    const byId = new Map(allCards.map((c) => [c.id, c]));
+    const queued: StudyCardDto[] = [];
+    for (const id of relearnIds) {
+      if (baseIds.has(id)) {
+        continue;
+      }
+      const card = byId.get(id);
+      if (card) {
+        queued.push(card);
+      }
+    }
+    return [...baseDue, ...queued];
+  }, [allCards, focusedTargetId, nowMs, relearnIds]);
   const flowCards = useMemo(
     () => getScopedStudyCards(allCards, "flow", focusedTargetId, nodesMap, edgesMap, nowMs),
     [allCards, focusedTargetId, nowMs],
@@ -144,10 +162,10 @@ export function StudyDeckModal() {
     () => (interleaved ? interleaveStudyCards(scopedCards, interleaveSeed) : scopedCards),
     [scopedCards, interleaved, interleaveSeed],
   );
-  const dueInScopeCount = useMemo(
-    () => displayCards.filter((c) => c.due_at <= nowMs).length,
-    [displayCards, nowMs],
-  );
+  const dueInScopeCount = useMemo(() => {
+    const relearnSet = new Set(relearnIds);
+    return displayCards.filter((c) => c.due_at <= nowMs || relearnSet.has(c.id)).length;
+  }, [displayCards, nowMs, relearnIds]);
 
   const safeIndex =
     displayCards.length === 0 ? 0 : Math.min(Math.max(0, cardIndex), displayCards.length - 1);
@@ -172,6 +190,7 @@ export function StudyDeckModal() {
     setHintOpen(false);
     setAttemptOpen(false);
     setAttemptText("");
+    setConfirmDeleteId(null);
   }, [activeCard?.id, scope]);
 
   useEffect(() => {
@@ -199,6 +218,9 @@ export function StudyDeckModal() {
       setAttemptText("");
       setEditingCardId(null);
       setSessionStats({ reviewed: 0, strong: 0, again: 0 });
+      setRelearnIds([]);
+      setConfirmDeleteId(null);
+      setFormError(null);
       if (!studyCreateFormOpen.value) {
         setPromptDraft("");
         setAnswerDraft("");
@@ -238,7 +260,10 @@ export function StudyDeckModal() {
       e.stopPropagation();
       if (studyCreateFormOpen.value) {
         setEditingCardId(null);
+        setFormError(null);
         studyCreateFormOpen.value = false;
+      } else if (confirmDeleteId !== null) {
+        setConfirmDeleteId(null);
       } else {
         closeStudyModal();
       }
@@ -247,7 +272,7 @@ export function StudyDeckModal() {
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown, true);
     };
-  }, [isOpen]);
+  }, [isOpen, confirmDeleteId]);
 
   // Fallback light-dismiss when native `closedBy` is unsupported on HTMLDialogElement.
   useEffect(() => {
@@ -290,6 +315,8 @@ export function StudyDeckModal() {
     setEditingCardId(null);
     setPromptDraft("");
     setAnswerDraft("");
+    setFormError(null);
+    setConfirmDeleteId(null);
     studyCreateFormOpen.value = true;
   };
 
@@ -297,29 +324,51 @@ export function StudyDeckModal() {
     setEditingCardId(card.id);
     setPromptDraft(card.prompt);
     setAnswerDraft(card.answer);
+    setFormError(null);
+    setConfirmDeleteId(null);
     studyCreateFormOpen.value = true;
+  };
+
+  const stepCard = (delta: -1 | 1): void => {
+    if (displayCards.length <= 1) {
+      return;
+    }
+    setRevealed(false);
+    setHintOpen(false);
+    setAttemptOpen(false);
+    setAttemptText("");
+    setConfirmDeleteId(null);
+    setCardIndex((idx) => (idx + delta + displayCards.length) % displayCards.length);
   };
 
   const handleGrade = async (rating: StudyRating): Promise<void> => {
     if (!activeCard || submitting) {
       return;
     }
+    const gradedId = activeCard.id;
     setSubmitting(true);
     try {
-      await reviewStudyCardAction(activeCard.id, rating);
+      await reviewStudyCardAction(gradedId, rating);
       setSessionStats((prev) => ({
         reviewed: prev.reviewed + 1,
         strong: prev.strong + (rating === "again" ? 0 : 1),
         again: prev.again + (rating === "again" ? 1 : 0),
       }));
+      setRelearnIds((prev) => {
+        const without = prev.filter((id) => id !== gradedId);
+        return rating === "again" ? [...without, gradedId] : without;
+      });
       setRevealed(false);
       setHintOpen(false);
       setAttemptOpen(false);
       setAttemptText("");
+      setConfirmDeleteId(null);
       if (scope !== "due" && displayCards.length > 1) {
         setCardIndex((idx) => (idx + 1) % displayCards.length);
       } else {
-        setCardIndex((idx) => Math.min(idx, Math.max(0, displayCards.length - 2)));
+        const remainingCount =
+          rating === "again" ? displayCards.length : Math.max(0, displayCards.length - 1);
+        setCardIndex((idx) => Math.min(idx, Math.max(0, remainingCount - 1)));
       }
     } catch (err) {
       pushToast(parseIpcError(err).message, "error");
@@ -332,9 +381,15 @@ export function StudyDeckModal() {
     if (submitting) {
       return;
     }
+    if (confirmDeleteId !== cardId) {
+      setConfirmDeleteId(cardId);
+      return;
+    }
     setSubmitting(true);
     try {
       await deleteStudyCardAction(cardId);
+      setRelearnIds((prev) => prev.filter((id) => id !== cardId));
+      setConfirmDeleteId(null);
       setRevealed(false);
       setHintOpen(false);
       setAttemptOpen(false);
@@ -353,6 +408,16 @@ export function StudyDeckModal() {
     if (submitting) {
       return;
     }
+    if (promptDraft.trim().length === 0) {
+      setFormError("Enter a question or prompt before saving.");
+      formPromptInputRef.current?.focus();
+      return;
+    }
+    if (answerDraft.trim().length === 0) {
+      setFormError("Enter an answer before saving.");
+      return;
+    }
+    setFormError(null);
     setSubmitting(true);
     try {
       if (editingCardId) {
@@ -382,7 +447,9 @@ export function StudyDeckModal() {
         pushToast("Added study card", "info");
       }
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : parseIpcError(err).message, "warning");
+      const msg = err instanceof Error ? err.message : parseIpcError(err).message;
+      setFormError(msg);
+      pushToast(msg, "warning");
     } finally {
       setSubmitting(false);
     }
@@ -480,12 +547,31 @@ export function StudyDeckModal() {
       }
     }
 
+    if (noModifier && (e.key === "[" || e.key === "ArrowLeft")) {
+      e.preventDefault();
+      e.stopPropagation();
+      stepCard(-1);
+      return;
+    }
+
+    if (noModifier && (e.key === "]" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      e.stopPropagation();
+      stepCard(1);
+      return;
+    }
+
     if (noModifier && lowerKey === "j" && activeCard.node_id && nodesMap.has(activeCard.node_id)) {
       e.preventDefault();
       e.stopPropagation();
       jumpToSourceNode(activeCard.node_id);
     }
   };
+
+  const progressTotal =
+    scope === "due" ? sessionStats.strong + dueInScopeCount : displayCards.length;
+  const progressDone = scope === "due" ? sessionStats.strong : displayCards.length > 0 ? safeIndex + 1 : 0;
+  const progressPct = progressTotal > 0 ? Math.round((progressDone / progressTotal) * 100) : 0;
 
   return (
     <dialog
@@ -497,7 +583,10 @@ export function StudyDeckModal() {
         e.preventDefault();
         if (studyCreateFormOpen.value) {
           setEditingCardId(null);
+          setFormError(null);
           studyCreateFormOpen.value = false;
+        } else if (confirmDeleteId !== null) {
+          setConfirmDeleteId(null);
         } else {
           closeStudyModal();
         }
@@ -586,7 +675,7 @@ export function StudyDeckModal() {
 
       <div class="study-dialog__body">
         {createFormOpen ? (
-          <form class="study-create-form" onSubmit={(e) => void handleFormSubmit(e)}>
+          <form class="study-create-form" noValidate onSubmit={(e) => void handleFormSubmit(e)}>
             <div class="study-create-form__meta">
               <span class="settings-section__title">
                 {editingCardId ? "Edit Flashcard" : "Create Flashcard"}
@@ -594,8 +683,8 @@ export function StudyDeckModal() {
               {editingCardId ? (
                 <span class="badge">
                   {editingSourceNode
-                    ? `${editingSourceNode.title || "Untitled"} · Preserves SM-2`
-                    : "Preserves SM-2 schedule"}
+                    ? `${editingSourceNode.title || "Untitled"} · Keeps schedule`
+                    : "Keeps review schedule"}
                 </span>
               ) : linkedTargetNode ? (
                 <span class="badge">Linked: {linkedTargetNode.title || "Untitled"}</span>
@@ -614,29 +703,56 @@ export function StudyDeckModal() {
                 class="settings-input"
                 placeholder="What invariant prevents split-brain writes?"
                 value={promptDraft}
-                onInput={(e) => setPromptDraft((e.target as HTMLInputElement).value)}
+                onInput={(e) => {
+                  setPromptDraft((e.target as HTMLInputElement).value);
+                  if (formError) setFormError(null);
+                }}
+                onChange={(e) => {
+                  setPromptDraft((e.target as HTMLInputElement).value);
+                  if (formError) setFormError(null);
+                }}
                 required
               />
             </div>
             <div class="settings-field">
               <label for="study-form-answer" class="settings-field__label">
-                Answer (Markdown &amp; KaTeX supported)
+                Answer (Markdown, KaTeX &amp; ```axiom-sim supported)
               </label>
               <textarea
                 id="study-form-answer"
                 class="settings-textarea"
                 placeholder="Majority quorum intersection ($W + R > N$)."
                 value={answerDraft}
-                onInput={(e) => setAnswerDraft((e.target as HTMLTextAreaElement).value)}
+                onInput={(e) => {
+                  setAnswerDraft((e.target as HTMLTextAreaElement).value);
+                  if (formError) setFormError(null);
+                }}
+                onChange={(e) => {
+                  setAnswerDraft((e.target as HTMLTextAreaElement).value);
+                  if (formError) setFormError(null);
+                }}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.currentTarget.form?.requestSubmit();
+                  }
+                }}
                 required
               />
             </div>
+            {formError && (
+              <p class="study-form-error" role="alert">
+                {formError}
+              </p>
+            )}
             <div class="study-create-form__actions">
               <button
                 type="button"
                 class="settings-btn settings-btn--secondary"
                 onClick={() => {
                   setEditingCardId(null);
+                  setFormError(null);
                   studyCreateFormOpen.value = false;
                 }}
               >
@@ -713,11 +829,45 @@ export function StudyDeckModal() {
           </div>
         ) : (
           <div class="study-stage">
+            <div
+              class="study-progress"
+              role="progressbar"
+              aria-label="Study session progress"
+              aria-valuemin={0}
+              aria-valuemax={progressTotal}
+              aria-valuenow={progressDone}
+            >
+              <div class="study-progress__fill" style={{ width: `${progressPct}%` }} />
+            </div>
             <div class="study-stage__meta">
               <div class="study-stage__meta-left">
-                <span class="study-counter">
-                  {safeIndex + 1} of {displayCards.length}
-                </span>
+                <div class="study-nav-group">
+                  {displayCards.length > 1 && (
+                    <button
+                      type="button"
+                      class="study-step-btn"
+                      aria-label="Previous card"
+                      title="Previous card ([ or ←)"
+                      onClick={() => stepCard(-1)}
+                    >
+                      ‹
+                    </button>
+                  )}
+                  <span class="study-counter">
+                    {safeIndex + 1} of {displayCards.length}
+                  </span>
+                  {displayCards.length > 1 && (
+                    <button
+                      type="button"
+                      class="study-step-btn"
+                      aria-label="Next card"
+                      title="Next card (] or →)"
+                      onClick={() => stepCard(1)}
+                    >
+                      ›
+                    </button>
+                  )}
+                </div>
                 <span class="study-queue-breakdown">
                   {dueInScopeCount} due · {allCards.length} in flow
                 </span>
@@ -730,6 +880,9 @@ export function StudyDeckModal() {
                 <span class={`badge study-kind-badge study-kind-badge--${activeCard.card_kind}`}>
                   {KIND_LABELS[activeCard.card_kind]}
                 </span>
+                {relearnIds.includes(activeCard.id) && (
+                  <span class="badge study-relearn-badge">Re-learn</span>
+                )}
               </div>
               <div class="study-stage__meta-right">
                 {activeCard.node_id && activeSourceNode && (
@@ -757,13 +910,21 @@ export function StudyDeckModal() {
                 </button>
                 <button
                   type="button"
-                  class="study-delete-btn"
-                  title="Delete study card"
-                  aria-label="Delete study card"
+                  class={`study-delete-btn ${confirmDeleteId === activeCard.id ? "study-delete-btn--armed" : ""}`}
+                  title={
+                    confirmDeleteId === activeCard.id
+                      ? "Click again to permanently delete card (Esc cancels)"
+                      : "Delete study card"
+                  }
+                  aria-label={
+                    confirmDeleteId === activeCard.id
+                      ? "Confirm delete study card"
+                      : "Delete study card"
+                  }
                   disabled={submitting}
                   onClick={() => void handleDeleteCard(activeCard.id)}
                 >
-                  🗑
+                  {confirmDeleteId === activeCard.id ? "Delete?" : "🗑"}
                 </button>
               </div>
             </div>
@@ -787,9 +948,12 @@ export function StudyDeckModal() {
                 )}
                 {attemptOpen && (
                   <div class="study-attempt-box">
-                    <label for="study-attempt-textarea" class="study-attempt-label">
-                      Closed-Book Attempt
-                    </label>
+                    <div class="study-attempt-header">
+                      <label for="study-attempt-textarea" class="study-attempt-label">
+                        Closed-Book Attempt
+                      </label>
+                      <span class="study-attempt-hint">Ctrl+Enter to compare</span>
+                    </div>
                     <textarea
                       id="study-attempt-textarea"
                       ref={attemptTextareaRef}
@@ -798,6 +962,13 @@ export function StudyDeckModal() {
                       placeholder="Draft formula, units, boundary check, or derivation steps before revealing..."
                       value={attemptText}
                       onInput={(e) => setAttemptText((e.target as HTMLTextAreaElement).value)}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setRevealed(true);
+                        }
+                      }}
                     />
                   </div>
                 )}
@@ -849,15 +1020,23 @@ export function StudyDeckModal() {
                 </article>
 
                 <div class="study-sm2-stats">
-                  <span>Rep {activeCard.repetitions}</span>
-                  <span>·</span>
-                  <span>Ease {activeCard.ease_factor.toFixed(2)}</span>
-                  <span>·</span>
-                  <span>Interval {activeCard.interval_days}d</span>
-                  {activeCard.lapses > 0 && (
+                  {activeCard.repetitions === 0 && activeCard.lapses === 0 ? (
+                    <span>New card · First review</span>
+                  ) : (
                     <>
+                      <span>Streak {activeCard.repetitions}</span>
                       <span>·</span>
-                      <span>Lapses {activeCard.lapses}</span>
+                      <span>Current gap {activeCard.interval_days}d</span>
+                      <span>·</span>
+                      <span>Ease {activeCard.ease_factor.toFixed(2)}</span>
+                      {activeCard.lapses > 0 && (
+                        <>
+                          <span>·</span>
+                          <span>
+                            {activeCard.lapses} {activeCard.lapses === 1 ? "miss" : "misses"}
+                          </span>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -883,6 +1062,9 @@ export function StudyDeckModal() {
                 </div>
               </div>
             )}
+            <footer class="study-shortcut-strip">
+              Space reveal · H hint · A attempt · 1–4 rate · [ / ] browse · E edit · J source
+            </footer>
           </div>
         )}
       </div>
