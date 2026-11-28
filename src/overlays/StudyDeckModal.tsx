@@ -187,6 +187,24 @@ export function StudyDeckModal() {
   useSimHydration(answerBodyRef, answerHtml, isOpen && revealed);
 
   useEffect(() => {
+    if (!isOpen || !revealed) {
+      return;
+    }
+    const dialog = dialogRef.current;
+    if (!dialog) {
+      return;
+    }
+    const active = document.activeElement;
+    if (!active || active === document.body || !dialog.contains(active)) {
+      const raf = requestAnimationFrame(() => {
+        dialogRef.current?.focus({ preventScroll: true });
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+    return undefined;
+  }, [isOpen, revealed]);
+
+  useEffect(() => {
     setHintOpen(false);
     setAttemptOpen(false);
     setAttemptText("");
@@ -576,6 +594,7 @@ export function StudyDeckModal() {
   return (
     <dialog
       ref={dialogRef}
+      tabIndex={-1}
       closedby="any"
       aria-labelledby="study-dialog-title"
       class="study-dialog"

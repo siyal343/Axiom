@@ -1,6 +1,24 @@
-export type VisualSimDomain = "controls" | "rf" | "embedded" | "physics" | "math";
+export type VisualSimDomain =
+  | "controls"
+  | "rf"
+  | "embedded"
+  | "physics"
+  | "circuits"
+  | "signals"
+  | "thermo"
+  | "mechanics"
+  | "math";
 
-export type VisualSimKind = "response" | "splane" | "smith" | "timing" | "wave" | "plot";
+export type VisualSimKind =
+  | "response"
+  | "splane"
+  | "smith"
+  | "timing"
+  | "wave"
+  | "plot"
+  | "bode"
+  | "parametric"
+  | "polar";
 
 export type VisualSimPreset =
   | "second_order_step"
@@ -15,6 +33,8 @@ export type VisualSimPreset =
   | "standing_wave"
   | "custom_expr";
 
+export type SimSeriesColor = "accent" | "secondary" | "good" | "warn" | "crit";
+
 export interface VisualSimParam {
   id: string;
   label: string;
@@ -23,6 +43,43 @@ export interface VisualSimParam {
   max: number;
   step: number;
   value: number;
+}
+
+export interface VisualSimSeriesDef {
+  label: string;
+  expr?: string;
+  xExpr?: string;
+  yExpr?: string;
+  color?: SimSeriesColor;
+  dashed?: boolean;
+}
+
+export interface VisualSimRefLine {
+  x?: number;
+  y?: number;
+  label?: string;
+}
+
+export interface VisualSimMarkerDef {
+  label: string;
+  xExpr: string;
+  yExpr: string;
+  tone?: "accent" | "good" | "warn" | "crit";
+}
+
+export interface VisualSimMetricDef {
+  label: string;
+  expr: string;
+  unit?: string;
+  precision?: number;
+  tone?: "good" | "warn" | "crit" | "accent" | "neutral";
+}
+
+export interface VisualSimChannelDef {
+  name: string;
+  expr?: string;
+  levels?: Array<[number, number]>;
+  color?: "accent" | "good" | "warn";
 }
 
 export interface VisualSimSpec {
@@ -38,15 +95,39 @@ export interface VisualSimSpec {
   xMax: number;
   yMin?: number;
   yMax?: number;
+  xScale?: "linear" | "log";
+  sMin?: number;
+  sMax?: number;
+  animate?: boolean;
   expr?: string;
   exprSecondary?: string;
   target?: number;
+  series?: VisualSimSeriesDef[];
+  hLines?: VisualSimRefLine[];
+  vLines?: VisualSimRefLine[];
+  markers?: VisualSimMarkerDef[];
+  metrics?: VisualSimMetricDef[];
+  channels?: VisualSimChannelDef[];
   params: VisualSimParam[];
 }
 
 export interface SimPoint {
   x: number;
   y: number;
+}
+
+export interface SimEvaluatedSeries {
+  label: string;
+  color: SimSeriesColor;
+  dashed?: boolean;
+  segments: SimPoint[][];
+}
+
+export interface SimEvaluatedMarker {
+  label: string;
+  x: number;
+  y: number;
+  tone: "accent" | "good" | "warn" | "crit";
 }
 
 export interface SimMetric {
@@ -78,8 +159,13 @@ export interface EvaluatedVisualSim {
   xMax: number;
   yMin: number;
   yMax: number;
+  xScale?: "linear" | "log";
   primary: SimPoint[];
   secondary: SimPoint[];
+  series?: SimEvaluatedSeries[];
+  hLines?: Array<{ y: number; label?: string }>;
+  vLines?: Array<{ x: number; label?: string }>;
+  markers?: SimEvaluatedMarker[];
   envelopeUpper?: SimPoint[];
   envelopeLower?: SimPoint[];
   targetLine?: number;
@@ -97,6 +183,15 @@ export interface EvaluatedVisualSim {
     returnLossDb: number;
     powerDeliveredPct: number;
   };
+  polar?: {
+    maxR: number;
+    series: Array<{
+      label: string;
+      color: SimSeriesColor;
+      dashed?: boolean;
+      points: Array<{ theta: number; r: number }>;
+    }>;
+  };
   timing?: {
     channels: SimTimingChannel[];
     edgeLabel: string;
@@ -108,8 +203,38 @@ export interface EvaluatedVisualSim {
   error?: string;
 }
 
-const VALID_DOMAINS = new Set<VisualSimDomain>(["controls", "rf", "embedded", "physics", "math"]);
-const VALID_KINDS = new Set<VisualSimKind>(["response", "splane", "smith", "timing", "wave", "plot"]);
+const VALID_DOMAINS = new Set<VisualSimDomain>([
+  "controls",
+  "rf",
+  "embedded",
+  "physics",
+  "circuits",
+  "signals",
+  "thermo",
+  "mechanics",
+  "math",
+]);
+
+const VALID_KINDS = new Set<VisualSimKind>([
+  "response",
+  "splane",
+  "smith",
+  "timing",
+  "wave",
+  "plot",
+  "bode",
+  "parametric",
+  "polar",
+]);
+
+const VALID_SERIES_COLORS = new Set<SimSeriesColor>(["accent", "secondary", "good", "warn", "crit"]);
+const VALID_METRIC_TONES = new Set<NonNullable<SimMetric["tone"]>>([
+  "good",
+  "warn",
+  "crit",
+  "accent",
+  "neutral",
+]);
 
 const DEFAULT_PARAMS_BY_PRESET: Record<VisualSimPreset, VisualSimParam[]> = {
   second_order_step: [
@@ -164,12 +289,29 @@ const DEFAULT_PARAMS_BY_PRESET: Record<VisualSimPreset, VisualSimParam[]> = {
   ],
 };
 
+function hasDeclarativeBody(raw: Record<string, unknown>, kind: VisualSimKind): boolean {
+  if (kind === "bode" || kind === "parametric" || kind === "polar" || kind === "plot") {
+    return true;
+  }
+  if (typeof raw.expr === "string" && raw.expr.trim().length > 0) {
+    return true;
+  }
+  if (Array.isArray(raw.series) && raw.series.length > 0) {
+    return true;
+  }
+  if (Array.isArray(raw.channels) && raw.channels.length > 0) {
+    return true;
+  }
+  return false;
+}
+
 function inferPreset(raw: Record<string, unknown>, kind: VisualSimKind): VisualSimPreset {
-  const presetRaw = typeof raw.preset === "string"
-    ? raw.preset
-    : typeof raw.model === "string"
-      ? raw.model
-      : "";
+  const presetRaw =
+    typeof raw.preset === "string"
+      ? raw.preset
+      : typeof raw.model === "string"
+        ? raw.model
+        : "";
   const norm = presetRaw.trim().toLowerCase().replace(/[\s-]+/g, "_");
 
   if (norm === "second_order_step" || norm === "2nd_order" || norm === "second_order" || norm === "step") {
@@ -202,7 +344,7 @@ function inferPreset(raw: Record<string, unknown>, kind: VisualSimKind): VisualS
   if (norm === "standing_wave" || norm === "vswr" || norm === "interference") {
     return "standing_wave";
   }
-  if (typeof raw.expr === "string" && raw.expr.trim().length > 0) {
+  if (norm === "custom_expr" || norm === "custom" || hasDeclarativeBody(raw, kind)) {
     return "custom_expr";
   }
 
@@ -215,19 +357,24 @@ function inferPreset(raw: Record<string, unknown>, kind: VisualSimKind): VisualS
       return "spi_timing";
     case "wave":
       return "damped_wave";
-    case "plot":
-      return "custom_expr";
     case "response":
     default:
       return "second_order_step";
   }
 }
 
-function inferDomain(rawDomain: unknown, preset: VisualSimPreset): VisualSimDomain {
+function inferDomain(rawDomain: unknown, preset: VisualSimPreset, kind: VisualSimKind): VisualSimDomain {
   if (typeof rawDomain === "string") {
-    const d = rawDomain.trim().toLowerCase() as VisualSimDomain;
-    if (VALID_DOMAINS.has(d)) return d;
+    const d = rawDomain.trim().toLowerCase();
+    if (d === "electronics" || d === "analog" || d === "power") return "circuits";
+    if (d === "optics" || d === "em" || d === "electromagnetics" || d === "fluids") return "physics";
+    if (d === "dsp" || d === "comm" || d === "communications") return "signals";
+    if (d === "thermodynamics" || d === "heat") return "thermo";
+    if (d === "statics" || d === "dynamics") return "mechanics";
+    if (VALID_DOMAINS.has(d as VisualSimDomain)) return d as VisualSimDomain;
   }
+  if (kind === "bode") return "controls";
+  if (kind === "polar") return "rf";
   switch (preset) {
     case "second_order_step":
     case "pid_step":
@@ -295,16 +442,172 @@ function normalizeParam(raw: unknown): VisualSimParam | null {
   return { id, label, unit, min, max, step, value };
 }
 
+function normalizeSeries(raw: unknown): VisualSimSeriesDef[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: VisualSimSeriesDef[] = [];
+  for (let i = 0; i < raw.length && out.length < 4; i += 1) {
+    const item = raw[i];
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const expr = typeof rec.expr === "string" && rec.expr.trim() ? rec.expr.trim().slice(0, 240) : undefined;
+    const xExpr =
+      typeof rec.xExpr === "string" && rec.xExpr.trim() ? rec.xExpr.trim().slice(0, 240) : undefined;
+    const yExpr =
+      typeof rec.yExpr === "string" && rec.yExpr.trim() ? rec.yExpr.trim().slice(0, 240) : undefined;
+    if (!expr && !(xExpr && yExpr)) continue;
+    const defaultColors: SimSeriesColor[] = ["accent", "good", "warn", "secondary"];
+    const color =
+      typeof rec.color === "string" && VALID_SERIES_COLORS.has(rec.color as SimSeriesColor)
+        ? (rec.color as SimSeriesColor)
+        : (defaultColors[out.length] ?? "accent");
+    const label =
+      typeof rec.label === "string" && rec.label.trim()
+        ? rec.label.trim().slice(0, 32)
+        : `Curve ${out.length + 1}`;
+    out.push({
+      label,
+      expr,
+      xExpr,
+      yExpr,
+      color,
+      dashed: rec.dashed === true,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeRefLines(raw: unknown, axis: "x" | "y"): VisualSimRefLine[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: VisualSimRefLine[] = [];
+  for (let i = 0; i < raw.length && out.length < 4; i += 1) {
+    const item = raw[i];
+    if (typeof item === "number" && Number.isFinite(item)) {
+      out.push(axis === "x" ? { x: item } : { y: item });
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const val = axis === "x" ? rec.x ?? rec.value : rec.y ?? rec.value;
+    if (typeof val !== "number" || !Number.isFinite(val)) continue;
+    const label = typeof rec.label === "string" && rec.label.trim() ? rec.label.trim().slice(0, 24) : undefined;
+    out.push(axis === "x" ? { x: val, label } : { y: val, label });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeMarkers(raw: unknown): VisualSimMarkerDef[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: VisualSimMarkerDef[] = [];
+  for (let i = 0; i < raw.length && out.length < 6; i += 1) {
+    const item = raw[i];
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const xExprRaw = typeof rec.xExpr === "string" ? rec.xExpr : typeof rec.x === "string" || typeof rec.x === "number" ? String(rec.x) : "";
+    const yExprRaw = typeof rec.yExpr === "string" ? rec.yExpr : typeof rec.y === "string" || typeof rec.y === "number" ? String(rec.y) : "";
+    if (!xExprRaw.trim() || !yExprRaw.trim()) continue;
+    const label = typeof rec.label === "string" && rec.label.trim() ? rec.label.trim().slice(0, 24) : `M${out.length + 1}`;
+    const toneRaw = typeof rec.tone === "string" ? rec.tone : "accent";
+    const tone =
+      toneRaw === "good" || toneRaw === "warn" || toneRaw === "crit" ? toneRaw : "accent";
+    out.push({
+      label,
+      xExpr: xExprRaw.trim().slice(0, 160),
+      yExpr: yExprRaw.trim().slice(0, 160),
+      tone,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeMetrics(raw: unknown): VisualSimMetricDef[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: VisualSimMetricDef[] = [];
+  for (let i = 0; i < raw.length && out.length < 6; i += 1) {
+    const item = raw[i];
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const expr = typeof rec.expr === "string" ? rec.expr.trim().slice(0, 200) : "";
+    if (!expr) continue;
+    const label = typeof rec.label === "string" && rec.label.trim() ? rec.label.trim().slice(0, 24) : `Metric ${out.length + 1}`;
+    const unit = typeof rec.unit === "string" ? rec.unit.trim().slice(0, 16) : undefined;
+    const precision =
+      typeof rec.precision === "number" && Number.isInteger(rec.precision) && rec.precision >= 0 && rec.precision <= 4
+        ? rec.precision
+        : 2;
+    const tone =
+      typeof rec.tone === "string" && VALID_METRIC_TONES.has(rec.tone as NonNullable<SimMetric["tone"]>)
+        ? (rec.tone as SimMetric["tone"])
+        : "accent";
+    out.push({ label, expr, unit, precision, tone });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeChannels(raw: unknown): VisualSimChannelDef[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: VisualSimChannelDef[] = [];
+  for (let i = 0; i < raw.length && out.length < 6; i += 1) {
+    const item = raw[i];
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const name = typeof rec.name === "string" && rec.name.trim() ? rec.name.trim().slice(0, 14) : `CH${out.length}`;
+    const expr = typeof rec.expr === "string" && rec.expr.trim() ? rec.expr.trim().slice(0, 240) : undefined;
+    let levels: Array<[number, number]> | undefined;
+    if (Array.isArray(rec.levels)) {
+      levels = [];
+      for (const pair of rec.levels) {
+        if (
+          Array.isArray(pair) &&
+          pair.length >= 2 &&
+          typeof pair[0] === "number" &&
+          typeof pair[1] === "number" &&
+          Number.isFinite(pair[0]) &&
+          Number.isFinite(pair[1])
+        ) {
+          levels.push([pair[0], pair[1] > 0.5 ? 1 : 0]);
+        }
+      }
+      if (levels.length === 0) levels = undefined;
+    }
+    if (!expr && !levels) continue;
+    const color = rec.color === "good" || rec.color === "warn" ? rec.color : "accent";
+    out.push({ name, expr, levels, color });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function expressionUsesTime(raw: Record<string, unknown>, series?: VisualSimSeriesDef[], channels?: VisualSimChannelDef[], markers?: VisualSimMarkerDef[], metrics?: VisualSimMetricDef[]): boolean {
+  const texts: string[] = [];
+  if (typeof raw.expr === "string") texts.push(raw.expr);
+  if (typeof raw.exprSecondary === "string") texts.push(raw.exprSecondary);
+  for (const s of series ?? []) {
+    if (s.expr) texts.push(s.expr);
+    if (s.xExpr) texts.push(s.xExpr);
+    if (s.yExpr) texts.push(s.yExpr);
+  }
+  for (const c of channels ?? []) {
+    if (c.expr) texts.push(c.expr);
+  }
+  for (const m of markers ?? []) {
+    texts.push(m.xExpr, m.yExpr);
+  }
+  for (const met of metrics ?? []) {
+    texts.push(met.expr);
+  }
+  return texts.some((txt) => /\btime\b/.test(txt));
+}
+
 export function normalizeVisualSimSpec(input: unknown): VisualSimSpec | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return null;
   }
   const raw = input as Record<string, unknown>;
-  const initialKind = typeof raw.kind === "string" ? (raw.kind.trim().toLowerCase() as VisualSimKind) : "response";
+  const initialKind =
+    typeof raw.kind === "string" ? (raw.kind.trim().toLowerCase() as VisualSimKind) : "response";
   const safeInitialKind = VALID_KINDS.has(initialKind) ? initialKind : "response";
   const preset = inferPreset(raw, safeInitialKind);
   const kind = inferKind(raw.kind, preset);
-  const domain = inferDomain(raw.domain, preset);
+  const domain = inferDomain(raw.domain, preset, kind);
 
   const defaultParams = DEFAULT_PARAMS_BY_PRESET[preset].map((p) => {
     let overrideVal: unknown = raw[p.id];
@@ -323,12 +626,21 @@ export function normalizeVisualSimSpec(input: unknown): VisualSimSpec | null {
     return { ...p };
   });
   let params: VisualSimParam[] = defaultParams;
-  if (Array.isArray(raw.params) && raw.params.length > 0) {
+  if (Array.isArray(raw.params)) {
     const parsed = raw.params.map(normalizeParam).filter((p): p is VisualSimParam => p !== null);
     if (parsed.length > 0) {
       params = parsed.slice(0, 5);
+    } else if (preset === "custom_expr" && raw.params.length === 0) {
+      params = [];
     }
   }
+
+  const series = normalizeSeries(raw.series);
+  const hLines = normalizeRefLines(raw.hLines, "y");
+  const vLines = normalizeRefLines(raw.vLines, "x");
+  const markers = normalizeMarkers(raw.markers);
+  const metrics = normalizeMetrics(raw.metrics);
+  const channels = normalizeChannels(raw.channels);
 
   const defaultTitleMap: Record<VisualSimPreset, string> = {
     second_order_step: "2nd-Order Closed-Loop Step Response",
@@ -341,7 +653,16 @@ export function normalizeVisualSimSpec(input: unknown): VisualSimSpec | null {
     pwm_rc: "PWM + RC Low-Pass Filter Ripple",
     damped_wave: "Damped Harmonic Oscillator",
     standing_wave: "Transmission Line Standing Wave",
-    custom_expr: "Parametric Curve Explorer",
+    custom_expr:
+      kind === "bode"
+        ? "Bode Frequency Response"
+        : kind === "parametric"
+          ? "2D Parametric Phase / Trajectory"
+          : kind === "polar"
+            ? "Polar Radiation / Gain Pattern"
+            : kind === "timing"
+              ? "Digital Timing Diagram"
+              : "Parametric Curve Explorer",
   };
 
   const title =
@@ -365,13 +686,32 @@ export function normalizeVisualSimSpec(input: unknown): VisualSimSpec | null {
     pwm_rc: [0, 0.5, "Time t (ms)", "Voltage (V)"],
     damped_wave: [0, 6, "Time t (s)", "Displacement y(t)"],
     standing_wave: [0, 6, "Position z (m)", "|V(z)| Envelope"],
-    custom_expr: [0, 6.28, "x", "f(x)"],
+    custom_expr:
+      kind === "bode"
+        ? [1, 100000, "Frequency (Hz)", "Magnitude (dB)"]
+        : kind === "parametric"
+          ? [-5, 5, "x(s)", "y(s)"]
+          : kind === "timing"
+            ? [0, 10, "Cycles / Time", "Logic"]
+            : [0, 6.28, "x", "f(x)"],
   };
 
   const [dxMin, dxMax, dxLabel, dyLabel] = defaultXRange[preset];
-  const xMin = finiteOr(raw.xMin, dxMin);
+  const xScale: "linear" | "log" =
+    raw.xScale === "log" || (kind === "bode" && raw.xScale !== "linear") ? "log" : "linear";
+  let xMin = finiteOr(raw.xMin, dxMin);
+  if (xScale === "log") {
+    xMin = Math.max(1e-4, xMin);
+  }
   const rawXMax = finiteOr(raw.xMax, dxMax);
-  const xMax = rawXMax > xMin ? rawXMax : xMin + 1;
+  const xMax = rawXMax > xMin ? rawXMax : xScale === "log" ? xMin * 100 : xMin + 1;
+
+  const sMin = finiteOr(raw.sMin, 0);
+  const rawSMax = finiteOr(raw.sMax, 2 * Math.PI);
+  const sMax = rawSMax > sMin ? rawSMax : sMin + 1;
+
+  const animate =
+    raw.animate === true || expressionUsesTime(raw, series, channels, markers, metrics);
 
   return {
     version: 1,
@@ -386,17 +726,27 @@ export function normalizeVisualSimSpec(input: unknown): VisualSimSpec | null {
     xMax,
     yMin: typeof raw.yMin === "number" && Number.isFinite(raw.yMin) ? raw.yMin : undefined,
     yMax: typeof raw.yMax === "number" && Number.isFinite(raw.yMax) ? raw.yMax : undefined,
-    expr: typeof raw.expr === "string" ? raw.expr.trim().slice(0, 200) : undefined,
+    xScale,
+    sMin,
+    sMax,
+    animate,
+    expr: typeof raw.expr === "string" ? raw.expr.trim().slice(0, 240) : undefined,
     exprSecondary:
-      typeof raw.exprSecondary === "string" ? raw.exprSecondary.trim().slice(0, 200) : undefined,
+      typeof raw.exprSecondary === "string" ? raw.exprSecondary.trim().slice(0, 240) : undefined,
     target: typeof raw.target === "number" && Number.isFinite(raw.target) ? raw.target : undefined,
+    series,
+    hLines,
+    vLines,
+    markers,
+    metrics,
+    channels,
     params,
   };
 }
 
 export function parseVisualSimSpec(rawText: string): VisualSimSpec | null {
   const trimmed = rawText.trim();
-  if (!trimmed || trimmed.length > 8000) return null;
+  if (!trimmed || trimmed.length > 16000) return null;
   try {
     const parsed: unknown = JSON.parse(trimmed);
     return normalizeVisualSimSpec(parsed);
@@ -422,6 +772,10 @@ const MATH_FUNCS: Record<string, (...args: number[]) => number> = {
   asin: Math.asin,
   acos: Math.acos,
   atan: Math.atan,
+  atan2: Math.atan2,
+  sinh: Math.sinh,
+  cosh: Math.cosh,
+  tanh: Math.tanh,
   exp: Math.exp,
   sqrt: Math.sqrt,
   abs: Math.abs,
@@ -431,14 +785,23 @@ const MATH_FUNCS: Record<string, (...args: number[]) => number> = {
   min: Math.min,
   max: Math.max,
   pow: Math.pow,
-  tanh: Math.tanh,
+  floor: Math.floor,
+  ceil: Math.ceil,
+  round: Math.round,
+  sign: Math.sign,
+  clamp: (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v)),
+  step: (x: number) => (x >= 0 ? 1 : 0),
+  rect: (x: number) => (Math.abs(x) <= 0.5 ? 1 : 0),
+  sinc: (x: number) => (Math.abs(x) < 1e-8 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x)),
+  mod: (a: number, b: number) => (b === 0 ? Number.NaN : ((a % b) + b) % b),
+  ifelse: (cond: number, a: number, b: number) => (cond > 0 ? a : b),
 };
 
 function tokenizeMath(expr: string): MathToken[] {
   const tokens: MathToken[] = [];
   let i = 0;
   while (i < expr.length) {
-    if (tokens.length > 160) {
+    if (tokens.length > 220) {
       throw new Error("Expression exceeds token limit");
     }
     const ch = expr[i] ?? "";
@@ -507,7 +870,7 @@ export function evaluateSafeMathExpression(
   };
 
   const parseExpr = (depth: number): number => {
-    if (depth > 24) throw new Error("Expression too deeply nested");
+    if (depth > 28) throw new Error("Expression too deeply nested");
     let left = parseTerm(depth + 1);
     while (true) {
       const t = peek();
@@ -604,6 +967,98 @@ export function evaluateSafeMathExpression(
   return result;
 }
 
+// ---------- Declarative Helpers (Metrics, Markers, RefLines, Segment Splitting) ----------
+
+function buildVarScope(spec: VisualSimSpec, values: Record<string, number>, animTime: number): Record<string, number> {
+  const vars: Record<string, number> = { time: animTime };
+  for (const p of spec.params) {
+    vars[p.id] = Number.isFinite(values[p.id]) ? (values[p.id] as number) : p.value;
+  }
+  for (const [k, v] of Object.entries(values)) {
+    if (Number.isFinite(v)) vars[k] = v;
+  }
+  return vars;
+}
+
+function evaluateDeclarativeMetrics(
+  defs: VisualSimMetricDef[] | undefined,
+  vars: Record<string, number>,
+): SimMetric[] {
+  if (!defs || defs.length === 0) return [];
+  const metrics: SimMetric[] = [];
+  for (const def of defs) {
+    try {
+      const val = evaluateSafeMathExpression(def.expr, vars);
+      const formatted = Number.isFinite(val)
+        ? def.unit
+          ? `${val.toFixed(def.precision ?? 2)} ${def.unit}`
+          : val.toFixed(def.precision ?? 2)
+        : "—";
+      metrics.push({ label: def.label, value: formatted, tone: def.tone ?? "accent" });
+    } catch {
+      metrics.push({ label: def.label, value: "Err", tone: "crit" });
+    }
+  }
+  return metrics;
+}
+
+function evaluateDeclarativeMarkers(
+  defs: VisualSimMarkerDef[] | undefined,
+  vars: Record<string, number>,
+): SimEvaluatedMarker[] | undefined {
+  if (!defs || defs.length === 0) return undefined;
+  const markers: SimEvaluatedMarker[] = [];
+  for (const def of defs) {
+    try {
+      const x = evaluateSafeMathExpression(def.xExpr, vars);
+      const y = evaluateSafeMathExpression(def.yExpr, vars);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        markers.push({
+          label: def.label,
+          x,
+          y,
+          tone: def.tone ?? "accent",
+        });
+      }
+    } catch {
+      // Skip invalid marker expression without failing entire plot.
+    }
+  }
+  return markers.length > 0 ? markers : undefined;
+}
+
+function splitDiscontinuousSegments(
+  rawPoints: Array<SimPoint | null>,
+  ySpanHint: number,
+): SimPoint[][] {
+  const segments: SimPoint[][] = [];
+  let current: SimPoint[] = [];
+  // Over 180 samples, a continuous curve changes by far less than 65% of total Y span in one step;
+  // larger single-step jumps indicate vertical asymptotes (e.g. tan, 1/(x-a)) or step discontinuities.
+  const jumpThreshold = Math.max(8, ySpanHint * 0.65);
+
+  for (const pt of rawPoints) {
+    if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) {
+      if (current.length > 0) {
+        segments.push(current);
+        current = [];
+      }
+      continue;
+    }
+    const prev = current[current.length - 1];
+    if (prev && Math.abs(pt.y - prev.y) > jumpThreshold && ySpanHint > 0) {
+      segments.push(current);
+      current = [pt];
+    } else {
+      current.push(pt);
+    }
+  }
+  if (current.length > 0) {
+    segments.push(current);
+  }
+  return segments;
+}
+
 // ---------- Domain Physics / Controls / RF / Embedded Evaluators ----------
 
 function getParamVal(spec: VisualSimSpec, values: Record<string, number>, id: string, fallback: number): number {
@@ -651,7 +1106,7 @@ function evalSecondOrderStep(spec: VisualSimSpec, values: Record<string, number>
   const ts = 4 / (zeta * wn);
   const regimeLabel =
     zeta < 0.99 ? "Underdamped" : Math.abs(zeta - 1) <= 0.03 ? "Critically Damped" : "Overdamped";
-  const regimeTone = zeta < 0.25 ? "warn" : zeta <= 1.05 ? "good" : "good";
+  const regimeTone = zeta < 0.25 ? "warn" : "good";
 
   return {
     kind: "response",
@@ -707,7 +1162,6 @@ function evalPidStep(spec: VisualSimSpec, values: Record<string, number>): Evalu
     const dErr = i === 0 ? 0 : (err - prevErr) / dt;
     integral = clamp(integral + err * dt, -20, 20);
     const u = kp * err + ki * integral + kd * dErr;
-    // Second-order plant: y'' + 1.2 y' + y = u
     const ddy = clamp(u - 1.2 * dy - y, -80, 80);
     dy += ddy * dt;
     y += dy * dt;
@@ -786,7 +1240,7 @@ function evalSplane(spec: VisualSimSpec, values: Record<string, number>): Evalua
   const zeta = clamp(getParamVal(spec, values, "zeta", 0.4), -0.5, 2.0);
   const wn = clamp(getParamVal(spec, values, "wn", 3.0), 0.3, 6.0);
   const poles: SimPole[] = [];
-  let sigma = -zeta * wn;
+  const sigma = -zeta * wn;
   let wd = 0;
 
   if (Math.abs(zeta) < 1) {
@@ -835,7 +1289,6 @@ function evalSmith(spec: VisualSimSpec, values: Record<string, number>): Evaluat
 
   const r = rl / z0;
   const x = xl / z0;
-  // Gamma = ((r - 1) + jx) / ((r + 1) + jx)
   const denom = (r + 1) * (r + 1) + x * x;
   const gammaRe = ((r - 1) * (r + 1) + x * x) / denom;
   const gammaIm = (2 * x) / denom;
@@ -882,8 +1335,6 @@ function evalRfS11(spec: VisualSimSpec, values: Record<string, number>): Evaluat
   for (let i = 0; i <= 180; i += 1) {
     const f = xMin + ((xMax - xMin) * i) / 180;
     const delta = q * (f / f0 - f0 / f);
-    // Series resonator shunt/input reflection with coupling beta:
-    // Gamma = (beta - 1 - j*delta) / (beta + 1 + j*delta)
     const num = Math.hypot(beta - 1, -delta);
     const den = Math.hypot(beta + 1, delta);
     const mag = clamp(num / den, 1e-4, 0.9999);
@@ -989,7 +1440,7 @@ function evalPwmRc(spec: VisualSimSpec, values: Record<string, number>): Evaluat
   const vcc = clamp(getParamVal(spec, values, "vcc", 3.3), 1.2, 12);
 
   const d = dutyPct / 100;
-  const periodMs = 1 / freqKhz; // f in kHz -> T in ms
+  const periodMs = 1 / freqKhz;
   const totalMs = periodMs * 4;
   const onMs = d * periodMs;
   const offMs = (1 - d) * periodMs;
@@ -1039,7 +1490,7 @@ function evalPwmRc(spec: VisualSimSpec, values: Record<string, number>): Evaluat
   };
 }
 
-function evalDampedWave(spec: VisualSimSpec, values: Record<string, number>): EvaluatedVisualSim {
+function evalDampedWave(spec: VisualSimSpec, values: Record<string, number>, animTime: number): EvaluatedVisualSim {
   const amp = clamp(getParamVal(spec, values, "amp", 1.0), 0.1, 10);
   const gamma = clamp(getParamVal(spec, values, "gamma", 0.25), 0, 5);
   const omega = clamp(getParamVal(spec, values, "omega", 5.0), 0.5, 25);
@@ -1052,7 +1503,7 @@ function evalDampedWave(spec: VisualSimSpec, values: Record<string, number>): Ev
   for (let i = 0; i <= 180; i += 1) {
     const t = xMin + ((xMax - xMin) * i) / 180;
     const env = amp * Math.exp(-gamma * Math.max(0, t));
-    const y = env * Math.cos(omega * t);
+    const y = env * Math.cos(omega * (t - animTime));
     pts.push({ x: t, y });
     envUp.push({ x: t, y: env });
     envLo.push({ x: t, y: -env });
@@ -1083,7 +1534,7 @@ function evalDampedWave(spec: VisualSimSpec, values: Record<string, number>): Ev
   };
 }
 
-function evalStandingWave(spec: VisualSimSpec, values: Record<string, number>): EvaluatedVisualSim {
+function evalStandingWave(spec: VisualSimSpec, values: Record<string, number>, animTime: number): EvaluatedVisualSim {
   const amp1 = clamp(getParamVal(spec, values, "amp1", 1.0), 0.1, 5);
   const gamma = clamp(getParamVal(spec, values, "gamma", 0.5), 0, 1);
   const k = clamp(getParamVal(spec, values, "k", 2.5), 0.5, 12);
@@ -1091,11 +1542,12 @@ function evalStandingWave(spec: VisualSimSpec, values: Record<string, number>): 
   const xMax = spec.xMax;
   const pts: SimPoint[] = [];
   const envUp: SimPoint[] = [];
+  const wPhase = animTime * 4;
 
   for (let i = 0; i <= 180; i += 1) {
     const z = xMin + ((xMax - xMin) * i) / 180;
     const envMag = amp1 * Math.sqrt(1 + gamma * gamma + 2 * gamma * Math.cos(2 * k * z));
-    const inst = amp1 * (Math.cos(k * z) + gamma * Math.cos(-k * z));
+    const inst = amp1 * (Math.cos(wPhase - k * z) + gamma * Math.cos(wPhase + k * z));
     pts.push({ x: z, y: inst });
     envUp.push({ x: z, y: envMag });
   }
@@ -1124,44 +1576,71 @@ function evalStandingWave(spec: VisualSimSpec, values: Record<string, number>): 
   };
 }
 
-function evalCustomExpression(spec: VisualSimSpec, values: Record<string, number>): EvaluatedVisualSim {
-  const expr = spec.expr && spec.expr.trim().length > 0 ? spec.expr.trim() : "a * sin(b * x)";
-  const pts: SimPoint[] = [];
-  const sec: SimPoint[] = [];
-  const vars: Record<string, number> = { ...values };
+// ---------- General Declarative STEM Evaluators ----------
+
+function resolveCartesianSeriesDefs(spec: VisualSimSpec): VisualSimSeriesDef[] {
+  if (spec.series && spec.series.length > 0) {
+    return spec.series;
+  }
+  const primaryExpr = spec.expr && spec.expr.trim().length > 0 ? spec.expr.trim() : "a * sin(b * x)";
+  const defs: VisualSimSeriesDef[] = [{ label: spec.yLabel || "Primary", expr: primaryExpr, color: "accent" }];
+  if (spec.exprSecondary && spec.exprSecondary.trim().length > 0) {
+    defs.push({ label: "Secondary", expr: spec.exprSecondary.trim(), color: "secondary", dashed: true });
+  }
+  return defs;
+}
+
+function evalDeclarativeCartesian(
+  spec: VisualSimSpec,
+  values: Record<string, number>,
+  animTime: number,
+): EvaluatedVisualSim {
+  const vars = buildVarScope(spec, values, animTime);
   const xMin = spec.xMin;
   const xMax = spec.xMax;
+  const isLog = spec.xScale === "log" && xMin > 0 && xMax > xMin;
+  const defs = resolveCartesianSeriesDefs(spec);
+  const N = 180;
 
   let yMinVal = Number.POSITIVE_INFINITY;
   let yMaxVal = Number.NEGATIVE_INFINITY;
   let sqSum = 0;
+  let primaryFiniteCount = 0;
+
+  const rawBySeries: Array<Array<SimPoint | null>> = defs.map(() => []);
+  const logMin = isLog ? Math.log10(xMin) : 0;
+  const logMax = isLog ? Math.log10(xMax) : 0;
 
   try {
-    for (let i = 0; i <= 160; i += 1) {
-      const x = xMin + ((xMax - xMin) * i) / 160;
+    for (let i = 0; i <= N; i += 1) {
+      const x = isLog ? Math.pow(10, logMin + ((logMax - logMin) * i) / N) : xMin + ((xMax - xMin) * i) / N;
       vars.x = x;
       vars.t = x;
       vars.f = x;
+      vars.w = x;
       vars.z = x;
-      const y = evaluateSafeMathExpression(expr, vars);
-      if (Number.isFinite(y)) {
-        if (y < yMinVal) yMinVal = y;
-        if (y > yMaxVal) yMaxVal = y;
-        sqSum += y * y;
-        pts.push({ x, y });
-      }
-      if (spec.exprSecondary) {
-        const y2 = evaluateSafeMathExpression(spec.exprSecondary, vars);
-        if (Number.isFinite(y2)) {
-          if (y2 < yMinVal) yMinVal = y2;
-          if (y2 > yMaxVal) yMaxVal = y2;
-          sec.push({ x, y: y2 });
+      vars.s = x;
+
+      for (let sIdx = 0; sIdx < defs.length; sIdx += 1) {
+        const sDef = defs[sIdx];
+        if (!sDef?.expr) continue;
+        const y = evaluateSafeMathExpression(sDef.expr, vars);
+        if (Number.isFinite(y)) {
+          if (y < yMinVal) yMinVal = y;
+          if (y > yMaxVal) yMaxVal = y;
+          if (sIdx === 0) {
+            sqSum += y * y;
+            primaryFiniteCount += 1;
+          }
+          rawBySeries[sIdx]?.push({ x, y });
+        } else {
+          rawBySeries[sIdx]?.push(null);
         }
       }
     }
   } catch (err) {
     return {
-      kind: "plot",
+      kind: spec.kind,
       preset: "custom_expr",
       domain: spec.domain,
       xLabel: spec.xLabel,
@@ -1170,6 +1649,7 @@ function evalCustomExpression(spec: VisualSimSpec, values: Record<string, number
       xMax,
       yMin: -1,
       yMax: 1,
+      xScale: isLog ? "log" : "linear",
       primary: [],
       secondary: [],
       metrics: [],
@@ -1181,8 +1661,36 @@ function evalCustomExpression(spec: VisualSimSpec, values: Record<string, number
     yMinVal = -1;
     yMaxVal = 1;
   }
+  const yMinBound = spec.yMin ?? yMinVal;
+  const yMaxBound = spec.yMax ?? yMaxVal;
+  const spanHint = Math.max(0.5, yMaxBound - yMinBound);
+
+  const series: SimEvaluatedSeries[] = defs.map((def, idx) => ({
+    label: def.label,
+    color: def.color ?? "accent",
+    dashed: def.dashed,
+    segments: splitDiscontinuousSegments(rawBySeries[idx] ?? [], spanHint),
+  }));
+
+  const hLines = spec.hLines?.filter((l) => typeof l.y === "number").map((l) => ({ y: l.y as number, label: l.label }));
+  const vLines = spec.vLines?.filter((l) => typeof l.x === "number").map((l) => ({ x: l.x as number, label: l.label }));
+  for (const hl of hLines ?? []) {
+    if (hl.y < yMinVal) yMinVal = hl.y;
+    if (hl.y > yMaxVal) yMaxVal = hl.y;
+  }
   const pad = Math.max(0.2, (yMaxVal - yMinVal) * 0.12);
-  const rms = pts.length > 0 ? Math.sqrt(sqSum / pts.length) : 0;
+
+  const evalMarkers = evaluateDeclarativeMarkers(spec.markers, buildVarScope(spec, values, animTime));
+  const customMetrics = evaluateDeclarativeMetrics(spec.metrics, buildVarScope(spec, values, animTime));
+  const rms = primaryFiniteCount > 0 ? Math.sqrt(sqSum / primaryFiniteCount) : 0;
+  const metrics: SimMetric[] =
+    customMetrics.length > 0
+      ? customMetrics
+      : [
+          { label: "Max", value: yMaxVal.toFixed(2), tone: "accent" },
+          { label: "Min", value: yMinVal.toFixed(2), tone: "neutral" },
+          { label: "RMS", value: rms.toFixed(2), tone: "good" },
+        ];
 
   return {
     kind: spec.kind,
@@ -1194,47 +1702,374 @@ function evalCustomExpression(spec: VisualSimSpec, values: Record<string, number
     xMax,
     yMin: spec.yMin ?? yMinVal - pad,
     yMax: spec.yMax ?? yMaxVal + pad,
-    primary: pts,
-    secondary: sec,
-    targetLine: spec.target ?? 0,
-    metrics: [
-      { label: "Max", value: yMaxVal.toFixed(2), tone: "accent" },
-      { label: "Min", value: yMinVal.toFixed(2), tone: "neutral" },
-      { label: "RMS", value: rms.toFixed(2), tone: "good" },
-    ],
+    xScale: isLog ? "log" : "linear",
+    primary: series[0]?.segments.flat() ?? [],
+    secondary: series[1]?.segments.flat() ?? [],
+    series,
+    hLines,
+    vLines,
+    markers: evalMarkers,
+    targetLine: spec.target ?? (spec.hLines ? undefined : 0),
+    metrics,
+  };
+}
+
+function evalDeclarativeParametric(
+  spec: VisualSimSpec,
+  values: Record<string, number>,
+  animTime: number,
+): EvaluatedVisualSim {
+  const vars = buildVarScope(spec, values, animTime);
+  const defs: VisualSimSeriesDef[] =
+    spec.series && spec.series.length > 0
+      ? spec.series.filter((s) => Boolean(s.xExpr && s.yExpr))
+      : [{ label: "Trajectory", xExpr: "a * cos(s)", yExpr: "b * sin(s)", color: "accent" }];
+
+  const sMin = spec.sMin ?? 0;
+  const sMax = spec.sMax ?? 2 * Math.PI;
+  const N = 200;
+  const rawBySeries: Array<Array<SimPoint | null>> = defs.map(() => []);
+
+  let xMinVal = Number.POSITIVE_INFINITY;
+  let xMaxVal = Number.NEGATIVE_INFINITY;
+  let yMinVal = Number.POSITIVE_INFINITY;
+  let yMaxVal = Number.NEGATIVE_INFINITY;
+
+  try {
+    for (let i = 0; i <= N; i += 1) {
+      const s = sMin + ((sMax - sMin) * i) / N;
+      vars.s = s;
+      vars.t = s;
+      vars.theta = s;
+      vars.x = s;
+      for (let idx = 0; idx < defs.length; idx += 1) {
+        const d = defs[idx];
+        if (!d?.xExpr || !d?.yExpr) continue;
+        const px = evaluateSafeMathExpression(d.xExpr, vars);
+        const py = evaluateSafeMathExpression(d.yExpr, vars);
+        if (Number.isFinite(px) && Number.isFinite(py)) {
+          if (px < xMinVal) xMinVal = px;
+          if (px > xMaxVal) xMaxVal = px;
+          if (py < yMinVal) yMinVal = py;
+          if (py > yMaxVal) yMaxVal = py;
+          rawBySeries[idx]?.push({ x: px, y: py });
+        } else {
+          rawBySeries[idx]?.push(null);
+        }
+      }
+    }
+  } catch (err) {
+    return {
+      kind: "parametric",
+      preset: "custom_expr",
+      domain: spec.domain,
+      xLabel: spec.xLabel,
+      yLabel: spec.yLabel,
+      xMin: -1,
+      xMax: 1,
+      yMin: -1,
+      yMax: 1,
+      primary: [],
+      secondary: [],
+      metrics: [],
+      error: err instanceof Error ? err.message : "Invalid parametric expression",
+    };
+  }
+
+  if (!Number.isFinite(xMinVal)) {
+    xMinVal = -1;
+    xMaxVal = 1;
+  }
+  if (!Number.isFinite(yMinVal)) {
+    yMinVal = -1;
+    yMaxVal = 1;
+  }
+
+  const evalMarkers = evaluateDeclarativeMarkers(spec.markers, buildVarScope(spec, values, animTime));
+  for (const m of evalMarkers ?? []) {
+    if (m.x < xMinVal) xMinVal = m.x;
+    if (m.x > xMaxVal) xMaxVal = m.x;
+    if (m.y < yMinVal) yMinVal = m.y;
+    if (m.y > yMaxVal) yMaxVal = m.y;
+  }
+
+  const xPad = Math.max(0.25, (xMaxVal - xMinVal) * 0.14);
+  const yPad = Math.max(0.25, (yMaxVal - yMinVal) * 0.14);
+  const ySpanHint = Math.max(1, yMaxVal - yMinVal);
+  const series: SimEvaluatedSeries[] = defs.map((def, idx) => ({
+    label: def.label,
+    color: def.color ?? "accent",
+    dashed: def.dashed,
+    segments: splitDiscontinuousSegments(rawBySeries[idx] ?? [], ySpanHint),
+  }));
+
+  const customMetrics = evaluateDeclarativeMetrics(spec.metrics, buildVarScope(spec, values, animTime));
+  const metrics: SimMetric[] =
+    customMetrics.length > 0
+      ? customMetrics
+      : [
+          { label: "X Span", value: `[${xMinVal.toFixed(1)}, ${xMaxVal.toFixed(1)}]`, tone: "neutral" },
+          { label: "Y Peak", value: yMaxVal.toFixed(2), tone: "accent" },
+        ];
+
+  return {
+    kind: "parametric",
+    preset: "custom_expr",
+    domain: spec.domain,
+    xLabel: spec.xLabel,
+    yLabel: spec.yLabel,
+    xMin: spec.yMin !== undefined || spec.xLabel !== "x(s)" ? xMinVal - xPad : Math.min(xMinVal - xPad, spec.xMin),
+    xMax: xMaxVal + xPad,
+    yMin: spec.yMin ?? yMinVal - yPad,
+    yMax: spec.yMax ?? yMaxVal + yPad,
+    primary: series[0]?.segments.flat() ?? [],
+    secondary: series[1]?.segments.flat() ?? [],
+    series,
+    hLines: spec.hLines?.filter((l) => typeof l.y === "number").map((l) => ({ y: l.y as number, label: l.label })),
+    vLines: spec.vLines?.filter((l) => typeof l.x === "number").map((l) => ({ x: l.x as number, label: l.label })),
+    markers: evalMarkers,
+    metrics,
+  };
+}
+
+function evalDeclarativePolar(
+  spec: VisualSimSpec,
+  values: Record<string, number>,
+  animTime: number,
+): EvaluatedVisualSim {
+  const vars = buildVarScope(spec, values, animTime);
+  const defs = resolveCartesianSeriesDefs(spec);
+  const sMin = spec.sMin ?? 0;
+  const sMax = spec.sMax ?? 2 * Math.PI;
+  const N = 200;
+
+  let maxR = 0.001;
+  const evaluatedSeries: Array<{
+    label: string;
+    color: SimSeriesColor;
+    dashed?: boolean;
+    points: Array<{ theta: number; r: number }>;
+  }> = defs.map((d) => ({
+    label: d.label,
+    color: d.color ?? "accent",
+    dashed: d.dashed,
+    points: [],
+  }));
+
+  try {
+    for (let i = 0; i <= N; i += 1) {
+      const theta = sMin + ((sMax - sMin) * i) / N;
+      vars.theta = theta;
+      vars.x = theta;
+      vars.s = theta;
+      vars.t = theta;
+      for (let idx = 0; idx < defs.length; idx += 1) {
+        const def = defs[idx];
+        if (!def?.expr) continue;
+        const rawR = evaluateSafeMathExpression(def.expr, vars);
+        const r = Number.isFinite(rawR) ? Math.max(0, rawR) : 0;
+        if (r > maxR) maxR = r;
+        evaluatedSeries[idx]?.points.push({ theta, r });
+      }
+    }
+  } catch (err) {
+    return {
+      kind: "polar",
+      preset: "custom_expr",
+      domain: spec.domain,
+      xLabel: spec.xLabel,
+      yLabel: spec.yLabel,
+      xMin: -1,
+      xMax: 1,
+      yMin: -1,
+      yMax: 1,
+      primary: [],
+      secondary: [],
+      metrics: [],
+      error: err instanceof Error ? err.message : "Invalid polar expression",
+    };
+  }
+
+  const customMetrics = evaluateDeclarativeMetrics(spec.metrics, buildVarScope(spec, values, animTime));
+  const metrics: SimMetric[] =
+    customMetrics.length > 0
+      ? customMetrics
+      : [{ label: "Max Gain", value: maxR.toFixed(2), tone: "accent" }];
+
+  return {
+    kind: "polar",
+    preset: "custom_expr",
+    domain: spec.domain,
+    xLabel: "Angle θ",
+    yLabel: "Magnitude",
+    xMin: -maxR,
+    xMax: maxR,
+    yMin: -maxR,
+    yMax: maxR,
+    primary: [],
+    secondary: [],
+    polar: {
+      maxR: spec.yMax ?? maxR,
+      series: evaluatedSeries,
+    },
+    metrics,
+  };
+}
+
+function evalDeclarativeTiming(
+  spec: VisualSimSpec,
+  values: Record<string, number>,
+  animTime: number,
+): EvaluatedVisualSim {
+  const vars = buildVarScope(spec, values, animTime);
+  const channels = spec.channels ?? [];
+  const xMin = spec.xMin;
+  const xMax = spec.xMax;
+  const N = 160;
+  const built: SimTimingChannel[] = [];
+
+  try {
+    for (const ch of channels) {
+      if (ch.levels && ch.levels.length > 0) {
+        built.push({ name: ch.name, color: ch.color ?? "accent", samples: ch.levels.map(([t, level]) => ({ t, level })) });
+        continue;
+      }
+      if (!ch.expr) continue;
+      const samples: Array<{ t: number; level: number }> = [];
+      let prevLevel = -1;
+      for (let i = 0; i <= N; i += 1) {
+        const t = xMin + ((xMax - xMin) * i) / N;
+        vars.t = t;
+        vars.x = t;
+        const val = evaluateSafeMathExpression(ch.expr, vars);
+        const level = Number.isFinite(val) && val > 0.5 ? 1 : 0;
+        if (level !== prevLevel || i === N) {
+          samples.push({ t, level });
+          prevLevel = level;
+        }
+      }
+      built.push({ name: ch.name, color: ch.color ?? "accent", samples });
+    }
+  } catch (err) {
+    return {
+      kind: "timing",
+      preset: "custom_expr",
+      domain: spec.domain,
+      xLabel: spec.xLabel,
+      yLabel: spec.yLabel,
+      xMin,
+      xMax,
+      yMin: 0,
+      yMax: 1,
+      primary: [],
+      secondary: [],
+      metrics: [],
+      error: err instanceof Error ? err.message : "Invalid timing channel expression",
+    };
+  }
+
+  const customMetrics = evaluateDeclarativeMetrics(spec.metrics, buildVarScope(spec, values, animTime));
+  const metrics: SimMetric[] =
+    customMetrics.length > 0
+      ? customMetrics
+      : [{ label: "Channels", value: String(built.length), tone: "accent" }];
+
+  return {
+    kind: "timing",
+    preset: "custom_expr",
+    domain: spec.domain,
+    xLabel: spec.xLabel,
+    yLabel: spec.yLabel,
+    xMin,
+    xMax,
+    yMin: 0,
+    yMax: 1,
+    primary: [],
+    secondary: [],
+    timing: {
+      channels: built,
+      edgeLabel: spec.xLabel || "Window",
+      durationLabel: `${(xMax - xMin).toFixed(1)} units`,
+    },
+    metrics,
   };
 }
 
 export function evaluateVisualSim(
   spec: VisualSimSpec,
   paramValues: Record<string, number>,
+  animTime = 0,
 ): EvaluatedVisualSim {
-  if (spec.expr && spec.preset === "custom_expr") {
-    return evalCustomExpression(spec, paramValues);
+  if (spec.preset === "custom_expr") {
+    let result: EvaluatedVisualSim;
+    switch (spec.kind) {
+      case "parametric":
+        result = evalDeclarativeParametric(spec, paramValues, animTime);
+        break;
+      case "polar":
+        result = evalDeclarativePolar(spec, paramValues, animTime);
+        break;
+      case "timing":
+        result = spec.channels && spec.channels.length > 0
+          ? evalDeclarativeTiming(spec, paramValues, animTime)
+          : evalSpiTiming(spec, paramValues);
+        break;
+      case "bode":
+      case "plot":
+      case "response":
+      case "wave":
+      default:
+        result = evalDeclarativeCartesian(spec, paramValues, animTime);
+        break;
+    }
+    return result;
   }
+
+  let base: EvaluatedVisualSim;
   switch (spec.preset) {
     case "second_order_step":
-      return evalSecondOrderStep(spec, paramValues);
+      base = evalSecondOrderStep(spec, paramValues);
+      break;
     case "pid_step":
-      return evalPidStep(spec, paramValues);
+      base = evalPidStep(spec, paramValues);
+      break;
     case "rc_step":
-      return evalRcStep(spec, paramValues);
+      base = evalRcStep(spec, paramValues);
+      break;
     case "splane":
-      return evalSplane(spec, paramValues);
+      base = evalSplane(spec, paramValues);
+      break;
     case "smith":
-      return evalSmith(spec, paramValues);
+      base = evalSmith(spec, paramValues);
+      break;
     case "rf_s11":
-      return evalRfS11(spec, paramValues);
+      base = evalRfS11(spec, paramValues);
+      break;
     case "spi_timing":
-      return evalSpiTiming(spec, paramValues);
+      base = evalSpiTiming(spec, paramValues);
+      break;
     case "pwm_rc":
-      return evalPwmRc(spec, paramValues);
+      base = evalPwmRc(spec, paramValues);
+      break;
     case "damped_wave":
-      return evalDampedWave(spec, paramValues);
+      base = evalDampedWave(spec, paramValues, animTime);
+      break;
     case "standing_wave":
-      return evalStandingWave(spec, paramValues);
-    case "custom_expr":
+      base = evalStandingWave(spec, paramValues, animTime);
+      break;
     default:
-      return evalCustomExpression(spec, paramValues);
+      base = evalDeclarativeCartesian(spec, paramValues, animTime);
+      break;
   }
+
+  if (spec.metrics && spec.metrics.length > 0) {
+    const customMetrics = evaluateDeclarativeMetrics(
+      spec.metrics,
+      buildVarScope(spec, paramValues, animTime),
+    );
+    if (customMetrics.length > 0) {
+      base = { ...base, metrics: customMetrics };
+    }
+  }
+  return base;
 }

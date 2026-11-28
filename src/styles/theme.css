@@ -4783,6 +4783,22 @@ body,
   --sim-accent: var(--edge-challenge);
 }
 
+.axiom-sim--circuits {
+  --sim-accent: var(--tone-triage);
+}
+
+.axiom-sim--signals {
+  --sim-accent: var(--tone-diverge);
+}
+
+.axiom-sim--thermo {
+  --sim-accent: var(--tone-red-team);
+}
+
+.axiom-sim--mechanics {
+  --sim-accent: var(--tone-custom);
+}
+
 .axiom-sim--math {
   --sim-accent: var(--tone-synthesize);
 }
@@ -4792,6 +4808,13 @@ body,
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+}
+
+.axiom-sim__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .axiom-sim__title-wrap {
@@ -4823,6 +4846,7 @@ body,
   white-space: nowrap;
 }
 
+.axiom-sim__play-btn,
 .axiom-sim__reset-btn {
   flex-shrink: 0;
   padding: 2px 7px;
@@ -4834,6 +4858,13 @@ body,
   cursor: pointer;
 }
 
+.axiom-sim__play-btn--active {
+  border-color: var(--sim-accent);
+  color: var(--sim-accent);
+  background: color-mix(in srgb, var(--sim-accent) 14%, var(--bg-card));
+}
+
+.axiom-sim__play-btn:focus-visible,
 .axiom-sim__reset-btn:focus-visible {
   outline: 2px solid var(--sim-accent);
   outline-offset: 2px;
@@ -4917,6 +4948,118 @@ body,
   stroke-opacity: 0.55;
   stroke-width: 1;
   stroke-dasharray: 2 3;
+}
+
+.axiom-sim__curve {
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.axiom-sim__curve--accent {
+  stroke: var(--sim-accent);
+}
+
+.axiom-sim__curve--secondary {
+  stroke: var(--text-secondary);
+  stroke-opacity: 0.85;
+}
+
+.axiom-sim__curve--good {
+  stroke: var(--health-good);
+}
+
+.axiom-sim__curve--warn {
+  stroke: var(--health-warn);
+}
+
+.axiom-sim__curve--crit {
+  stroke: var(--health-crit);
+}
+
+.axiom-sim__curve--dashed {
+  stroke-dasharray: 4 2.5;
+}
+
+.axiom-sim__ref-line {
+  stroke: var(--text-muted);
+  stroke-opacity: 0.72;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.axiom-sim__polar-ring {
+  fill: none;
+  stroke: var(--border-subtle);
+  stroke-width: 0.85;
+}
+
+.axiom-sim__marker-dot {
+  stroke: var(--bg-canvas);
+  stroke-width: 1.4;
+}
+
+.axiom-sim__marker-dot--accent {
+  fill: var(--sim-accent);
+}
+
+.axiom-sim__marker-dot--good {
+  fill: var(--health-good);
+}
+
+.axiom-sim__marker-dot--warn {
+  fill: var(--health-warn);
+}
+
+.axiom-sim__marker-dot--crit {
+  fill: var(--health-crit);
+}
+
+.axiom-sim__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.axiom-sim__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.axiom-sim__legend-swatch {
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--sim-accent);
+}
+
+.axiom-sim__legend-swatch--accent {
+  background: var(--sim-accent);
+}
+
+.axiom-sim__legend-swatch--secondary {
+  background: var(--text-secondary);
+}
+
+.axiom-sim__legend-swatch--good {
+  background: var(--health-good);
+}
+
+.axiom-sim__legend-swatch--warn {
+  background: var(--health-warn);
+}
+
+.axiom-sim__legend-swatch--crit {
+  background: var(--health-crit);
+}
+
+.axiom-sim__legend-swatch--dashed {
+  background: transparent;
+  border-top: 2px dashed var(--text-secondary);
+  height: 0;
 }
 
 .axiom-sim__pole {

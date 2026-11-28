@@ -986,6 +986,7 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
     const attemptBox = container.querySelector<HTMLTextAreaElement>("#study-attempt-textarea");
     expect(attemptBox).not.toBeNull();
     if (attemptBox) {
+      attemptBox.focus();
       attemptBox.value = "Ratio of Vmax to Vmin";
       attemptBox.dispatchEvent(new Event("input", { bubbles: true }));
       attemptBox.dispatchEvent(
@@ -1000,8 +1001,9 @@ describe("v0.6 SM-2 Study Studio, Spatial Canvas Groups & Theme Sync", () => {
       "New card · First review",
     );
 
-    // Grading Again keeps missed card at the back of Due Now with Re-learn badge
-    container.querySelector<HTMLButtonElement>(".study-grade-btn--again")?.click();
+    // Focus should return cleanly to <dialog> so grading '1' (Again) works without clicking first
+    expect(dialog?.contains(document.activeElement)).toBe(true);
+    dialog?.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true }));
     await flushUi();
     expect(container.querySelector(".study-session-summary")?.textContent).toContain("1 again");
     expect(container.querySelector(".study-dialog__tab")?.textContent?.trim()).toBe("Due Now (2)");

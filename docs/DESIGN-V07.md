@@ -17,14 +17,19 @@ All implementation strictly preserves Axiom's six architectural invariants:
 
 Fenced ` ```axiom-sim ` (or ` ```sim `) Markdown JSON blocks compile cleanly through `src/cards/markdownCache.ts` into validated `<div class="axiom-sim-mount" data-sim="...">` elements (`data-sim` explicitly allowlisted in `DOMPURIFY_CONFIG.ADD_ATTR`) and hydrate lazily via `useSimHydration` (`src/cards/simMountHost.ts`) in both `.node-card__body` (`src/cards/NodeCard.tsx`) and revealed answers in `StudyDeckModal` (`src/overlays/StudyDeckModal.tsx`).
 
-### Supported Domains & Presets (`src/cards/visualSimEngine.ts`)
+### Declarative STEM Visual Grammar (`src/cards/visualSimEngine.ts`)
 
-| Domain | Presets (`preset`) | Interactive Outputs & Live Metrics |
+Instead of restricting explanations to a fixed list of domain widgets, `axiom-sim` combines **fast named presets** with a **general-purpose declarative grammar** across `controls`, `rf`, `embedded`, `physics`, `circuits`, `signals`, `thermo`, `mechanics`, and `math`:
+
+| Kind (`kind`) | Declarative Fields | Interactive Outputs & Capabilities |
 | --- | --- | --- |
-| Controls | `second_order_step`, `pid_step`, `splane`, `rc_step` | Analytical / RK2 step curves, $\pm 2\%$ settling band, LHP/RHP pole loci, `%OS`, `Ts (2%)`, `Tp`, `|e_ss|`, damping cone |
-| RF | `smith`, `rf_s11`, `standing_wave` | Normalized Smith unit-circle grid ($r = 0.5, 1, 2$; $x = \pm 0.5, \pm 1, \pm 2$), SWR circle, `|Γ|∠°`, `VSWR`, `RL (dB)`, `P_load` |
-| Embedded | `spi_timing`, `pwm_rc`, `rc_step` | `CS_n` / `SCK` / `MOSI` Mode `0..3` sample-edge arrows (`CPOL`/`CPHA`), steady-state PWM+RC ripple `ΔV_pp`, `V_avg` |
-| Physics & Math | `damped_wave`, `standing_wave`, `custom_expr` | Exponential decay envelope, Q-factor, standing-wave ratio, or safe recursive-descent formula `expr(x, params)` plot (`sin`, `cos`, `exp`, `sqrt`, `ln`, `log10`, `pow`, `pi`, `e`) |
+| `plot`, `bode`, `response`, `wave` | `xScale` (`linear` / `log`), `series[]` (`expr`, `color`, `dashed`), `hLines`, `vLines`, `markers`, `metrics`, optional `time` | Log-decade ticks, multi-curve legends, reference thresholds, discontinuity splitting (`tan`, poles), optional `Play`/`Pause` animation |
+| `parametric` | `sMin`, `sMax`, `series[]` (`xExpr`, `yExpr`), `markers`, `metrics` | 2D phase portraits, trajectories, Mohr's circle, Nyquist curves with auto-bounds |
+| `polar` | `sMin`, `sMax`, `series[]` (`expr(theta)`), `metrics` | RF antenna lobes, array factor patterns, angular radiation / diffraction plots |
+| `timing` | `channels[]` (`name`, `expr(t)` or `[t, level]` pairs), `xMin`, `xMax`, `metrics` | Arbitrary clocked/digital buses (UART, I2C, quadrature encoders) alongside built-in `spi_timing` Mode `0..3` |
+| Built-in shortcuts (`preset`) | `second_order_step`, `pid_step`, `rc_step`, `splane`, `smith`, `rf_s11`, `spi_timing`, `pwm_rc`, `damped_wave`, `standing_wave` | Specialized analytical/RK2 engineering models (Smith Chart circles, $s$-plane damping cone, PID loop, SPI edges) |
+
+Safe recursive-descent evaluation supports `sin, cos, tan, atan2, sinh, cosh, tanh, exp, sqrt, abs, ln, log10, pow, min, max, clamp, step, rect, sinc, mod, ifelse, floor, ceil, round, sign, pi, e` plus animated `time` (`maxTokens = 220`, zero `eval` / `new Function`).
 
 ### Pointer & Camera Isolation
 

@@ -81,8 +81,10 @@ Explain the core mechanism, mathematical principle, or non-obvious trade-off ins
 
 TASK:
 Avoid surface-level definitions and patronizing analogies. Build a tight causal mental model grounded in physical or computational constraints, units, and regime limits.
-When the concept involves dynamics, waves, filters, RF impedance, control loops, or digital bus timing, include ONE compact interactive `axiom-sim` fenced JSON block so the student can test parameter sensitivity directly on the card.
-Available `preset` values: `second_order_step`, `pid_step`, `rc_step`, `splane`, `smith`, `rf_s11`, `spi_timing`, `pwm_rc`, `damped_wave`, `standing_wave`, or `custom_expr` (with `expr`, `xMin`, `xMax`, and `params: [{id,label,unit,min,max,step,value}]`).
+When the concept involves dynamics, waves, circuits, fields, controls, signals, or digital bus timing, include ONE compact interactive `axiom-sim` fenced JSON block so the student can test parameter sensitivity directly on the card.
+- Quick `preset` shortcuts (`second_order_step`, `pid_step`, `rc_step`, `splane`, `smith`, `rf_s11`, `spi_timing`, `pwm_rc`, `damped_wave`, `standing_wave`) cover common core templates.
+- For ANY other domain, compose a custom declarative `axiom-sim` spec using `kind: "plot" | "bode" | "parametric" | "polar" | "timing"`, `xScale: "linear"|"log"`, `series: [{label, expr, color?, dashed?}]` (or `xExpr`+`yExpr` for `parametric`), optional `hLines`/`vLines`/`markers`, `channels: [{name, expr}]` for timing, `metrics: [{label, expr, unit}]`, and `params: [{id,label,unit,min,max,step,value}]`.
+- Safe math functions: `sin, cos, tan, atan2, sinh, cosh, tanh, exp, sqrt, abs, ln, log10, pow, min, max, clamp, step, rect, sinc, mod, ifelse, floor, ceil, round, sign, pi, e`, plus `time` to enable Play/Pause wave animation.
 
 OUTPUT FORMAT:
 Emit exactly ONE block:
@@ -150,7 +152,7 @@ Transform the [FOCUS NODE] into a closed-book engineering study sheet covering i
 
 TASK:
 Build genuine predictive problem-solving mastery so the student can set up novel problems from first principles without rote formula-plugging.
-When the topic covers dynamics, waves, filters, RF matching/S11, PID/s-plane controls, or embedded SPI/PWM timing, embed ONE compact `axiom-sim` fenced JSON block using a preset (`second_order_step`, `pid_step`, `rc_step`, `splane`, `smith`, `rf_s11`, `spi_timing`, `pwm_rc`, `damped_wave`, `standing_wave`) or `custom_expr` (`expr`, `xMin`, `xMax`, `params`).
+When the topic covers dynamics, waves, circuits, filters, RF matching/antennas, controls/Bode/s-plane, or embedded timing, embed ONE compact `axiom-sim` fenced JSON block: either a quick `preset` (`second_order_step`, `pid_step`, `rc_step`, `splane`, `smith`, `rf_s11`, `spi_timing`, `pwm_rc`, `damped_wave`, `standing_wave`) OR a custom declarative spec (`kind: "plot"|"bode"|"parametric"|"polar"|"timing"`, `xScale: "linear"|"log"`, `series`, `channels`, `hLines`/`vLines`/`markers`, `metrics`, `params`, using safe math like `sin, cos, exp, sqrt, ln, log10, step, rect, sinc, ifelse, pi, e`, plus `time` for Play/Pause animation).
 
 OUTPUT FORMAT:
 Emit exactly ONE block:
